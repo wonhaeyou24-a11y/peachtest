@@ -811,6 +811,20 @@
     color: var(--text);
   }
   .capture-row .capture-note::placeholder{ color: var(--muted); }
+  .capture-row .capture-add-damage-btn{
+    flex:1;
+    align-self:stretch;
+    width:auto; height:auto;
+    min-height:42px;
+    border-radius:6px;
+    background: var(--amber);
+    color:#1a1206;
+    border:1px solid var(--amber);
+    font-size:13px;
+    font-weight:600;
+    line-height:1.3;
+    padding:6px 10px;
+  }
   .capture-row button{
     flex-shrink:0;
     align-self:flex-start;
@@ -7152,13 +7166,15 @@
       img.src = p.src;
       img.alt = '촬영 ' + (idx+1);
 
-      const note = document.createElement('textarea');
-      note.className = 'capture-note';
-      note.placeholder = '조사내용 입력…';
-      note.value = p.note || '';
-      note.addEventListener('change', ()=>{
-        p.note = note.value;
-        saveState();
+      const addDamageBtn = document.createElement('button');
+      addDamageBtn.type = 'button';
+      addDamageBtn.className = 'capture-add-damage-btn';
+      const dCount = (p.damages && p.damages.length) || 0;
+      addDamageBtn.textContent = dCount ? ('＋ 손상 추가 (' + dCount + '개)') : '＋ 손상 추가';
+      addDamageBtn.title = '이 사진에 손상 추가';
+      addDamageBtn.addEventListener('click', ()=>{
+        closeCaptureModal();
+        openPreview(markerId);
       });
 
       const del = document.createElement('button');
@@ -7176,7 +7192,7 @@
       });
 
       row.appendChild(img);
-      row.appendChild(note);
+      row.appendChild(addDamageBtn);
       row.appendChild(del);
       captureStrip.appendChild(row);
     });
