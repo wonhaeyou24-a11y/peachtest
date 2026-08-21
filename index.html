@@ -8838,7 +8838,7 @@
   }
   
   function openDamageMaster() {
-    closeMoreMenu();
+    document.getElementById('moreMenuModal').style.display = 'none';
     dmModal.style.display = 'flex';
     dmIsDirty = false;
     document.getElementById('dmUnsavedWarning').style.display = 'none';
