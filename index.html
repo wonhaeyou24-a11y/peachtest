@@ -7405,10 +7405,13 @@
         
         const isCustomMaster = site && projects.find(p => p.id === currentProjectId)?.damageMaster?.[site.facilityType.trim()]?.[site.facilityForm.trim()];
         
+        const noFacilitySet = !site || !site.facilityType || !site.facilityForm;
         damageListLabel.innerHTML = '손상기록 (' + p.damages.length + '개) ' +
           (usingStandard
             ? (isCustomMaster ? '<span class="official-tag" style="background:var(--amber); color:#1a1206;">프로젝트 맞춤 손상마스터</span>' : '<span class="official-tag">공식 DB · ' + escapeHtml(standardDbVersion) + '</span>')
-            : '<span class="unofficial-tag">일반참고·비공식</span>');
+            : (noFacilitySet
+              ? '<span class="unofficial-tag" style="color:var(--amber);">⚠️ 시설물 종류/형식 미설정 — 시설물 정보를 먼저 입력하면 손상명이 자동 연결됩니다</span>'
+              : '<span class="unofficial-tag">일반참고·비공식</span>'));
 
         p.damages.forEach((d, dIdx)=>{
           const rec = document.createElement('div');
@@ -7672,7 +7675,24 @@
               }
             }
             
+            // Chip UI: stdEntry가 없어도 STANDARD_DB 또는 일반 추천 옵션에서 Chip을 구성한다
             if (f.key === 'cause') multiSelect = true;
+
+            if (!stdEntry && usingStandard) {
+              // 손상종류가 아직 미선택 → 아무 Chip도 표시 안함 (정상)
+            } else if (!stdEntry && !usingStandard) {
+              // 일반 모드: 공통 추천 원인 제공
+              if (f.key === 'cause') chipOptions = ['노후화', '과하중', '설계결함', '시공불량', '외부충격', '수분침투', '기초침하', '기타'];
+              if (f.key === 'component') chipOptions = [];
+              if (f.key === 'repairMethod') {
+                chipOptions = ['주의관찰', '표면처리', '균열보수', '철근보강', '교체', '철거']; 
+                multiSelect = true;
+              }
+              if (f.key === 'reinforcementMethod') {
+                chipOptions = ['탄소섬유보강', '강판부착', '앵커보강', '주입공법'];
+                multiSelect = true;
+              }
+            }
             
             if (isChipField && chipOptions.length > 0) {
               const recoLabel = document.createElement('div');
@@ -8838,7 +8858,9 @@
   }
   
   function openDamageMaster() {
-    document.getElementById('moreMenuModal').style.display = 'none';
+    // moreModal이 IIFE 수준 const이라 같은 스코프에서 접근 가능
+    const _moreModal = document.getElementById('moreModal');
+    if (_moreModal) _moreModal.style.display = 'none';
     dmModal.style.display = 'flex';
     dmIsDirty = false;
     document.getElementById('dmUnsavedWarning').style.display = 'none';
