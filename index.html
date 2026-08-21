@@ -15,11 +15,11 @@
 <link rel="icon" href="./icons/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/docx@8.0.4/build/index.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://unpkg.com/docx@8.0.4/build/index.js"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root{
     --navy: #0B1F33;
@@ -163,9 +163,6 @@
     color: var(--muted);
   }
   .sb-item{ display:flex; align-items:center; gap:4px; white-space:nowrap; }
-  @media (max-width: 480px){
-    #sbToday{ display:none; } /* 좁은 화면에서는 우선순위 낮은 항목을 접어 상태바 줄수를 줄인다 */
-  }
   #sbNet.online{ color:#7FD99B; }
   #sbNet.offline{ color: var(--danger); }
   #sbGps.ok{ color:#7FD99B; }
@@ -509,17 +506,6 @@
      이건 어디까지나 화면상 안내일 뿐이다) */
   body.viewer-mode .role-gated{ display:none !important; }
 
-  /* STEP C: 기준DB 조회 트리 */
-  .refdb-type{ border: 1px solid var(--line); border-radius: 6px; margin-bottom: 8px; overflow:hidden; }
-  .refdb-type-head{ width:100%; text-align:left; padding:10px 12px; background:var(--panel-2); font-weight:700; font-size:14px; display:flex; justify-content:space-between; align-items:center; }
-  .refdb-type-body{ padding: 8px 12px 12px; display:none; }
-  .refdb-type-body.open{ display:block; }
-  .refdb-form-group{ margin-top:8px; }
-  .refdb-form-title{ font-size:12px; color:var(--muted); font-weight:700; margin-bottom:4px; }
-  .refdb-damage-row{ width:100%; text-align:left; padding:7px 10px; background:var(--panel); border:1px solid var(--line); border-radius:4px; margin-bottom:4px; font-size:13px; }
-  .refdb-detail{ margin-top:6px; margin-left:8px; margin-bottom:8px; padding:8px 10px; background:var(--panel-2); border-radius:6px; font-size:12px; line-height:1.6; }
-  .refdb-detail b{ color:var(--amber); }
-
   .log-empty{
     padding: 26px 18px;
     color: var(--muted);
@@ -749,6 +735,22 @@
     max-height: 380px;
     object-fit: contain;
   }
+  /* 촬영 화면은 다른 모달보다 훨씬 크게 — 카메라로 프레이밍할 때 작은 화면이라
+     불편하다는 피드백을 반영. 폭은 화면 거의 전체, 미리보기 높이 제한도 없앤다. */
+  #captureModal .modal{
+    max-width: 760px;
+    width: 96vw;
+    max-height: 97vh;
+  }
+  #captureModal video{
+    max-height: none;
+    height: 62vh;
+    object-fit: cover; /* 화면을 꽉 채워서 프레이밍하기 쉽게 — 실제 촬영본 해상도/내용에는 영향 없음 */
+  }
+  @media (max-width: 480px){
+    #captureModal video{ height: 56vh; }
+  }
+  #captureModal.modal-backdrop{ padding: 8px; }
   .rotate-hint{
     background: rgba(242,169,59,0.15);
     border: 1px solid var(--amber);
@@ -1513,16 +1515,51 @@
             <span class="more-item-title">☁️ 클라우드 동기화</span>
             <span class="more-item-desc">Supabase 로그인 · 온라인일 때 자동 백업 · 조직 관리</span>
           </button>
+          <button class="more-item office-only" id="btnDamageMaster" style="display:none;">
+            <span class="more-item-title">손상마스터 관리</span>
+            <span class="more-item-desc">시설물별 손상명, 부위, 원인, 보수·보강 커스텀 설정</span>
+          </button>
           <button class="more-item office-only" id="btnReference" style="display:none;">
             <span class="more-item-title">기준자료 · DB 버전</span>
             <span class="more-item-desc">지침 원본 보관 및 기준 DB 버전 이력 관리 (사무실 전용 설정)</span>
           </button>
-          <button class="more-item office-only" id="btnReferenceDbBrowser" style="display:none;">
-            <span class="more-item-title">📚 기준DB 관리</span>
-            <span class="more-item-desc">시설물종류·부위·손상명·원인·보수방안·규모입력항목 조회 및 추가 (사무실 전용)</span>
-          </button>
         </div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Damage Master Modal -->
+<div class="modal-backdrop" id="damageMasterModal" style="display:none; z-index:9999;">
+  <div class="modal" style="max-width:900px; width:95%; height:90vh; display:flex; flex-direction:column; background:var(--panel);">
+    <div class="modal-header" style="padding:15px 20px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;">
+      <h2 style="margin:0; font-size:18px;">손상마스터 관리</h2>
+      <button class="ghost" onclick="closeDamageMaster()" style="padding:4px 8px;">✕</button>
+    </div>
+    <div class="modal-body" style="flex:1; overflow-y:auto; padding:20px;">
+      <div style="display:flex; gap:12px; margin-bottom: 20px;">
+        <div style="flex:1;">
+          <label style="display:block; margin-bottom:6px; color:var(--muted); font-size:12px;">시설물 종류</label>
+          <select id="dmFacilityType" style="width:100%; padding:8px; background:var(--panel-2); color:white; border:1px solid var(--line); border-radius:4px;"></select>
+        </div>
+        <div style="flex:1;">
+          <label style="display:block; margin-bottom:6px; color:var(--muted); font-size:12px;">시설물 형식</label>
+          <select id="dmFacilityForm" style="width:100%; padding:8px; background:var(--panel-2); color:white; border:1px solid var(--line); border-radius:4px;"></select>
+        </div>
+      </div>
+      
+      <div id="dmContent" style="display:none; border-top:1px solid var(--line); padding-top:20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+           <h3 style="margin:0; font-size:16px;">손상명 및 상세항목 목록</h3>
+           <button class="primary" id="btnAddDamageType" onclick="addDmDamageType()">+ 손상명 추가</button>
+        </div>
+        <div id="dmDamageList" style="display:flex; flex-direction:column; gap:12px;"></div>
+      </div>
+    </div>
+    <div class="modal-footer" style="padding:15px 20px; border-top:1px solid var(--line); text-align:right; background:rgba(0,0,0,0.2);">
+      <span id="dmUnsavedWarning" style="color:var(--amber); margin-right:15px; display:none; font-size:13px;">⚠️ 저장하지 않은 변경사항이 있습니다.</span>
+      <button class="ghost" onclick="closeDamageMaster()">닫기</button>
+      <button class="primary" onclick="saveDamageMaster()">프로젝트에 저장</button>
     </div>
   </div>
 </div>
@@ -1616,66 +1653,6 @@
 <!-- Trash Modal -->
 <!-- ExistingDamage: 시설물에 과거부터 있던 손상 원본 기록. 현장조사에서 값이
      바뀌어도 이 원본은 덮어쓰지 않는다(비교는 이후 STEP에서 별도로). -->
-<!-- 기준DB 관리(STEP C+D) — 온라인이면 Supabase ref_* 테이블에서 읽고 편집,
-     오프라인이면 기존 하드코딩 STANDARD_DB에서 조회만(편집은 온라인 필요). -->
-<div class="modal-backdrop" id="referenceDbBrowserModal" style="display:none;">
-  <div class="modal" style="max-width:720px;">
-    <div class="modal-head">
-      <h2>📚 기준DB 관리</h2>
-      <button class="close-x" id="closeReferenceDbBrowser" aria-label="닫기">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="hint" id="refDbSourceHint">불러오는 중…</div>
-      <button class="primary role-gated" id="btnAddRefDamage" style="width:100%; margin:8px 0 12px; display:none;">+ 새 손상 추가</button>
-      <div id="refDbTreeWrap"></div>
-    </div>
-  </div>
-</div>
-
-<div class="modal-backdrop" id="refDamageFormModal" style="display:none;">
-  <div class="modal">
-    <div class="modal-head">
-      <h2>새 손상 추가</h2>
-      <button class="close-x" id="closeRefDamageForm" aria-label="닫기">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="hint">여기서 추가하면 다음 현장조사부터 손상선택 화면에 바로 나타납니다. 개발자가 코드를 고칠 필요가 없습니다.</div>
-      <label style="display:block; margin-top:10px;">시설물 종류 *
-        <select id="rdAssetType" style="margin-top:4px;"></select>
-      </label>
-      <label style="display:block; margin-top:10px;">형식(선택)
-        <input id="rdAssetForm" type="text" class="site-search-input" style="margin-top:4px;" placeholder="예: 콘크리트 옹벽 (비워두면 형식 구분 없이 적용)">
-      </label>
-      <label style="display:block; margin-top:10px;">부위(선택)
-        <input id="rdPart" type="text" class="site-search-input" style="margin-top:4px;" placeholder="예: 지반·기초부">
-      </label>
-      <label style="display:block; margin-top:10px;">손상명 *
-        <input id="rdDamageName" type="text" class="site-search-input" style="margin-top:4px;">
-      </label>
-      <label style="display:block; margin-top:10px;">설명(선택)
-        <input id="rdDescription" type="text" class="site-search-input" style="margin-top:4px;">
-      </label>
-
-      <div style="margin-top:14px; font-weight:700; font-size:13px;">규모 입력 항목</div>
-      <div class="hint">예: 폭(mm), 길이(m) — 현장에서 이 손상을 선택하면 여기 등록한 항목만큼 입력칸이 자동으로 생깁니다.</div>
-      <div id="rdFieldsBody"></div>
-      <button class="ghost" id="rdAddField" style="margin-top:6px;">+ 규모항목 추가</button>
-
-      <div style="margin-top:14px; font-weight:700; font-size:13px;">원인 (여러 개 가능)</div>
-      <div id="rdCausesBody"></div>
-      <button class="ghost" id="rdAddCause" style="margin-top:6px;">+ 원인 추가</button>
-
-      <div style="margin-top:14px; font-weight:700; font-size:13px;">보수·보강방안 (여러 개 가능)</div>
-      <div id="rdRepairsBody"></div>
-      <button class="ghost" id="rdAddRepair" style="margin-top:6px;">+ 보수방안 추가</button>
-    </div>
-    <div class="modal-foot">
-      <button class="ghost" id="rdCancel">취소</button>
-      <button class="primary" id="rdSave">저장</button>
-    </div>
-  </div>
-</div>
-
 <div class="modal-backdrop" id="existingDamageModal" style="display:none;">
   <div class="modal">
     <div class="modal-head">
@@ -1706,6 +1683,7 @@
     <div class="modal-body">
       <div class="field-grid">
         <label>손상명 *<input id="edDamageName" type="text" placeholder="예: 균열, 박리, 침하"></label>
+        <label>위치<input id="edPosition" type="text" placeholder="예: 2층 남측 벽체"></label>
         <label>조사년도<input id="edSurveyYear" type="number" placeholder="예: 2023"></label>
         <label>구성요소<input id="edComponent" type="text" placeholder="예: 교대, 슬래브"></label>
         <label>손상규모<input id="edMeasurement" type="text" placeholder="예: 길이 2.5m, 폭 0.3mm"></label>
@@ -1806,41 +1784,6 @@
 
 <script>
 (function(){
-  // STEP19: 전역 오류 핸들러 — 지금까지 이게 없어서, 라이브러리 로드 실패나
-  // 예기치 못한 예외가 콘솔에만 조용히 남고 사용자는 뭐가 잘못됐는지 알 방법이
-  // 없었다. 여기서 잡아서 (1) 콘솔에 상세정보를 남기고 (2) 화면 아래에 짧고
-  // 눈에 덜 띄는 한국어 배너를 잠깐 보여준다. alert()는 작업을 막으니 안 쓴다.
-  let lastErrorBannerAt = 0;
-  function showErrorBanner(msg){
-    const now = Date.now();
-    if(now - lastErrorBannerAt < 4000) return; // 연속 에러로 배너가 스팸처럼 뜨는 것 방지
-    lastErrorBannerAt = now;
-    let banner = document.getElementById('globalErrorBanner');
-    if(!banner){
-      banner = document.createElement('div');
-      banner.id = 'globalErrorBanner';
-      banner.style.cssText = 'position:fixed; left:12px; right:12px; bottom:12px; z-index:9999; ' +
-        'background:#3a1414; border:1px solid #E88686; color:#fff; padding:10px 14px; border-radius:8px; ' +
-        'font-size:13px; box-shadow:0 4px 16px rgba(0,0,0,.4); font-family:inherit;';
-      document.body.appendChild(banner);
-    }
-    banner.textContent = msg;
-    banner.style.display = 'block';
-    clearTimeout(banner._hideTimer);
-    banner._hideTimer = setTimeout(()=>{ banner.style.display = 'none'; }, 5000);
-  }
-  window.addEventListener('error', function(e){
-    console.error('[전역 오류]', { message: e.message, source: e.filename, line: e.lineno, col: e.colno, error: e.error });
-    // 저장·조사 입력 자체는 이미 각 함수별 try/catch로 보호되어 있으니, 여기서는
-    // 알려주기만 하고 앱을 멈추지 않는다. "기존 데이터는 안전합니다"를 명시해
-    // 사용자가 저장이 날아갔다고 오해하지 않게 한다.
-    showErrorBanner('⚠ 예상치 못한 오류가 있었습니다. 기존 데이터는 안전합니다. 문제가 계속되면 새로고침해주세요.');
-  });
-  window.addEventListener('unhandledrejection', function(e){
-    console.error('[처리되지 않은 Promise 오류]', e.reason);
-    showErrorBanner('⚠ 일부 기능에서 오류가 있었습니다. 기존 데이터는 안전합니다.');
-  });
-
   const stage = document.getElementById('stage');
   const emptyMsg = document.getElementById('emptyMsg');
   const stageStatus = document.getElementById('stageStatus');
@@ -1962,6 +1905,7 @@
   const closeExistingDamageForm = document.getElementById('closeExistingDamageForm');
   const edFormTitle = document.getElementById('edFormTitle');
   const edDamageName = document.getElementById('edDamageName');
+  const edPosition = document.getElementById('edPosition');
   const edSurveyYear = document.getElementById('edSurveyYear');
   const edComponent = document.getElementById('edComponent');
   const edMeasurement = document.getElementById('edMeasurement');
@@ -2323,7 +2267,7 @@
       sbGps.className = 'sb-item';
       return;
     }
-    sbGps.textContent = '📍 ' + lastGps.lat.toFixed(4) + ', ' + lastGps.lng.toFixed(4) + (window.innerWidth > 480 ? ' (±' + Math.round(lastGps.accuracy) + 'm)' : '');
+    sbGps.textContent = '📍 ' + lastGps.lat.toFixed(5) + ', ' + lastGps.lng.toFixed(5) + ' (±' + Math.round(lastGps.accuracy) + 'm)';
     sbGps.className = 'sb-item ok';
   }
 
@@ -2804,7 +2748,6 @@
   }
   const SUPABASE_CONFIG_KEY = 'point-shot-supabase-config';
   const ROLE_CACHE_KEY = 'point-shot-role-cache'; // { [organizationId]: role } — 오프라인에서도 마지막 권한 유지용
-  const REFERENCE_DB_CACHE_KEY = 'point-shot-reference-db-cache'; // Supabase 기준DB를 오프라인에서도 보려고 캐시해두는 키
   const CLOUD_PUSH_MIN_INTERVAL_MS = 60000; // 같은 프로젝트는 최소 1분 간격으로만 자동 백업
 
   async function loadSupabaseConfig(){
@@ -3510,318 +3453,6 @@
   closeReferenceModal.addEventListener('click', ()=>{ referenceModal.style.display = 'none'; });
   referenceModal.addEventListener('click', (e)=>{ if(e.target === referenceModal) referenceModal.style.display = 'none'; });
 
-  // ---------- STEP C: 기준DB 조회(읽기 전용 트리) ----------
-  // 온라인+로그인 상태면 방금 만든 Supabase ref_* 테이블에서 실제로 읽어온다.
-  // 오프라인이거나 아직 로그인 전이면, 지금까지 써온 하드코딩 STANDARD_DB/
-  // FACILITY_FORMS/MEASUREMENT_TEMPLATES에서 "같은 모양"으로 구성해서 보여준다.
-  // 두 경로 모두 읽기 전용이며, 편집 기능은 다음 STEP(D)에서 추가한다.
-  async function loadReferenceTree(){
-    if(navigator.onLine && supabaseClient && supabaseSession){
-      try{
-        const [types, forms, parts, damages, causes, repairs, fields] = await Promise.all([
-          supabaseClient.from('ref_asset_types').select('*').eq('is_active', true).order('sort_order'),
-          supabaseClient.from('ref_asset_forms').select('*').eq('is_active', true).order('sort_order'),
-          supabaseClient.from('ref_parts').select('*').eq('is_active', true).order('sort_order'),
-          supabaseClient.from('ref_damage_types').select('*').eq('is_active', true).order('sort_order'),
-          supabaseClient.from('ref_causes').select('*').eq('is_active', true).order('sort_order'),
-          supabaseClient.from('ref_repair_methods').select('*').eq('is_active', true).order('sort_order'),
-          supabaseClient.from('ref_measurement_fields').select('*').eq('is_active', true).order('sort_order')
-        ]);
-        if(types.error) throw types.error;
-        const tree = (types.data || []).map(t=>({
-          id: t.id, name: t.name,
-          forms: (forms.data || []).filter(f => f.asset_type_id === t.id),
-          damageTypes: (damages.data || []).filter(d => d.asset_type_id === t.id).map(d=>({
-            id: d.id, name: d.name, description: d.description,
-            formName: (forms.data || []).find(f => f.id === d.asset_form_id)?.name || null,
-            partName: (parts.data || []).find(p => p.id === d.part_id)?.name || null,
-            causes: (causes.data || []).filter(c => c.damage_type_id === d.id).map(c => c.label),
-            repairs: (repairs.data || []).filter(r => r.damage_type_id === d.id).map(r => r.label),
-            fieldDefs: (fields.data || []).filter(f => f.damage_type_id === d.id).map(f => ({ label: f.label, unit: f.unit || '' })),
-            fields: (fields.data || []).filter(f => f.damage_type_id === d.id).map(f => (f.label + (f.unit ? '(' + f.unit + ')' : '')))
-          }))
-        }));
-        try{ await storageSet(REFERENCE_DB_CACHE_KEY, tree); }catch(e){ /* 캐시 저장 실패는 무시 */ }
-        mergedRefCache = tree; // 현장조사 화면(손상선택/규모입력)이 바로 참조할 수 있게 갱신
-        return { tree, source: 'supabase' };
-      }catch(e){
-        console.warn('Supabase 기준DB 조회 실패, 캐시/기존 데이터로 대체', e);
-      }
-    }
-    // 오프라인이거나 Supabase 조회 실패 시: 먼저 이전에 캐시해둔 Supabase 데이터가
-    // 있으면 그걸 쓰고, 없으면 하드코딩 STANDARD_DB에서 구성한다.
-    try{
-      const cached = await storageGet(REFERENCE_DB_CACHE_KEY);
-      if(cached && Array.isArray(cached) && cached.length){
-        mergedRefCache = cached; // 오프라인이어도 마지막으로 받아둔 사무실 커스텀 손상을 계속 쓸 수 있게
-        return { tree: cached, source: 'cache' };
-      }
-    }catch(e){ /* 캐시 없으면 아래 폴백으로 */ }
-    return { tree: buildReferenceTreeFromLegacy(), source: 'legacy' };
-  }
-
-  function buildReferenceTreeFromLegacy(){
-    return Object.keys(STANDARD_DB).map(atype=>{
-      const formsForType = (FACILITY_FORMS[atype] || []).filter(f => f !== '기타');
-      const damageTypes = [];
-      Object.keys(STANDARD_DB[atype]).forEach(form=>{
-        STANDARD_DB[atype][form].forEach(e=>{
-          let desc = e.investigationItems || '';
-          if(e.sourcePage) desc = (desc ? desc + ' / ' : '') + '출처: ' + e.sourcePage;
-          damageTypes.push({
-            id: null, name: e.damageType, description: desc,
-            formName: form, partName: e.component || null,
-            causes: e.cause ? [e.cause] : [],
-            repairs: e.repairOptions || [],
-            fields: getMeasurementFields(e.damageType).map(f => f.label + '(' + f.defaultUnit + ')')
-          });
-        });
-      });
-      return { id: null, name: atype, forms: formsForType.map(f=>({name:f})), damageTypes };
-    });
-  }
-
-  function renderReferenceTree(tree){
-    if(!tree || tree.length === 0){
-      refDbTreeWrap.innerHTML = '<div class="log-empty">등록된 기준DB가 없습니다.</div>';
-      return;
-    }
-    refDbTreeWrap.innerHTML = '';
-    tree.forEach(atype=>{
-      const box = document.createElement('div');
-      box.className = 'refdb-type';
-      const head = document.createElement('button');
-      head.type = 'button';
-      head.className = 'refdb-type-head';
-      head.innerHTML = '<span>' + escapeHtml(atype.name) + '</span><span style="color:var(--muted); font-weight:400;">' + atype.damageTypes.length + '개 손상</span>';
-      const body = document.createElement('div');
-      body.className = 'refdb-type-body';
-      head.addEventListener('click', ()=> body.classList.toggle('open'));
-
-      // 형식(form) 별로 묶어서 표시
-      const formNames = [...new Set(atype.damageTypes.map(d => d.formName).filter(Boolean))];
-      if(formNames.length === 0) formNames.push(null);
-      formNames.forEach(formName=>{
-        const group = document.createElement('div');
-        group.className = 'refdb-form-group';
-        if(formName){
-          const gTitle = document.createElement('div');
-          gTitle.className = 'refdb-form-title';
-          gTitle.textContent = formName;
-          group.appendChild(gTitle);
-        }
-        atype.damageTypes.filter(d => d.formName === formName).forEach(d=>{
-          const row = document.createElement('button');
-          row.type = 'button';
-          row.className = 'refdb-damage-row';
-          row.textContent = (d.partName ? '[' + d.partName + '] ' : '') + d.name;
-          const detail = document.createElement('div');
-          detail.className = 'refdb-detail';
-          detail.style.display = 'none';
-          detail.innerHTML =
-            (d.description ? '<div><b>설명</b>: ' + escapeHtml(d.description) + '</div>' : '') +
-            '<div><b>규모입력</b>: ' + (d.fields.length ? escapeHtml(d.fields.join(', ')) : '(없음)') + '</div>' +
-            '<div><b>원인</b>: ' + (d.causes.length ? escapeHtml(d.causes.join(' / ')) : '(없음)') + '</div>' +
-            '<div><b>보수·보강방안</b>: ' + (d.repairs.length ? escapeHtml(d.repairs.join(', ')) : '(없음)') + '</div>';
-          if(d.id){
-            const deactivateBtn = document.createElement('button');
-            deactivateBtn.type = 'button';
-            deactivateBtn.className = 'ghost role-gated';
-            deactivateBtn.style.cssText = 'margin-top:6px; color:var(--danger); font-size:12px; padding:5px 9px;';
-            deactivateBtn.textContent = '이 손상 비활성화';
-            deactivateBtn.addEventListener('click', async (ev)=>{
-              ev.stopPropagation();
-              if(!confirm('"' + d.name + '"을(를) 비활성화할까요?\n완전히 지우지 않고 목록에서만 숨겨지며, 필요하면 나중에 되살릴 수 있습니다.')) return;
-              try{
-                const { error } = await supabaseClient.from('ref_damage_types').update({ is_active:false, updated_by: supabaseSession.user.id }).eq('id', d.id);
-                if(error) throw error;
-                alert('비활성화했습니다.');
-                const { tree: freshTree, source } = await loadReferenceTree();
-                lastLoadedRefTree = freshTree;
-                renderReferenceTree(freshTree);
-              }catch(e){
-                alert('비활성화 실패: ' + (e.message || '권한이 없거나 공통 기준DB는 앱에서 수정할 수 없습니다.'));
-              }
-            });
-            detail.appendChild(deactivateBtn);
-          }
-          row.addEventListener('click', ()=>{ detail.style.display = (detail.style.display === 'none') ? 'block' : 'none'; });
-          group.appendChild(row);
-          group.appendChild(detail);
-        });
-        body.appendChild(group);
-      });
-      box.appendChild(head);
-      box.appendChild(body);
-      refDbTreeWrap.appendChild(box);
-    });
-  }
-
-  btnReferenceDbBrowser.addEventListener('click', async ()=>{
-    moreModal.style.display = 'none';
-    referenceDbBrowserModal.style.display = 'flex';
-    refDbSourceHint.textContent = '불러오는 중…';
-    refDbTreeWrap.innerHTML = '';
-    const { tree, source } = await loadReferenceTree();
-    lastLoadedRefTree = tree;
-    refDbSourceHint.textContent = source === 'supabase' ? '✅ 클라우드 기준DB(최신)를 불러왔습니다.'
-      : source === 'cache' ? '📦 오프라인 — 마지막으로 저장해둔 기준DB를 보여줍니다.'
-      : 'ℹ️ 오프라인이거나 아직 클라우드 기준DB가 준비되지 않아, 앱에 내장된 기준자료를 보여줍니다.';
-    renderReferenceTree(tree);
-    // 편집(추가)은 온라인 + 로그인 + 어떤 조직에서든 Admin일 때만 가능하다.
-    // 공통(organization_id=null) 기준은 앱에서 못 고치게 설계했으므로, 조직이
-    // 없으면 편집을 시작할 수 없다 — 이 경우 조직부터 만들라고 안내한다.
-    btnAddRefDamage.style.display = (source === 'supabase') ? '' : 'none';
-  });
-  closeReferenceDbBrowser.addEventListener('click', ()=>{ referenceDbBrowserModal.style.display = 'none'; });
-  referenceDbBrowserModal.addEventListener('click', (e)=>{ if(e.target === referenceDbBrowserModal) referenceDbBrowserModal.style.display = 'none'; });
-
-  let lastLoadedRefTree = null;
-  let mergedRefCache = null; // 현장조사 화면(renderDamageRecords)이 참조하는 병합 기준DB 캐시
-
-  function myAdminOrgId(){
-    const orgId = Object.keys(myRoleByOrg).find(id => myRoleByOrg[id] === 'Admin');
-    return orgId || null;
-  }
-
-  function addRdRow(container, placeholder, extra){
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex; gap:6px; margin-top:6px;';
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'site-search-input';
-    input.placeholder = placeholder;
-    input.style.flex = '1 1 auto';
-    row.appendChild(input);
-    let unitInput = null;
-    if(extra === 'field'){
-      unitInput = document.createElement('input');
-      unitInput.type = 'text';
-      unitInput.className = 'site-search-input';
-      unitInput.placeholder = '단위(예: mm)';
-      unitInput.style.cssText = 'flex:0 1 90px; min-width:70px;';
-      row.appendChild(unitInput);
-    }
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'ghost';
-    del.textContent = '삭제';
-    del.addEventListener('click', ()=> row.remove());
-    row.appendChild(del);
-    row._label = input;
-    row._unit = unitInput;
-    container.appendChild(row);
-    return row;
-  }
-
-  rdAddField.addEventListener('click', ()=> addRdRow(rdFieldsBody, '항목명(예: 폭)', 'field'));
-  rdAddCause.addEventListener('click', ()=> addRdRow(rdCausesBody, '원인 문구'));
-  rdAddRepair.addEventListener('click', ()=> addRdRow(rdRepairsBody, '보수방안 문구'));
-
-  btnAddRefDamage.addEventListener('click', ()=>{
-    if(!myAdminOrgId()){
-      alert('기준DB를 추가하려면 먼저 조직이 필요합니다.\n"⋯ → 클라우드 동기화"에서 조직을 만들어주세요(조직을 만든 사람은 자동으로 Admin이 됩니다).');
-      return;
-    }
-    // 시설물 종류 드롭다운을 지금 불러온 트리 기준으로 채운다
-    rdAssetType.innerHTML = '';
-    const typeNames = (lastLoadedRefTree || []).map(t => t.name);
-    if(typeNames.length === 0){ typeNames.push(...Object.keys(STANDARD_DB)); }
-    typeNames.forEach(n=>{
-      const o = document.createElement('option'); o.value = n; o.textContent = n; rdAssetType.appendChild(o);
-    });
-    rdAssetForm.value = ''; rdPart.value = ''; rdDamageName.value = ''; rdDescription.value = '';
-    rdFieldsBody.innerHTML = ''; rdCausesBody.innerHTML = ''; rdRepairsBody.innerHTML = '';
-    addRdRow(rdFieldsBody, '항목명(예: 폭)', 'field');
-    addRdRow(rdCausesBody, '원인 문구');
-    addRdRow(rdRepairsBody, '보수방안 문구');
-    refDamageFormModal.style.display = 'flex';
-  });
-  closeRefDamageForm.addEventListener('click', ()=>{ refDamageFormModal.style.display = 'none'; });
-  rdCancel.addEventListener('click', ()=>{ refDamageFormModal.style.display = 'none'; });
-  refDamageFormModal.addEventListener('click', (e)=>{ if(e.target === refDamageFormModal) refDamageFormModal.style.display = 'none'; });
-
-  // 이름으로 기존 행을 찾고 없으면 새로 만든다(조직 소속으로). 시설물종류는 항상
-  // 이미 존재하는 것 중에서 고르게 했으니 새로 만들지 않는다.
-  async function findOrCreateRefRow(table, matchCols, insertCols){
-    let q = supabaseClient.from(table).select('id');
-    Object.keys(matchCols).forEach(k => { q = matchCols[k] === null ? q.is(k, null) : q.eq(k, matchCols[k]); });
-    const { data: existing } = await q.limit(1);
-    if(existing && existing.length) return existing[0].id;
-    const { data: created, error } = await supabaseClient.from(table).insert(insertCols).select('id').single();
-    if(error) throw error;
-    return created.id;
-  }
-
-  rdSave.addEventListener('click', async ()=>{
-    const orgId = myAdminOrgId();
-    if(!orgId){ alert('조직 Admin 권한이 필요합니다.'); return; }
-    const name = rdDamageName.value.trim();
-    if(!name){ alert('손상명을 입력해주세요.'); return; }
-    const typeName = rdAssetType.value;
-    rdSave.disabled = true;
-    try{
-      const { data: typeRows } = await supabaseClient.from('ref_asset_types').select('id').eq('name', typeName).limit(1);
-      if(!typeRows || !typeRows.length) throw new Error('시설물 종류를 찾을 수 없습니다: ' + typeName);
-      const assetTypeId = typeRows[0].id;
-
-      let assetFormId = null;
-      if(rdAssetForm.value.trim()){
-        assetFormId = await findOrCreateRefRow('ref_asset_forms',
-          { asset_type_id: assetTypeId, name: rdAssetForm.value.trim() },
-          { asset_type_id: assetTypeId, name: rdAssetForm.value.trim(), organization_id: orgId, created_by: supabaseSession.user.id });
-      }
-      let partId = null;
-      if(rdPart.value.trim()){
-        partId = await findOrCreateRefRow('ref_parts',
-          { asset_type_id: assetTypeId, name: rdPart.value.trim() },
-          { asset_type_id: assetTypeId, name: rdPart.value.trim(), organization_id: orgId, created_by: supabaseSession.user.id });
-      }
-
-      const { data: damage, error: dErr } = await supabaseClient.from('ref_damage_types').insert({
-        asset_type_id: assetTypeId, asset_form_id: assetFormId, part_id: partId,
-        organization_id: orgId, name, description: rdDescription.value.trim() || null,
-        created_by: supabaseSession.user.id
-      }).select('id').single();
-      if(dErr) throw dErr;
-
-      const collectRows = (container) => Array.from(container.children)
-        .map(row => ({ label: row._label.value.trim(), unit: row._unit ? row._unit.value.trim() : null }))
-        .filter(r => r.label);
-
-      const fields = collectRows(rdFieldsBody);
-      if(fields.length){
-        await supabaseClient.from('ref_measurement_fields').insert(fields.map((f,i)=>({
-          damage_type_id: damage.id, organization_id: orgId, label: f.label, unit: f.unit || null,
-          input_type: 'number', sort_order: i+1, created_by: supabaseSession.user.id
-        })));
-      }
-      const causes = collectRows(rdCausesBody);
-      if(causes.length){
-        await supabaseClient.from('ref_causes').insert(causes.map((c,i)=>({
-          damage_type_id: damage.id, organization_id: orgId, label: c.label, sort_order: i+1, created_by: supabaseSession.user.id
-        })));
-      }
-      const repairs = collectRows(rdRepairsBody);
-      if(repairs.length){
-        await supabaseClient.from('ref_repair_methods').insert(repairs.map((r,i)=>({
-          damage_type_id: damage.id, organization_id: orgId, label: r.label, sort_order: i+1, created_by: supabaseSession.user.id
-        })));
-      }
-
-      refDamageFormModal.style.display = 'none';
-      alert('저장했습니다. 다음 현장조사부터 손상선택 화면에 바로 나타납니다.');
-      const { tree, source } = await loadReferenceTree();
-      lastLoadedRefTree = tree;
-      renderReferenceTree(tree);
-    }catch(e){
-      console.error('기준DB 손상 추가 실패', e);
-      alert('저장에 실패했습니다: ' + (e.message || '알 수 없는 오류'));
-    }finally{
-      rdSave.disabled = false;
-    }
-  });
-
   function renderSafetyDashboard(){
     const project = projects.find(p => p.id === currentProjectId);
     if(!project){
@@ -3968,17 +3599,27 @@
     ]}
   };
 
-  function getMeasurementFields(damageType){
-    // 사무실 기준DB 관리에서 새로 등록한 손상이면, 거기에 정의해둔 규모입력
-    // 항목을 그대로 쓴다 — 개발자가 코드를 고치지 않아도 되는 것이 핵심 목표다.
-    if(damageType && mergedRefCache){
-      for(const atype of mergedRefCache){
-        const found = (atype.damageTypes || []).find(d => d.name === damageType && d.fieldDefs && d.fieldDefs.length);
-        if(found){
-          return found.fieldDefs.map((f,i)=>({ type: 'ref_' + found.id + '_' + i, label: f.label, defaultUnit: f.unit || '' }));
-        }
-      }
+  // --- 새로 추가된 Resolver ---
+  function resolveDamageStandard(facilityType, facilityForm) {
+    if (!facilityType || !facilityForm) return null;
+    const normType = facilityType.trim();
+    const normForm = facilityForm.trim();
+
+    // 1. 현재 프로젝트의 손상마스터 설정 확인 (가장 우선)
+    const proj = projects.find(p => p.id === currentProjectId);
+    if (proj && proj.damageMaster && proj.damageMaster[normType] && proj.damageMaster[normType][normForm]) {
+      return proj.damageMaster[normType][normForm];
     }
+
+    // 2. 기본 STANDARD_DB 반환
+    if (STANDARD_DB[normType] && STANDARD_DB[normType][normForm]) {
+      return STANDARD_DB[normType][normForm];
+    }
+    
+    return null;
+  }
+
+  function getMeasurementFields(damageType){
     if(damageType){
       for(const key of ['crack','spall','displacement','seepage','erosion']){
         const tpl = MEASUREMENT_TEMPLATES[key];
@@ -4109,9 +3750,6 @@
     ensureDrawingsIntegrity(site);
     ensureExistingDamagesIntegrity(site);
     existingDamages = site.existingDamages;
-    // 사무실에서 관리하는 기준DB를 백그라운드로 미리 불러와둔다 — 실패해도(오프라인
-    // 등) 조용히 무시하고 기존 하드코딩 STANDARD_DB로 계속 동작한다.
-    loadReferenceTree().catch(()=>{});
     drawings = site.drawings;
     currentDrawingId = site.currentDrawingId || null;
     const activeDrawing = drawings.find(d => d.id === currentDrawingId);
@@ -4468,27 +4106,6 @@
   function currentSiteObj(){ return sites.find(x=>x.id===currentSiteId); }
 
   const fmStandardDbHint = document.getElementById('fmStandardDbHint');
-  const btnReferenceDbBrowser = document.getElementById('btnReferenceDbBrowser');
-  const referenceDbBrowserModal = document.getElementById('referenceDbBrowserModal');
-  const closeReferenceDbBrowser = document.getElementById('closeReferenceDbBrowser');
-  const refDbSourceHint = document.getElementById('refDbSourceHint');
-  const refDbTreeWrap = document.getElementById('refDbTreeWrap');
-  const btnAddRefDamage = document.getElementById('btnAddRefDamage');
-  const refDamageFormModal = document.getElementById('refDamageFormModal');
-  const closeRefDamageForm = document.getElementById('closeRefDamageForm');
-  const rdAssetType = document.getElementById('rdAssetType');
-  const rdAssetForm = document.getElementById('rdAssetForm');
-  const rdPart = document.getElementById('rdPart');
-  const rdDamageName = document.getElementById('rdDamageName');
-  const rdDescription = document.getElementById('rdDescription');
-  const rdFieldsBody = document.getElementById('rdFieldsBody');
-  const rdAddField = document.getElementById('rdAddField');
-  const rdCausesBody = document.getElementById('rdCausesBody');
-  const rdAddCause = document.getElementById('rdAddCause');
-  const rdRepairsBody = document.getElementById('rdRepairsBody');
-  const rdAddRepair = document.getElementById('rdAddRepair');
-  const rdCancel = document.getElementById('rdCancel');
-  const rdSave = document.getElementById('rdSave');
 
   // 6번 요청: 시설물 종류·형식 조합에 기준DB(손상종류·원인·보수방안 자동연결)가
   // 실제로 연결돼있는지, 시설물을 설정하는 이 단계에서 바로 확인할 수 있게 한다.
@@ -4500,13 +4117,22 @@
       fmStandardDbHint.style.display = 'none';
       return;
     }
-    const connected = !!(STANDARD_DB[type] && STANDARD_DB[type][form] && STANDARD_DB[type][form].length);
+    const stdList = resolveDamageStandard(type, form);
+    const connected = !!(stdList && stdList.length);
     fmStandardDbHint.style.display = '';
+    
+    // 손상마스터/기준DB 연결 상태 표시 (명령문 요구사항 반영)
     if(connected){
-      fmStandardDbHint.textContent = '✅ 이 조합은 기준DB(공식)에 연결되어 있습니다 — 손상입력 시 손상종류·원인·보수방안이 자동으로 추천됩니다.';
-      fmStandardDbHint.style.color = '#7FD99B';
+      const isCustomMaster = projects.find(p => p.id === currentProjectId)?.damageMaster?.[type.trim()]?.[form.trim()];
+      if(isCustomMaster){
+        fmStandardDbHint.innerHTML = '🟢 <b>손상마스터 연결됨</b> (현재 프로젝트 맞춤 설정)';
+        fmStandardDbHint.style.color = '#7FD99B';
+      } else {
+        fmStandardDbHint.innerHTML = '🟢 <b>기준DB 연결됨</b> (시스템 공식 기준)';
+        fmStandardDbHint.style.color = '#7FD99B';
+      }
     } else {
-      fmStandardDbHint.textContent = '⚠️ 이 조합에 연결된 기준DB가 없습니다 — 손상입력 시 일반 참고 목록만 사용됩니다(비공식).';
+      fmStandardDbHint.innerHTML = '🟡 <b>일반 참고</b> (연결된 기준DB 없음. 비공식 목록 사용)';
       fmStandardDbHint.style.color = '#E8C55B';
     }
   }
@@ -5982,10 +5608,11 @@
       row.className = 'log-item';
       row.style.cursor = 'pointer';
       row.innerHTML =
-        '<div style="font-weight:600;">' + escapeHtml(d.id) + ' · ' + escapeHtml(d.damageName || '(손상명 없음)') +
+        '<div style="font-weight:600;">' +
+        [d.drawingPosition, d.measurement, d.damageName || '(손상명 없음)'].filter(Boolean).map(escapeHtml).join(' - ') +
         '<span style="font-weight:400; color:#888; font-size:12px;"> · ' + escapeHtml(d.status || '미확인') + '</span></div>' +
         '<div style="font-size:12px; color:#666;">' +
-        [d.surveyYear ? d.surveyYear + '년' : '', d.component, d.measurement].filter(Boolean).map(escapeHtml).join(' · ') +
+        [d.id, d.surveyYear ? d.surveyYear + '년' : '', d.component].filter(Boolean).map(escapeHtml).join(' · ') +
         '</div>';
       row.addEventListener('click', ()=> openExistingDamageForm(d));
       existingDamageBody.appendChild(row);
@@ -5996,6 +5623,7 @@
     editingExistingDamageId = damage ? damage.id : null;
     edFormTitle.textContent = damage ? '기존손상 수정' : '기존손상 추가';
     edDamageName.value = damage ? (damage.damageName || '') : '';
+    edPosition.value = damage ? (damage.drawingPosition || '') : '';
     edSurveyYear.value = damage ? (damage.surveyYear || '') : '';
     edComponent.value = damage ? (damage.component || '') : '';
     edMeasurement.value = damage ? (damage.measurement || '') : '';
@@ -6028,6 +5656,7 @@
       const d = existingDamages.find(x => x.id === editingExistingDamageId);
       if(d){
         d.damageName = name;
+        d.drawingPosition = edPosition.value.trim();
         d.surveyYear = edSurveyYear.value ? Number(edSurveyYear.value) : null;
         d.component = edComponent.value.trim();
         d.measurement = edMeasurement.value.trim();
@@ -6044,6 +5673,7 @@
       const d = {
         id: 'EX-DMG-' + String(num).padStart(3,'0'),
         damageName: name,
+        drawingPosition: edPosition.value.trim(),
         surveyYear: edSurveyYear.value ? Number(edSurveyYear.value) : null,
         component: edComponent.value.trim(),
         measurement: edMeasurement.value.trim(),
@@ -6085,6 +5715,7 @@
   const EXCEL_COLUMNS = [
     { key:'id', label:'ID' },
     { key:'damageName', label:'손상명' },
+    { key:'drawingPosition', label:'위치' },
     { key:'surveyYear', label:'조사년도' },
     { key:'component', label:'구성요소' },
     { key:'measurement', label:'손상규모' },
@@ -6277,6 +5908,7 @@
         const year = (yearRaw !== '' && !isNaN(Number(yearRaw))) ? Number(yearRaw) : null;
         toInsert.push({
           damageName: name,
+          drawingPosition: String(row['위치'] || '').trim(),
           surveyYear: year,
           component: String(row['구성요소'] || '').trim(),
           measurement: String(row['손상규모'] || '').trim(),
@@ -7570,22 +7202,17 @@
 
   btnShoot.addEventListener('click', async ()=>{
     if(!mediaStream) return;
-    try{
-      const w = video.videoWidth, h = video.videoHeight;
-      captureCanvas.width = w;
-      captureCanvas.height = h;
-      const ctx = captureCanvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, w, h);
-      const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.92);
-      const deviceExif = lastGps ? { lat:lastGps.lat, lng:lastGps.lng, altitude:lastGps.altitude, direction:lastGps.heading, speed:lastGps.speed, source:'DEVICE_GPS' } : null;
-      await addPhoto(activeMarkerId, dataUrl, deviceExif);
-      renderCaptureStrip(activeMarkerId);
-      const m = markers.find(x=>x.id===activeMarkerId);
-      captureHint.textContent = m.photos.length + '장 촬영됨. 계속 촬영하거나 ✕로 닫으세요.';
-    }catch(e){
-      console.error('사진 촬영 처리 실패', e);
-      captureHint.textContent = '사진 저장 중 문제가 있었습니다. 다시 촬영해주세요(기존 사진은 안전합니다).';
-    }
+    const w = video.videoWidth, h = video.videoHeight;
+    captureCanvas.width = w;
+    captureCanvas.height = h;
+    const ctx = captureCanvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, w, h);
+    const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.92);
+    const deviceExif = lastGps ? { lat:lastGps.lat, lng:lastGps.lng, altitude:lastGps.altitude, direction:lastGps.heading, speed:lastGps.speed, source:'DEVICE_GPS' } : null;
+    await addPhoto(activeMarkerId, dataUrl, deviceExif);
+    renderCaptureStrip(activeMarkerId);
+    const m = markers.find(x=>x.id===activeMarkerId);
+    captureHint.textContent = m.photos.length + '장 촬영됨. 계속 촬영하거나 ✕로 닫으세요.';
   });
 
   btnFileFallback.addEventListener('click', ()=>{
@@ -7768,38 +7395,19 @@
       damageListLabel.className = 'damage-label';
       damageBox.appendChild(damageListLabel);
 
-      // 사무실 기준DB 관리에서 새로 등록한 손상들을, 이 시설물의 종류·형식에 맞게
-      // 골라 STANDARD_DB와 같은 모양({damageType,component,causes,repairOptions})으로
-      // 변환한다. formName이 없는 항목(형식 구분 없이 등록한 것)은 모든 형식에 적용된다.
-      function getRefDbEntriesFor(facilityType, facilityForm){
-        if(!mergedRefCache || !facilityType) return [];
-        const atype = mergedRefCache.find(t => t.name === facilityType);
-        if(!atype) return [];
-        return (atype.damageTypes || [])
-          .filter(d => !d.formName || d.formName === facilityForm)
-          .map(d => ({
-            damageType: d.name, component: d.partName || '',
-            causes: d.causes || [], repairOptions: d.repairs || [],
-            sourcePage: null, _fromOfficeDb: true
-          }));
-      }
-
       function renderDamageRecords(){
         damageBox.querySelectorAll('.damage-record').forEach(el=>el.remove());
         const site = currentSiteObj();
-        const legacyList = (site && STANDARD_DB[site.facilityType] && STANDARD_DB[site.facilityType][site.facilityForm]) || [];
-        const refList = site ? getRefDbEntriesFor(site.facilityType, site.facilityForm) : [];
-        // 이름이 겹치면 사무실에서 새로 등록/관리한 쪽을 우선한다(더 최신일 가능성이 높음).
-        const mergedByName = {};
-        legacyList.forEach(e => { mergedByName[e.damageType] = e; });
-        refList.forEach(e => { mergedByName[e.damageType] = e; });
-        const stdList = Object.values(mergedByName);
+        const stdList = site ? resolveDamageStandard(site.facilityType, site.facilityForm) : null;
         const usingStandard = !!(stdList && stdList.length);
         const baseTypes = usingStandard ? stdList.map(x=>x.damageType) : DAMAGE_TYPES.filter(t=>t!=='기타');
         const typeOptions = baseTypes.concat(customDamageTypes.filter(t => !baseTypes.includes(t))).concat(['기타']);
+        
+        const isCustomMaster = site && projects.find(p => p.id === currentProjectId)?.damageMaster?.[site.facilityType.trim()]?.[site.facilityForm.trim()];
+        
         damageListLabel.innerHTML = '손상기록 (' + p.damages.length + '개) ' +
           (usingStandard
-            ? '<span class="official-tag">공식 DB · ' + escapeHtml(standardDbVersion) + '</span>'
+            ? (isCustomMaster ? '<span class="official-tag" style="background:var(--amber); color:#1a1206;">프로젝트 맞춤 손상마스터</span>' : '<span class="official-tag">공식 DB · ' + escapeHtml(standardDbVersion) + '</span>')
             : '<span class="unofficial-tag">일반참고·비공식</span>');
 
         p.damages.forEach((d, dIdx)=>{
@@ -7983,61 +7591,11 @@
           typeWrap.appendChild(scrollRow);
           rec.appendChild(typeWrap);
 
-          if(stdEntry && (stdEntry.cause || stdEntry.investigationItems)){
-            if(stdEntry.investigationItems){
-              const refNote = document.createElement('div');
-              refNote.className = 'std-ref-note';
-              refNote.innerHTML = '<b>지침 조사항목:</b> ' + escapeHtml(stdEntry.investigationItems);
-              rec.appendChild(refNote);
-            }
-            const officialCauses = stdEntry.causes && stdEntry.causes.length ? stdEntry.causes : (stdEntry.cause ? [stdEntry.cause] : []);
-            if(officialCauses.length){
-              const causeChipRow = document.createElement('div');
-              causeChipRow.className = 'damage-type-scroll';
-              causeChipRow.style.marginTop = '4px';
-              const causeLabel = document.createElement('div');
-              causeLabel.className = 'damage-label';
-              causeLabel.textContent = '지침 추천 원인 (눌러서 추가/제거, 자동으로 확정되지 않습니다)';
-              // 보수방안(repairMethod)과 동일한 방식으로 통일 — 콤마로 이어붙는 목록에
-              // 토글 추가/제거된다. 예전엔 칩을 누르면 기존 값을 통째로 덮어썼는데,
-              // 그러면 원인을 여러 개 함께 기록할 수 없었다.
-              function currentCauseList(){ return (d.cause || '').split(',').map(s=>s.trim()).filter(Boolean); }
-              officialCauses.forEach(causeText=>{
-                const causeChip = document.createElement('button');
-                causeChip.type = 'button';
-                const curCauses = currentCauseList();
-                causeChip.className = 'damage-type-btn' + (curCauses.includes(causeText) ? ' active' : '');
-                causeChip.textContent = causeText;
-                causeChip.addEventListener('click', ()=>{
-                  const list = currentCauseList();
-                  const idx = list.indexOf(causeText);
-                  if(idx >= 0) list.splice(idx, 1); else list.push(causeText);
-                  d.cause = list.join(', ');
-                  renderDamageRecords();
-                  saveState();
-                });
-                causeChipRow.appendChild(causeChip);
-              });
-
-              const causeOtherChip = document.createElement('button');
-              causeOtherChip.type = 'button';
-              causeOtherChip.className = 'damage-type-btn';
-              causeOtherChip.textContent = '＋ 기타 직접입력';
-              causeOtherChip.addEventListener('click', ()=>{
-                const custom = prompt('원인을 직접 입력하세요');
-                if(custom && custom.trim()){
-                  const list = currentCauseList();
-                  if(!list.includes(custom.trim())) list.push(custom.trim());
-                  d.cause = list.join(', ');
-                  renderDamageRecords();
-                  saveState();
-                }
-              });
-              causeChipRow.appendChild(causeOtherChip);
-
-              rec.appendChild(causeLabel);
-              rec.appendChild(causeChipRow);
-            }
+          if(stdEntry && stdEntry.investigationItems){
+            const refNote = document.createElement('div');
+            refNote.className = 'std-ref-note';
+            refNote.innerHTML = '<b>지침 조사항목:</b> ' + escapeHtml(stdEntry.investigationItems);
+            rec.appendChild(refNote);
           }
 
           const urgRow = document.createElement('div');
@@ -8095,7 +7653,85 @@
               }
               saveState();
             });
-            wrap.appendChild(lab); wrap.appendChild(input);
+            // Chip UI for component, cause, repairMethod, reinforcementMethod
+            const isChipField = ['component', 'cause', 'repairMethod', 'reinforcementMethod'].includes(f.key);
+            let chipOptions = [];
+            let multiSelect = false;
+            
+            if (stdEntry) {
+              if (f.key === 'component' && stdEntry.component) chipOptions = stdEntry.component.split(',').map(s=>s.trim()).filter(Boolean);
+              if (f.key === 'cause' && stdEntry.cause) chipOptions = stdEntry.cause.split(',').map(s=>s.trim()).filter(Boolean);
+              if (f.key === 'repairMethod') {
+                chipOptions = stdEntry.repairOptions ? stdEntry.repairOptions.slice() : [];
+                if (!chipOptions.includes('주의관찰')) chipOptions.push('주의관찰');
+                multiSelect = true;
+              }
+              if (f.key === 'reinforcementMethod') {
+                chipOptions = stdEntry.reinforcementOptions ? stdEntry.reinforcementOptions.slice() : [];
+                multiSelect = true;
+              }
+            }
+            
+            if (f.key === 'cause') multiSelect = true;
+            
+            if (isChipField && chipOptions.length > 0) {
+              const recoLabel = document.createElement('div');
+              recoLabel.className = 'damage-label';
+              recoLabel.textContent = f.label + ' 추천 (눌러서 선택/추가)';
+              const recoRow = document.createElement('div');
+              recoRow.className = 'damage-type-scroll';
+              
+              function currentList(){ return (d[f.key] || '').split(',').map(s=>s.trim()).filter(Boolean); }
+              
+              chipOptions.forEach(opt=>{
+                const chip = document.createElement('button');
+                chip.type = 'button';
+                const cur = currentList();
+                chip.className = 'damage-type-btn' + (cur.includes(opt) ? ' active' : '');
+                chip.textContent = opt;
+                chip.addEventListener('click', ()=>{
+                  let list = currentList();
+                  if (multiSelect) {
+                    const idx = list.indexOf(opt);
+                    if(idx >= 0) list.splice(idx, 1); else list.push(opt);
+                  } else {
+                    list = [opt];
+                  }
+                  d[f.key] = list.join(', ');
+                  input.value = d[f.key];
+                  renderDamageRecords();
+                  saveState();
+                });
+                recoRow.appendChild(chip);
+              });
+              
+              const otherChip = document.createElement('button');
+              otherChip.type = 'button';
+              otherChip.className = 'damage-type-btn';
+              otherChip.textContent = '＋ 직접입력';
+              otherChip.addEventListener('click', ()=>{
+                const custom = prompt(f.label + '을(를) 직접 입력하세요');
+                if(custom && custom.trim()){
+                  let list = currentList();
+                  if (multiSelect) {
+                    if(!list.includes(custom.trim())) list.push(custom.trim());
+                  } else {
+                    list = [custom.trim()];
+                  }
+                  d[f.key] = list.join(', ');
+                  input.value = d[f.key];
+                  renderDamageRecords();
+                  saveState();
+                }
+              });
+              recoRow.appendChild(otherChip);
+              
+              wrap.appendChild(recoLabel);
+              wrap.appendChild(recoRow);
+            }
+            
+            wrap.appendChild(lab); 
+            wrap.appendChild(input);
             fieldsWrap.appendChild(wrap);
 
             if(f.key === 'component'){
@@ -8152,49 +7788,6 @@
               }
 
               fieldsWrap.appendChild(measWrap);
-            }
-            if(f.key === 'repairMethod'){
-              const recoOptions = (stdEntry && stdEntry.repairOptions) ? stdEntry.repairOptions.slice() : [];
-              if(!recoOptions.includes('주의관찰')) recoOptions.push('주의관찰'); // 보수가 필요없는 손상도 주의관찰로 기록할 수 있어야 함
-              const recoLabel = document.createElement('div');
-              recoLabel.className = 'damage-label';
-              recoLabel.textContent = (stdEntry && stdEntry.repairOptions && stdEntry.repairOptions.length ? '지침 추천 보수·보강' : '추천 보수·보강') + ' (눌러서 추가/제거, 자동으로 확정되지 않습니다)';
-              const recoRow = document.createElement('div');
-              recoRow.className = 'damage-type-scroll';
-              function currentRepairList(){ return (d.repairMethod || '').split(',').map(s=>s.trim()).filter(Boolean); }
-              recoOptions.forEach(opt=>{
-                const chip = document.createElement('button');
-                chip.type = 'button';
-                const cur = currentRepairList();
-                chip.className = 'damage-type-btn' + (cur.includes(opt) ? ' active' : '');
-                chip.textContent = opt;
-                chip.addEventListener('click', ()=>{
-                  const list = currentRepairList();
-                  const idx = list.indexOf(opt);
-                  if(idx >= 0) list.splice(idx, 1); else list.push(opt);
-                  d.repairMethod = list.join(', ');
-                  renderDamageRecords();
-                  saveState();
-                });
-                recoRow.appendChild(chip);
-              });
-              const otherChip = document.createElement('button');
-              otherChip.type = 'button';
-              otherChip.className = 'damage-type-btn';
-              otherChip.textContent = '＋ 기타 직접입력';
-              otherChip.addEventListener('click', ()=>{
-                const custom = prompt('보수·보강 방법을 직접 입력하세요');
-                if(custom && custom.trim()){
-                  const list = currentRepairList();
-                  if(!list.includes(custom.trim())) list.push(custom.trim());
-                  d.repairMethod = list.join(', ');
-                  renderDamageRecords();
-                  saveState();
-                }
-              });
-              recoRow.appendChild(otherChip);
-              wrap.appendChild(recoLabel);
-              wrap.appendChild(recoRow);
             }
           });
           rec.appendChild(fieldsWrap);
@@ -8904,7 +8497,6 @@
     return new Promise((resolve, reject)=>{
       const s = document.createElement('script');
       s.src = src;
-      s.crossOrigin = 'anonymous'; // 정적 <script> 태그와 동일하게 — Script error 은폐 방지
       s.onload = ()=> resolve();
       s.onerror = ()=> reject(new Error('load failed: ' + src));
       document.head.appendChild(s);
@@ -9174,6 +8766,42 @@
   });
 
   // ---------- init ----------
+
+  // 모달 배경 스크롤 잠금 + 닫을 때 원래 위치로 정확히 복원 —
+  // 지금까지 이게 없어서 (1) 모달이 열려있는 동안 뒤 배경 페이지가 같이
+  // 스크롤되고, (2) 모달을 닫으면(X버튼 등으로 포커스가 사라지면서) 화면이
+  // 맨 위로 튕기는 문제가 있었다. 모달마다 따로 안 고치고, 화면에 있는
+  // .modal-backdrop 전부를 감시하는 옵저버 하나로 공통 해결한다.
+  (function setupModalScrollLock(){
+    let lockedScrollY = 0;
+    let locked = false;
+    function refreshLock(){
+      const anyOpen = Array.from(document.querySelectorAll('.modal-backdrop'))
+        .some(el => el.style.display === 'flex' || el.style.display === 'block');
+      if(anyOpen && !locked){
+        lockedScrollY = window.scrollY || window.pageYOffset || 0;
+        document.body.style.position = 'fixed';
+        document.body.style.top = (-lockedScrollY) + 'px';
+        document.body.style.left = '0';
+        document.body.style.right = '0';
+        document.body.style.width = '100%';
+        locked = true;
+      } else if(!anyOpen && locked){
+        document.body.style.position = '';
+        document.body.style.top = '';
+        document.body.style.left = '';
+        document.body.style.right = '';
+        document.body.style.width = '';
+        window.scrollTo(0, lockedScrollY); // 닫을 때 정확히 원래 보던 위치로 복원(튕김 방지)
+        locked = false;
+      }
+    }
+    const observer = new MutationObserver(refreshLock);
+    document.querySelectorAll('.modal-backdrop').forEach(el=>{
+      observer.observe(el, { attributes:true, attributeFilter:['style'] });
+    });
+  })();
+
   loadRoleCache();
   updateSyncStatusIndicator();
   updateClock();
@@ -9193,6 +8821,158 @@
       navigator.serviceWorker.register('./service-worker.js').catch(()=>{});
     });
   }
+  // ==========================================
+  // Damage Master Config Logic
+  // ==========================================
+  let dmCurrentData = null; 
+  let dmIsDirty = false;
+  
+  const dmModal = document.getElementById('damageMasterModal');
+  const dmTypeSel = document.getElementById('dmFacilityType');
+  const dmFormSel = document.getElementById('dmFacilityForm');
+  const dmList = document.getElementById('dmDamageList');
+  const btnDamageMaster = document.getElementById('btnDamageMaster');
+  
+  if (btnDamageMaster) {
+    btnDamageMaster.addEventListener('click', openDamageMaster);
+  }
+  
+  function openDamageMaster() {
+    closeMoreMenu();
+    dmModal.style.display = 'flex';
+    dmIsDirty = false;
+    document.getElementById('dmUnsavedWarning').style.display = 'none';
+    
+    dmTypeSel.innerHTML = '<option value="">선택하세요</option>';
+    Object.keys(FACILITY_FORMS).forEach(type => {
+      if(type !== '기타') dmTypeSel.innerHTML += `<option value="${type}">${type}</option>`;
+    });
+    
+    dmTypeSel.onchange = () => {
+      const type = dmTypeSel.value;
+      dmFormSel.innerHTML = '<option value="">형식을 선택하세요</option>';
+      if (FACILITY_FORMS[type]) {
+        FACILITY_FORMS[type].forEach(form => {
+          if(form !== '기타') dmFormSel.innerHTML += `<option value="${form}">${form}</option>`;
+        });
+      }
+      document.getElementById('dmContent').style.display = 'none';
+    };
+    
+    dmFormSel.onchange = loadDmConfig;
+  }
+  
+  window.closeDamageMaster = function() {
+    if (dmIsDirty) {
+      if (!confirm('저장하지 않은 변경사항이 있습니다. 닫으시겠습니까?')) return;
+    }
+    dmModal.style.display = 'none';
+  }
+  
+  function loadDmConfig() {
+    const type = dmTypeSel.value;
+    const form = dmFormSel.value;
+    if (!type || !form) return;
+    
+    const proj = projects.find(p => p.id === currentProjectId);
+    if (!proj.damageMaster) proj.damageMaster = {};
+    if (!proj.damageMaster[type]) proj.damageMaster[type] = {};
+    
+    if (proj.damageMaster[type][form]) {
+      dmCurrentData = JSON.parse(JSON.stringify(proj.damageMaster[type][form]));
+    } else {
+      const std = STANDARD_DB[type] && STANDARD_DB[type][form] ? STANDARD_DB[type][form] : [];
+      dmCurrentData = JSON.parse(JSON.stringify(std));
+    }
+    
+    document.getElementById('dmContent').style.display = 'block';
+    renderDmList();
+  }
+  
+  function renderDmList() {
+    dmList.innerHTML = '';
+    dmCurrentData.forEach((item, index) => {
+      const card = document.createElement('div');
+      card.style.cssText = 'background:var(--panel-2); border:1px solid var(--line); padding:15px; border-radius:6px;';
+      
+      const enabledOpacity = item.enabled === false ? '0.5' : '1';
+      const causeStr = item.cause || '';
+      const repairStr = (item.repairOptions || []).join(', ');
+      
+      card.innerHTML = `
+        <div style="display:flex; justify-content:space-between; margin-bottom:10px; opacity:${enabledOpacity}">
+          <input type="text" value="${escapeHtml(item.damageType || '')}" onchange="updateDmItem(${index}, 'damageType', this.value)" style="font-size:15px; font-weight:bold; background:transparent; color:white; border:none; border-bottom:1px solid var(--amber);" placeholder="손상명 입력">
+          <label style="display:flex; align-items:center; gap:5px; font-size:12px; cursor:pointer;">
+            <input type="checkbox" ${item.enabled !== false ? 'checked' : ''} onchange="updateDmItem(${index}, 'enabled', this.checked)">
+            사용함
+          </label>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; opacity:${enabledOpacity}">
+          <div>
+            <label style="font-size:11px; color:var(--muted);">부위</label>
+            <input type="text" value="${escapeHtml(item.component || '')}" onchange="updateDmItem(${index}, 'component', this.value)" style="width:100%; background:var(--panel); border:1px solid var(--line); color:white; padding:4px; border-radius:3px;">
+          </div>
+          <div>
+            <label style="font-size:11px; color:var(--muted);">손상원인</label>
+            <input type="text" value="${escapeHtml(causeStr)}" onchange="updateDmItem(${index}, 'cause', this.value)" style="width:100%; background:var(--panel); border:1px solid var(--line); color:white; padding:4px; border-radius:3px;">
+          </div>
+          <div style="grid-column: span 2;">
+            <label style="font-size:11px; color:var(--muted);">보수방안 (쉼표로 구분)</label>
+            <input type="text" value="${escapeHtml(repairStr)}" onchange="updateDmItemArray(${index}, 'repairOptions', this.value)" style="width:100%; background:var(--panel); border:1px solid var(--line); color:white; padding:4px; border-radius:3px;">
+          </div>
+        </div>
+      `;
+      dmList.appendChild(card);
+    });
+  }
+  
+  window.updateDmItem = function(index, key, value) {
+    dmCurrentData[index][key] = value;
+    markDmDirty();
+    if(key === 'enabled') renderDmList();
+  };
+  
+  window.updateDmItemArray = function(index, key, value) {
+    dmCurrentData[index][key] = value.split(',').map(s => s.trim()).filter(s => s);
+    markDmDirty();
+  };
+  
+  function markDmDirty() {
+    dmIsDirty = true;
+    document.getElementById('dmUnsavedWarning').style.display = 'inline';
+  }
+  
+  window.addDmDamageType = function() {
+    dmCurrentData.push({
+      damageType: '새로운 손상',
+      component: '전면부',
+      cause: '',
+      repairOptions: [],
+      enabled: true
+    });
+    markDmDirty();
+    renderDmList();
+  };
+  
+  window.saveDamageMaster = async function() {
+    const type = dmTypeSel.value;
+    const form = dmFormSel.value;
+    if (!type || !form) return;
+    
+    const proj = projects.find(p => p.id === currentProjectId);
+    if (!proj.damageMaster) proj.damageMaster = {};
+    if (!proj.damageMaster[type]) proj.damageMaster[type] = {};
+    
+    proj.damageMaster[type][form] = JSON.parse(JSON.stringify(dmCurrentData));
+    
+    await saveState();
+    logActivity('손상마스터 저장', '프로젝트 ' + proj.name + ' - ' + type + ' / ' + form + ' 기준 변경');
+    
+    dmIsDirty = false;
+    document.getElementById('dmUnsavedWarning').style.display = 'none';
+    alert('저장되었습니다.');
+  };
+
 })();
 </script>
 
