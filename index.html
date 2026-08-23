@@ -125,6 +125,7 @@
   }
   button.primary:hover{ filter: brightness(1.08); }
   button.ghost{ background: transparent; }
+  .dm-tab-btn.active{ background:var(--amber); color:#1a1206; border-color:var(--amber); font-weight:600; }
   button.danger{ color: var(--danger); border-color: rgba(226,96,79,0.4); background:transparent; }
   button:disabled{ opacity:0.4; cursor:not-allowed; }
   #btnWorkMode.mode-field{ color: var(--amber); border-color: var(--amber); }
@@ -1094,6 +1095,9 @@
     border-radius: 6px;
     padding: 7px 9px;
   }
+  details.damage-field{ border:1px solid var(--line); border-radius:6px; padding:2px 9px; background:var(--panel-2); }
+  details.damage-field summary{ color:var(--muted); }
+  details.damage-field summary::marker{ color:var(--amber); }
   .photo-note{
     display:block;
     width:100%;
@@ -1563,11 +1567,27 @@
       </div>
       
       <div id="dmContent" style="display:none; border-top:1px solid var(--line); padding-top:20px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-           <h3 style="margin:0; font-size:16px;">손상명 및 상세항목 목록</h3>
-           <button class="primary" id="btnAddDamageType" onclick="addDmDamageType()">+ 손상명 추가</button>
+        <div style="display:flex; gap:8px; margin-bottom:15px;">
+          <button type="button" class="ghost dm-tab-btn active" id="dmTabPartsBtn" onclick="dmSwitchTab('parts')" style="flex:1;">부위 관리</button>
+          <button type="button" class="ghost dm-tab-btn" id="dmTabTypesBtn" onclick="dmSwitchTab('types')" style="flex:1;">손상명 관리</button>
         </div>
-        <div id="dmDamageList" style="display:flex; flex-direction:column; gap:12px;"></div>
+
+        <div id="dmPartsTab">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <h3 style="margin:0; font-size:16px;">부위 목록</h3>
+            <button class="primary" onclick="addDmPart()">+ 부위 추가</button>
+          </div>
+          <div class="std-ref-note" style="margin-bottom:12px;">부위는 시설물 종류+형식이 결정합니다. 여기서 관리한 부위 목록이 현장조사 손상추가 화면의 "부위" 1단계 선택지로 그대로 쓰입니다. 비활성화해도 과거 조사자료는 그대로 유지됩니다.</div>
+          <div id="dmPartsList" style="display:flex; flex-direction:column; gap:10px;"></div>
+        </div>
+
+        <div id="dmTypesTab" style="display:none;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+             <h3 style="margin:0; font-size:16px;">손상명 및 상세항목 목록</h3>
+             <button class="primary" id="btnAddDamageType" onclick="addDmDamageType()">+ 손상명 추가</button>
+          </div>
+          <div id="dmDamageList" style="display:flex; flex-direction:column; gap:12px;"></div>
+        </div>
       </div>
     </div>
     <div class="modal-footer" style="padding:15px 20px; border-top:1px solid var(--line); text-align:right; background:rgba(0,0,0,0.2);">
@@ -7416,8 +7436,22 @@
         const site = currentSiteObj();
         const stdList = site ? resolveDamageStandard(site.facilityType, site.facilityForm) : null;
         const usingStandard = !!(stdList && stdList.length);
-        const baseTypes = usingStandard ? stdList.map(x=>x.damageType) : DAMAGE_TYPES.filter(t=>t!=='기타');
+        const baseTypes = usingStandard ? stdList.map(x=>x.damageType).filter(Boolean) : DAMAGE_TYPES.filter(t=>t!=='기타');
         const typeOptions = baseTypes.concat(customDamageTypes.filter(t => !baseTypes.includes(t))).concat(['기타']);
+        // 부위(component) 목록은 손상이 아니라 시설물 종류+형식이 결정한다 —
+        // 기존 STANDARD_DB/손상마스터의 각 손상항목이 갖고 있는 component 값들을 등장 순서대로 모아
+        // "부위" 1단계 선택지로 사용한다(데이터 구조는 그대로, 화면에서 먼저 뽑아 보여줄 뿐).
+        const partOptions = usingStandard
+          ? Array.from(new Set(stdList.map(x=>x.component).filter(Boolean)))
+          : [];
+        // 사무실모드 손상마스터에서 "비활성화"한 부위/손상명은 신규 선택지에서는 숨기되,
+        // 이미 예전에 선택되어 저장된 기록에는 그대로 남겨둔다(명령문 51번 삭제정책).
+        const disabledParts = new Set(
+          partOptions.filter(part => stdList.filter(x=>x.component===part).every(x=>x.enabled===false))
+        );
+        const disabledTypes = new Set(
+          usingStandard ? stdList.filter(x=>x.enabled===false).map(x=>x.damageType) : []
+        );
         
         const isCustomMaster = site && projects.find(p => p.id === currentProjectId)?.damageMaster?.[site.facilityType.trim()]?.[site.facilityForm.trim()];
         
@@ -7570,13 +7604,74 @@
             }
           }
 
+          // ---- 부위 (시설물 종류+형식이 결정, 손상보다 먼저 선택) ----
+          const partWrap = document.createElement('div');
+          partWrap.className = 'damage-field';
+          const partLab = document.createElement('label'); partLab.textContent = '부위';
+          rec.appendChild(partWrap);
+          partWrap.appendChild(partLab);
+
+          function selectPart(newPart){
+            // 부위 변경은 시설물의 구성위치를 바꾸는 것일 뿐, 이미 선택된 손상명이나
+            // 다른 조사값을 지우는 동작이 아니다(명령문 8번 원칙) — d.damageType은 그대로 둔다.
+            d.component = newPart;
+            renderDamageRecords();
+            saveState();
+          }
+
+          if(usingStandard){
+            const partRow = document.createElement('div');
+            partRow.className = 'damage-type-scroll';
+            partOptions.forEach(part=>{
+              if(disabledParts.has(part) && d.component !== part) return; // 비활성화된 부위는 신규 선택지에서 숨김
+              const chip = document.createElement('button');
+              chip.type = 'button';
+              chip.className = 'damage-type-btn' + (d.component === part ? ' active' : '');
+              chip.textContent = part + (disabledParts.has(part) ? ' (비활성)' : '');
+              chip.addEventListener('click', ()=> selectPart(part));
+              partRow.appendChild(chip);
+            });
+            const partOtherChip = document.createElement('button');
+            partOtherChip.type = 'button';
+            partOtherChip.className = 'damage-type-btn';
+            partOtherChip.textContent = '＋ 직접입력';
+            partOtherChip.addEventListener('click', ()=>{
+              const custom = prompt('부위를 직접 입력하세요');
+              if(custom && custom.trim()) selectPart(custom.trim());
+            });
+            partRow.appendChild(partOtherChip);
+            partWrap.appendChild(partRow);
+            if(!d.component){
+              const partHint = document.createElement('div');
+              partHint.className = 'std-ref-note';
+              partHint.textContent = '부위를 먼저 선택하면 그 부위에 등록된 손상명만 표시됩니다.';
+              partWrap.appendChild(partHint);
+            }
+          } else {
+            // 기준DB에 연결된 시설물이 아니면 부위 목록이 없으므로 자유 입력으로 대체한다
+            const partInput = document.createElement('input');
+            partInput.type = 'text';
+            partInput.value = d.component || '';
+            partInput.placeholder = '부위 입력 (예: 전면부)';
+            partInput.addEventListener('change', ()=>{ d.component = partInput.value; saveState(); });
+            partWrap.appendChild(partInput);
+          }
+
           const typeWrap = document.createElement('div');
           typeWrap.className = 'damage-field';
-          const typeLab = document.createElement('label'); typeLab.textContent = '손상종류';
+          const typeLab = document.createElement('label'); typeLab.textContent = '손상명';
           const scrollRow = document.createElement('div');
           scrollRow.className = 'damage-type-scroll';
 
-          const sortedTypes = typeOptions.slice().sort((a,b)=>{
+          // 부위가 결정되면 그 부위에 등록된 손상명만 보여준다(부위→손상명 순서, 손상이 부위를
+          // 만들지 않는다 — 명령문 9번). 부위 목록이 없는 경우(기준DB 미연결)는 종전과 동일하게 전체 표시.
+          const partFilteredTypes = (usingStandard && d.component)
+            ? typeOptions.filter(t => t === '기타' || customDamageTypes.includes(t) || (stdList.find(x=>x.damageType===t)||{}).component === d.component)
+            : typeOptions;
+          // 비활성화된 손상명은 신규 선택지에서 숨기되, 이미 이 기록에 선택되어 있다면 계속 보여준다.
+          const visibleTypes = partFilteredTypes.filter(t => !disabledTypes.has(t) || d.damageType === t);
+
+          const sortedTypes = visibleTypes.slice().sort((a,b)=>{
             if(a === '기타') return 1;
             if(b === '기타') return -1;
             return (damageTypeUsageCounts[b]||0) - (damageTypeUsageCounts[a]||0);
@@ -7644,16 +7739,65 @@
             rec.appendChild(otherWrap);
           }
 
+          // ---- 규모 (손상명 선택 직후, 명령문 순서: 부위→손상명→규모→원인…) ----
+          // 기존에는 "구성요소" 필드 자리에 얹혀 있던 블록을 그대로 옮긴 것으로,
+          // getMeasurementFields()/measurementItems 구조는 전혀 변경하지 않는다.
+          const measWrap = document.createElement('div');
+          measWrap.className = 'damage-field';
+          const measLab = document.createElement('label'); measLab.textContent = '손상규모/조사값';
+          measWrap.appendChild(measLab);
+
+          if(!d.measurementItems) d.measurementItems = [];
+          const measFieldDefs = getMeasurementFields(d.damageType);
+          measFieldDefs.forEach(fd=>{
+            let item = d.measurementItems.find(mi => mi.type === fd.type);
+            if(!item){
+              item = { type: fd.type, label: fd.label, value: '', unit: fd.defaultUnit };
+              d.measurementItems.push(item);
+            }
+            const row = document.createElement('div');
+            row.className = 'measurement-row';
+            const rl = document.createElement('label'); rl.textContent = fd.label;
+            const valInput = document.createElement('input');
+            valInput.type = 'number'; valInput.step = 'any'; valInput.value = item.value;
+            valInput.placeholder = '값';
+            const unitSelect = document.createElement('select');
+            fd.units.forEach(u=>{
+              const o = document.createElement('option'); o.value = u; o.textContent = u;
+              if(item.unit === u) o.selected = true;
+              unitSelect.appendChild(o);
+            });
+            function commitMeasurement(){
+              const oldText = d.measurement || '';
+              item.value = valInput.value;
+              item.unit = unitSelect.value;
+              syncMeasurementText(d);
+              if(oldText !== (d.measurement||'')){
+                logActivity('손상규모/조사값 수정', '지점 ' + m.num + ' — "' + (oldText || '(빈값)') + '" → "' + (d.measurement||'(빈값)') + '"');
+                renderLog();
+              }
+              saveState();
+            }
+            valInput.addEventListener('change', commitMeasurement);
+            unitSelect.addEventListener('change', commitMeasurement);
+            row.appendChild(rl); row.appendChild(valInput); row.appendChild(unitSelect);
+            measWrap.appendChild(row);
+          });
+          const hasStructuredValue = d.measurementItems.some(mi => mi.value !== '' && mi.value != null);
+          if(!hasStructuredValue && d.measurement){
+            const legacyNote = document.createElement('div');
+            legacyNote.className = 'measurement-legacy-note';
+            legacyNote.textContent = '이전 기록: ' + d.measurement;
+            measWrap.appendChild(legacyNote);
+          }
+          rec.appendChild(measWrap);
+
           const fieldsWrap = document.createElement('div');
           fieldsWrap.className = 'damage-fields';
           [
-            { key:'component', label:'구성요소' },
             { key:'cause', label:'손상원인' },
-            { key:'failureFactor', label:'파괴요인' },
-            { key:'evaluation', label:'평가' },
             { key:'repairMethod', label:'보수공법' },
-            { key:'reinforcementMethod', label:'보강공법' },
-            { key:'standardReference', label:'근거(기준명·페이지)' }
+            { key:'reinforcementMethod', label:'보강공법' }
           ].forEach(f=>{
             const wrap = document.createElement('div');
             wrap.className = 'damage-field';
@@ -7769,64 +7913,46 @@
             wrap.appendChild(lab); 
             wrap.appendChild(input);
             fieldsWrap.appendChild(wrap);
-
-            if(f.key === 'component'){
-              // 구조화된 손상규모 입력 — 손상종류에 맞는 항목(길이/균열폭/깊이 등)만 표시한다
-              const measWrap = document.createElement('div');
-              measWrap.className = 'damage-field';
-              const measLab = document.createElement('label'); measLab.textContent = '손상규모/조사값';
-              measWrap.appendChild(measLab);
-
-              if(!d.measurementItems) d.measurementItems = [];
-              const fieldDefs = getMeasurementFields(d.damageType);
-              fieldDefs.forEach(fd=>{
-                let item = d.measurementItems.find(mi => mi.type === fd.type);
-                if(!item){
-                  item = { type: fd.type, label: fd.label, value: '', unit: fd.defaultUnit };
-                  d.measurementItems.push(item);
-                }
-                const row = document.createElement('div');
-                row.className = 'measurement-row';
-                const rl = document.createElement('label'); rl.textContent = fd.label;
-                const valInput = document.createElement('input');
-                valInput.type = 'number'; valInput.step = 'any'; valInput.value = item.value;
-                valInput.placeholder = '값';
-                const unitSelect = document.createElement('select');
-                fd.units.forEach(u=>{
-                  const o = document.createElement('option'); o.value = u; o.textContent = u;
-                  if(item.unit === u) o.selected = true;
-                  unitSelect.appendChild(o);
-                });
-                function commitMeasurement(){
-                  const oldText = d.measurement || '';
-                  item.value = valInput.value;
-                  item.unit = unitSelect.value;
-                  syncMeasurementText(d);
-                  if(oldText !== (d.measurement||'')){
-                    logActivity('손상규모/조사값 수정', '지점 ' + m.num + ' — "' + (oldText || '(빈값)') + '" → "' + (d.measurement||'(빈값)') + '"');
-                    renderLog();
-                  }
-                  saveState();
-                }
-                valInput.addEventListener('change', commitMeasurement);
-                unitSelect.addEventListener('change', commitMeasurement);
-                row.appendChild(rl); row.appendChild(valInput); row.appendChild(unitSelect);
-                measWrap.appendChild(row);
-              });
-
-              // 이전 버전에서 자유텍스트로 입력해둔 값이 있고 아직 구조화값을 안 채웠다면 참고용으로 보여준다
-              const hasStructuredValue = d.measurementItems.some(mi => mi.value !== '' && mi.value != null);
-              if(!hasStructuredValue && d.measurement){
-                const legacyNote = document.createElement('div');
-                legacyNote.className = 'measurement-legacy-note';
-                legacyNote.textContent = '이전 기록: ' + d.measurement;
-                measWrap.appendChild(legacyNote);
-              }
-
-              fieldsWrap.appendChild(measWrap);
-            }
           });
           rec.appendChild(fieldsWrap);
+
+          // ---- [상세 조사정보] 접기 (명령문 6번: 기존 필드는 삭제하지 않되 접을 수 있게) ----
+          // 파괴요인/평가/근거는 삭제되지 않고 그대로 보존되며, 기본적으로 접혀있어
+          // 현장에서 핵심 항목(부위/손상명/규모/원인/보수/보강/의견)에 집중할 수 있게 한다.
+          const detailsEl = document.createElement('details');
+          detailsEl.className = 'damage-field';
+          detailsEl.open = !!(d.failureFactor || d.evaluation || d.standardReference);
+          const summaryEl = document.createElement('summary');
+          summaryEl.textContent = '상세 조사정보 (파괴요인·평가·근거)';
+          summaryEl.style.cssText = 'cursor:pointer; font-size:13px; color:var(--muted); padding:4px 0;';
+          detailsEl.appendChild(summaryEl);
+          [
+            { key:'failureFactor', label:'파괴요인' },
+            { key:'evaluation', label:'평가' },
+            { key:'standardReference', label:'근거(기준명·페이지)' }
+          ].forEach(f=>{
+            const wrap = document.createElement('div');
+            wrap.className = 'damage-field';
+            const lab = document.createElement('label'); lab.textContent = f.label;
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = d[f.key] || '';
+            input.placeholder = f.label + ' 입력';
+            input.addEventListener('change', ()=>{
+              const oldVal = d[f.key] || '';
+              const newVal = input.value;
+              d[f.key] = newVal;
+              if(oldVal !== newVal){
+                logActivity(f.label + ' 수정', '지점 ' + m.num + ' — "' + (oldVal || '(빈값)') + '" → "' + (newVal || '(빈값)') + '"');
+                renderLog();
+              }
+              saveState();
+            });
+            wrap.appendChild(lab);
+            wrap.appendChild(input);
+            detailsEl.appendChild(wrap);
+          });
+          rec.appendChild(detailsEl);
 
           const commentWrap = document.createElement('div');
           commentWrap.className = 'damage-field';
@@ -8924,9 +9050,156 @@
     }
     
     document.getElementById('dmContent').style.display = 'block';
+    dmSwitchTab('parts');
     renderDmList();
+    renderDmPartsList();
   }
-  
+
+  // ---- 부위 관리 (명령문 25번) ----
+  // 별도의 부위 엔티티 테이블을 새로 만들지 않고, 기존 dmCurrentData(손상명 배열)의
+  // component 값을 그룹핑해서 부위 단위로 보여준다 — 데이터 구조는 그대로 유지.
+  window.dmSwitchTab = function(tab){
+    const partsBtn = document.getElementById('dmTabPartsBtn');
+    const typesBtn = document.getElementById('dmTabTypesBtn');
+    const partsTab = document.getElementById('dmPartsTab');
+    const typesTab = document.getElementById('dmTypesTab');
+    if(tab === 'parts'){
+      partsBtn.classList.add('active'); typesBtn.classList.remove('active');
+      partsTab.style.display = 'block'; typesTab.style.display = 'none';
+    } else {
+      typesBtn.classList.add('active'); partsBtn.classList.remove('active');
+      typesTab.style.display = 'block'; partsTab.style.display = 'none';
+    }
+  };
+
+  function dmGetParts(){
+    const parts = [];
+    (dmCurrentData || []).forEach(item=>{
+      const name = (item.component || '').trim();
+      if(!name) return;
+      let p = parts.find(x=>x.name === name);
+      if(!p){ p = { name, items: [] }; parts.push(p); }
+      p.items.push(item);
+    });
+    return parts;
+  }
+
+  function renderDmPartsList(){
+    const box = document.getElementById('dmPartsList');
+    if(!box) return;
+    box.innerHTML = '';
+    const parts = dmGetParts();
+    if(parts.length === 0){
+      const empty = document.createElement('div');
+      empty.style.cssText = 'color:var(--muted); font-size:13px; padding:8px 0;';
+      empty.textContent = '등록된 부위가 없습니다. "+ 부위 추가"로 먼저 만들어주세요.';
+      box.appendChild(empty);
+      return;
+    }
+    parts.forEach((part, idx)=>{
+      const allEnabled = part.items.every(it=>it.enabled !== false);
+      const card = document.createElement('div');
+      card.style.cssText = 'background:var(--panel-2); border:1px solid var(--line); padding:12px 14px; border-radius:6px; display:flex; justify-content:space-between; align-items:center; gap:10px; opacity:' + (allEnabled ? '1' : '0.55');
+      const left = document.createElement('div');
+      const title = document.createElement('div');
+      title.style.cssText = 'font-weight:600; font-size:14px;';
+      title.textContent = part.name;
+      const sub = document.createElement('div');
+      sub.style.cssText = 'font-size:12px; color:var(--muted); margin-top:2px;';
+      sub.textContent = '손상명 ' + part.items.filter(it=>it.damageType).length + '개' + (allEnabled ? '' : ' · 비활성화됨');
+      left.appendChild(title); left.appendChild(sub);
+
+      const right = document.createElement('div');
+      right.style.cssText = 'display:flex; gap:6px; align-items:center;';
+
+      const upBtn = document.createElement('button');
+      upBtn.type = 'button'; upBtn.className = 'ghost'; upBtn.textContent = '▲'; upBtn.style.padding = '4px 8px';
+      upBtn.disabled = idx === 0;
+      upBtn.addEventListener('click', ()=> moveDmPart(part.name, -1));
+
+      const downBtn = document.createElement('button');
+      downBtn.type = 'button'; downBtn.className = 'ghost'; downBtn.textContent = '▼'; downBtn.style.padding = '4px 8px';
+      downBtn.disabled = idx === parts.length - 1;
+      downBtn.addEventListener('click', ()=> moveDmPart(part.name, 1));
+
+      const renameBtn = document.createElement('button');
+      renameBtn.type = 'button'; renameBtn.className = 'ghost'; renameBtn.textContent = '✏️ 이름수정'; renameBtn.style.padding = '4px 8px';
+      renameBtn.addEventListener('click', ()=> renameDmPart(part.name));
+
+      const toggleBtn = document.createElement('button');
+      toggleBtn.type = 'button'; toggleBtn.className = 'ghost'; toggleBtn.style.padding = '4px 8px';
+      toggleBtn.textContent = allEnabled ? '비활성화' : '활성화';
+      toggleBtn.addEventListener('click', ()=> toggleDmPartEnabled(part.name));
+
+      right.appendChild(upBtn); right.appendChild(downBtn); right.appendChild(renameBtn); right.appendChild(toggleBtn);
+      card.appendChild(left); card.appendChild(right);
+      box.appendChild(card);
+    });
+  }
+
+  window.addDmPart = function(){
+    const name = prompt('새 부위 이름을 입력하세요 (예: 배수시설)');
+    if(!name || !name.trim()) return;
+    const trimmed = name.trim();
+    if(dmGetParts().some(p=>p.name === trimmed)){
+      alert('이미 있는 부위 이름입니다.');
+      return;
+    }
+    // 부위만 먼저 만들고 손상명은 비워둔 상태로 추가 — 손상명 관리 탭에서 채울 수 있다.
+    // damageType이 빈 항목은 현장 손상명 목록에는 나타나지 않고(부위 옵션에만 반영),
+    // 기존 renderDamageRecords 쪽에서 이미 빈 damageType은 걸러내도록 되어 있다.
+    dmCurrentData.push({ damageType:'', component: trimmed, cause:'', repairOptions:[], reinforcementOptions:[], enabled:true });
+    markDmDirty();
+    renderDmPartsList();
+    renderDmList();
+  };
+
+  window.renameDmPart = function(oldName){
+    const name = prompt('부위 이름 수정', oldName);
+    if(!name || !name.trim() || name.trim() === oldName) return;
+    const trimmed = name.trim();
+    (dmCurrentData || []).forEach(item=>{
+      if((item.component || '').trim() === oldName) item.component = trimmed;
+    });
+    markDmDirty();
+    renderDmPartsList();
+    renderDmList();
+  };
+
+  window.toggleDmPartEnabled = function(name){
+    const parts = dmGetParts();
+    const part = parts.find(p=>p.name === name);
+    if(!part) return;
+    const allEnabled = part.items.every(it=>it.enabled !== false);
+    const nextEnabled = !allEnabled;
+    part.items.forEach(it=>{ it.enabled = nextEnabled; });
+    markDmDirty();
+    renderDmPartsList();
+    renderDmList();
+  };
+
+  window.moveDmPart = function(name, dir){
+    const parts = dmGetParts();
+    const idx = parts.findIndex(p=>p.name === name);
+    const targetIdx = idx + dir;
+    if(idx < 0 || targetIdx < 0 || targetIdx >= parts.length) return;
+    // 부위 순서는 dmCurrentData 배열 안에서 그 부위에 속한 항목들을 블록째로
+    // 옆 부위 블록과 자리를 바꾸는 방식으로 반영한다 (항목 자체는 삭제/생성하지 않는다).
+    // component 값이 비어 있어 어떤 부위에도 안 묶이는 항목이 혹시 있다면
+    // 데이터 유실 없이 그대로 맨 뒤에 보존한다.
+    const groupedItems = new Set();
+    parts.forEach(p => p.items.forEach(it => groupedItems.add(it)));
+    const orphanItems = (dmCurrentData || []).filter(it => !groupedItems.has(it));
+    const newOrder = parts.slice();
+    const tmp = newOrder[idx]; newOrder[idx] = newOrder[targetIdx]; newOrder[targetIdx] = tmp;
+    const reordered = [];
+    newOrder.forEach(p => reordered.push(...p.items));
+    dmCurrentData = reordered.concat(orphanItems);
+    markDmDirty();
+    renderDmPartsList();
+    renderDmList();
+  };
+
   function renderDmList() {
     dmList.innerHTML = '';
     dmCurrentData.forEach((item, index) => {
@@ -8968,6 +9241,7 @@
     dmCurrentData[index][key] = value;
     markDmDirty();
     if(key === 'enabled') renderDmList();
+    if(key === 'component' || key === 'enabled') renderDmPartsList();
   };
   
   window.updateDmItemArray = function(index, key, value) {
@@ -8981,15 +9255,17 @@
   }
   
   window.addDmDamageType = function() {
+    const existingParts = dmGetParts();
     dmCurrentData.push({
       damageType: '새로운 손상',
-      component: '전면부',
+      component: existingParts.length ? existingParts[0].name : '전면부',
       cause: '',
       repairOptions: [],
       enabled: true
     });
     markDmDirty();
     renderDmList();
+    renderDmPartsList();
   };
   
   window.saveDamageMaster = async function() {
