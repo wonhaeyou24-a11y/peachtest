@@ -1,7 +1,9 @@
-const CACHE_NAME = 'point-shot-v4'; // RC 단계에서 올림 — index.html이 크게 바뀌었는데 이 파일 자체가
-// 안 바뀌면 브라우저가 새 버전으로 인식하지 못해, 완전 오프라인 상태에서 열었을 때 아주 옛날에
-// 캐시된 index.html이 나올 수 있었다(온라인 탐색은 network-first라 평소엔 문제 없었음). 버전 문자열이
-// 바뀌면 브라우저가 이 파일을 다시 받아 새 install을 실행하고, 오프라인 폴백용 캐시도 새로 채워진다.
+const CACHE_NAME = 'point-shot-v5-camera-fix'; // 카메라(getUserMedia) 초기화 로직을 전면 보강한 버전.
+// 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
+// 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
+// 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.
+// 버전 문자열을 바꾸면 새 Service Worker가 설치되며 activate에서 아래처럼 이전 이름의 캐시만 정리한다
+// (IndexedDB/localStorage 등 앱 데이터는 이 파일이 손대지 않으므로 전혀 영향 없음).
 
 // 앱 자체 실행에 반드시 필요한 파일 — 하나라도 실패하면 설치 자체를 중단해야 함
 const CORE_ASSETS = [

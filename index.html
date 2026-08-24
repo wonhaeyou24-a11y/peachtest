@@ -1269,6 +1269,7 @@
       <div class="capture-strip" id="captureStrip"></div>
     </div>
     <div class="modal-foot">
+      <button class="ghost" id="btnRestartCamera" style="display:none;">🔄 카메라 다시 시작</button>
       <button class="ghost" id="btnFileFallback">사진첩에서 선택</button>
       <button class="primary" id="btnShoot">촬영</button>
       <button class="primary" id="btnDoneCapture" style="background:#2E7D4F; border-color:#2E7D4F;">촬영 완료</button>
@@ -2011,6 +2012,7 @@
   const btnShoot = document.getElementById('btnShoot');
   const btnDoneCapture = document.getElementById('btnDoneCapture');
   const btnFileFallback = document.getElementById('btnFileFallback');
+  const btnRestartCamera = document.getElementById('btnRestartCamera');
 
   const previewModal = document.getElementById('previewModal');
   const previewTitle = document.getElementById('previewTitle');
@@ -7319,6 +7321,125 @@
   window.addEventListener('orientationchange', updateRotateHint);
   window.addEventListener('resize', updateRotateHint);
 
+  // ---------- 카메라 시작/복구 로직 ----------
+  // iPhone Safari + 홈화면 PWA(Standalone) 모두에서 동일하게 동작해야 하므로,
+  // 여기서 실행 모드(standalone 여부)를 검사해 카메라를 막는 조건은 절대 두지 않는다.
+  const MAX_CAMERA_AUTO_RETRY = 2;     // 검은 화면(프레임 없음) 감지 시 자동 재시도 최대 횟수
+  let cameraAutoRetryCount = 0;
+  let cameraStartSeq = 0; // openCapture가 여러 번 겹쳐 호출돼도 오래된 시퀀스의 결과가 화면을 덮어쓰지 않도록
+
+  function onCameraTrackEnded(){
+    // 권한 취소, 다른 앱의 카메라 점유, 시스템에 의한 스트림 중단 등으로
+    // 스트림이 예기치 않게 끊긴 경우. 촬영 모달이 열려있을 때만 처리한다.
+    if(captureModal.style.display !== 'flex') return;
+    mediaStream = null;
+    video.style.display = 'none';
+    btnShoot.disabled = true;
+    btnRestartCamera.style.display = 'inline-block';
+    captureHint.textContent = '카메라 연결이 끊어졌습니다. 아래 "카메라 다시 시작"을 눌러주세요.';
+  }
+
+  function cameraErrorMessage(err){
+    const name = err && err.name;
+    if(name === 'NotAllowedError' || name === 'PermissionDeniedError'){
+      return '카메라 권한이 차단되어 있습니다. iPhone 설정에서 카메라 권한을 확인해주세요.';
+    }
+    if(name === 'NotFoundError' || name === 'DevicesNotFoundError'){
+      return '사용 가능한 카메라를 찾을 수 없습니다.';
+    }
+    if(name === 'NotReadableError' || name === 'TrackStartError'){
+      return '카메라가 다른 앱에서 사용 중이거나 접근할 수 없습니다.';
+    }
+    if(name === 'SecurityError'){
+      return '보안 정책 때문에 카메라에 접근할 수 없습니다. HTTPS 주소에서 실행해주세요.';
+    }
+    if(name === 'BlackFrameError'){
+      return '카메라 화면을 표시할 수 없습니다. "카메라 다시 시작"을 눌러주세요.';
+    }
+    return '카메라를 시작할 수 없습니다. 아래 "사진첩에서 선택"으로 사진을 불러올 수 있습니다.';
+  }
+
+  async function startCameraStream(){
+    stopStream(); // 기존 스트림이 남아있다면 먼저 정리
+
+    if(!window.isSecureContext){
+      throw Object.assign(new Error('insecure context'), { name: 'SecurityError' });
+    }
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      throw Object.assign(new Error('mediaDevices unavailable'), { name: 'NotFoundError' });
+    }
+
+    let stream;
+    try{
+      // 1순위: 후면 카메라 우선 요청
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, aspectRatio: { ideal: 16/9 } }, audio: false
+      });
+    }catch(e1){
+      // 일부 iPhone/iOS 조합은 세부 constraint에서 실패할 수 있으므로 단순 요청으로 한 번 더 시도
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    }
+
+    mediaStream = stream;
+    mediaStream.getVideoTracks().forEach(t => t.addEventListener('ended', onCameraTrackEnded));
+
+    video.autoplay = true;
+    video.playsInline = true;
+    video.muted = true;
+    video.srcObject = mediaStream;
+
+    await new Promise((resolve)=>{
+      if(video.readyState >= 1){ resolve(); return; } // 이미 HAVE_METADATA 이상
+      const onMeta = ()=>{ video.removeEventListener('loadedmetadata', onMeta); resolve(); };
+      video.addEventListener('loadedmetadata', onMeta);
+      setTimeout(resolve, 3000); // 안전장치: 무한 대기 방지
+    });
+
+    try{ await video.play(); }catch(e){ /* 사용자 탭 컨텍스트 안이라 보통 성공하며, 실패해도 아래 프레임 검사로 감지됨 */ }
+  }
+
+  function hasCameraFrame(){
+    return video.videoWidth > 0 && video.videoHeight > 0;
+  }
+
+  async function runCameraStartSequence(){
+    const seq = ++cameraStartSeq;
+    try{
+      await startCameraStream();
+      if(seq !== cameraStartSeq) return; // 그 사이 모달이 닫혔거나 재시작이 다시 시작됨
+
+      if(!hasCameraFrame()){
+        // 스트림은 연결됐지만 실제 프레임이 없는 '검은 화면' 상태 — 제한된 횟수만 자동 재시도
+        if(cameraAutoRetryCount < MAX_CAMERA_AUTO_RETRY){
+          cameraAutoRetryCount++;
+          captureHint.textContent = '카메라 화면을 불러오는 중입니다…';
+          setTimeout(()=>{ if(seq === cameraStartSeq) runCameraStartSequence(); }, 500);
+          return;
+        }
+        throw Object.assign(new Error('black frame'), { name: 'BlackFrameError' });
+      }
+
+      video.style.display = 'block';
+      captureHint.textContent = '카메라 화면을 확인한 뒤 촬영 버튼을 누르세요. 여러 장 연속 촬영이 가능합니다.';
+      btnShoot.disabled = false;
+      btnRestartCamera.style.display = 'none';
+    }catch(err){
+      if(seq !== cameraStartSeq) return;
+      video.style.display = 'none';
+      btnShoot.disabled = true;
+      btnRestartCamera.style.display = 'inline-block';
+      captureHint.textContent = cameraErrorMessage(err);
+    }
+  }
+
+  btnRestartCamera.addEventListener('click', ()=>{
+    btnRestartCamera.style.display = 'none';
+    video.style.display = 'block';
+    captureHint.textContent = '카메라를 다시 시작하는 중입니다…';
+    cameraAutoRetryCount = 0;
+    runCameraStartSequence();
+  });
+
   async function openCapture(markerId){
     activeMarkerId = markerId;
     const m = markers.find(x=>x.id===markerId);
@@ -7327,21 +7448,11 @@
     captureHint.textContent = '카메라 권한을 확인 중입니다…';
     video.style.display = 'block';
     btnShoot.disabled = true;
+    btnRestartCamera.style.display = 'none';
+    cameraAutoRetryCount = 0;
     renderCaptureStrip(markerId);
     updateRotateHint();
-
-    try{
-      mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', aspectRatio: { ideal: 16/9 } }, audio: false
-      });
-      video.srcObject = mediaStream;
-      captureHint.textContent = '카메라 화면을 확인한 뒤 촬영 버튼을 누르세요. 여러 장 연속 촬영이 가능합니다.';
-      btnShoot.disabled = false;
-    }catch(err){
-      captureHint.textContent = '카메라에 접근할 수 없습니다. 아래 "파일에서 선택"으로 사진을 불러올 수 있습니다.';
-      video.style.display = 'none';
-      btnShoot.disabled = true;
-    }
+    await runCameraStartSequence();
   }
 
   function renderCaptureStrip(markerId){
@@ -7390,14 +7501,20 @@
 
   function stopStream(){
     if(mediaStream){
-      mediaStream.getTracks().forEach(t=>t.stop());
+      mediaStream.getTracks().forEach(t=>{
+        t.removeEventListener('ended', onCameraTrackEnded);
+        t.stop();
+      });
       mediaStream = null;
     }
+    video.srcObject = null;
   }
 
   function closeCaptureModal(){
+    cameraStartSeq++; // 진행 중이던 카메라 시작/재시도 시퀀스를 무효화
     stopStream();
     captureModal.style.display = 'none';
+    btnRestartCamera.style.display = 'none';
     activeMarkerId = null;
     updateRotateHint();
   }
