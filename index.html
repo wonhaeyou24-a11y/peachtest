@@ -1599,7 +1599,8 @@
       <span id="dmUnsavedWarning" style="color:var(--amber); margin-right:15px; display:none; font-size:13px;">⚠️ 저장하지 않은 변경사항이 있습니다.</span>
       <button class="ghost" onclick="closeDamageMaster()">닫기</button>
       <button class="ghost" onclick="saveDamageMaster()" title="지금 이 프로젝트에서만 이 설정을 사용합니다. 다른 프로젝트나 앞으로 만들 프로젝트에는 영향이 없습니다.">이 프로젝트에만 저장</button>
-      <button class="primary" onclick="saveDamageMasterGlobal()" title="모든 프로젝트가 공유하는 손상마스터에 저장합니다. 지금 진행 중인 다른 프로젝트는 바뀌지 않고, 앞으로 새로 만드는 프로젝트부터 이 내용을 기본으로 가져갑니다.">전체 손상마스터로 저장 (재사용)</button>
+      <button class="ghost" id="btnSaveDamageMasterOrg" onclick="saveDamageMasterOrg()" style="display:none;" title="같은 조직(팀) 소속이면 팀원 모두가 다음 조사부터 이 내용을 받습니다. 조직 관리자만 가능합니다.">🏢 조직(팀) 전체에 저장</button>
+      <button class="primary" onclick="saveDamageMasterGlobal()" title="이 기기에서만 여러 프로젝트가 공유하는 손상마스터에 저장합니다. 다른 사람의 기기나 다른 팀원에게는 전달되지 않습니다.">이 기기에 저장 (재사용)</button>
     </div>
   </div>
 </div>
@@ -2405,11 +2406,84 @@
     await storageSet(GLOBAL_DAMAGE_MASTER_VERSION_KEY, globalDamageMasterVersion);
   }
 
+  // ================================================================
+  // 조직(팀) 공유 손상마스터 — Supabase ps_damage_master 테이블과 연동.
+  // 조직이 있는 프로젝트에서만 쓰이며, 위 globalDamageMaster(기기 전용)보다
+  // 우선순위가 높다 — "관리자가 사무실에서 바꾸면 팀원 기기에도 반영"이 목적.
+  // 오프라인이거나 조직이 없으면 자동으로 이 계층이 빠지고 예전처럼 동작한다.
+  // ================================================================
+  let orgDamageMasterCache = {}; // orgDamageMasterCache[orgId][type][form] = { data:[...], version:N }
+  const ORG_DAMAGE_MASTER_CACHE_KEY = 'point-shot-org-damage-master-cache';
+  async function loadOrgDamageMasterCache(){
+    try{ orgDamageMasterCache = (await storageGet(ORG_DAMAGE_MASTER_CACHE_KEY)) || {}; }
+    catch(e){ orgDamageMasterCache = {}; }
+  }
+  async function saveOrgDamageMasterCache(){
+    await storageSet(ORG_DAMAGE_MASTER_CACHE_KEY, orgDamageMasterCache);
+  }
+
+  // 현재 열려있는 프로젝트가 속한 조직 ID (없으면 null = 개인 프로젝트, 이 기능 대상 아님)
+  function currentProjectOrgId(){
+    const proj = projects.find(p => p.id === currentProjectId);
+    return (proj && proj.organizationId) || null;
+  }
+
+  // 온라인+로그인 상태면 Supabase에서 최신을 받아 캐시에 반영한다. 실패해도 조용히
+  // 무시하고 기존 캐시(오프라인 마지막 버전)를 그대로 쓴다 — 현장조사를 절대 막지 않는다.
+  async function pullOrgDamageMaster(orgId, type, form){
+    if(!orgId || !type || !form) return null;
+    if(!supabaseClient || !supabaseSession || !navigator.onLine) return orgDamageMasterCache[orgId] && orgDamageMasterCache[orgId][type] && orgDamageMasterCache[orgId][type][form];
+    try{
+      const { data, error } = await supabaseClient.from('ps_damage_master')
+        .select('data, version')
+        .eq('organization_id', orgId).eq('facility_type', type).eq('facility_form', form)
+        .maybeSingle();
+      if(error) throw error;
+      if(data){
+        if(!orgDamageMasterCache[orgId]) orgDamageMasterCache[orgId] = {};
+        if(!orgDamageMasterCache[orgId][type]) orgDamageMasterCache[orgId][type] = {};
+        orgDamageMasterCache[orgId][type][form] = { data: data.data, version: data.version };
+        await saveOrgDamageMasterCache();
+      }
+      return orgDamageMasterCache[orgId] && orgDamageMasterCache[orgId][type] && orgDamageMasterCache[orgId][type][form];
+    }catch(e){
+      console.warn('조직 손상마스터 불러오기 실패(캐시로 계속 진행)', e);
+      return orgDamageMasterCache[orgId] && orgDamageMasterCache[orgId][type] && orgDamageMasterCache[orgId][type][form];
+    }
+  }
+
+  // 관리자가 "전체 손상마스터로 저장"할 때, 조직 프로젝트라면 Supabase에도 올린다.
+  // RLS가 조직 Admin만 허용하므로, Admin이 아니면 여기서 자연스럽게 실패한다(그래도
+  // 기기 저장은 이미 끝난 뒤이므로 데이터가 없어지진 않는다).
+  async function pushOrgDamageMaster(orgId, type, form, data){
+    if(!orgId) return { ok:false, reason:'조직이 없는 프로젝트입니다.' };
+    if(!supabaseClient || !supabaseSession) return { ok:false, reason:'로그인이 필요합니다.' };
+    if(!navigator.onLine) return { ok:false, reason:'오프라인 상태입니다. 온라인이 되면 다시 시도해주세요.' };
+    try{
+      const { data: row, error } = await supabaseClient.from('ps_damage_master')
+        .upsert({
+          organization_id: orgId, facility_type: type, facility_form: form,
+          data, updated_by: supabaseSession.user.id
+        }, { onConflict: 'organization_id,facility_type,facility_form' })
+        .select('data, version').single();
+      if(error) throw error;
+      if(!orgDamageMasterCache[orgId]) orgDamageMasterCache[orgId] = {};
+      if(!orgDamageMasterCache[orgId][type]) orgDamageMasterCache[orgId][type] = {};
+      orgDamageMasterCache[orgId][type][form] = { data: row.data, version: row.version };
+      await saveOrgDamageMasterCache();
+      return { ok:true, version: row.version };
+    }catch(e){
+      console.warn('조직 손상마스터 저장 실패', e);
+      return { ok:false, reason: (e && e.message) || '조직 관리자만 저장할 수 있습니다.' };
+    }
+  }
+
   // 시설물의 종류/형식이 정해질 때(신규 생성 또는 수정) 호출한다.
   // 이 프로젝트에 이미 프로젝트 전용 손상마스터가 있으면 절대 건드리지 않는다(기존 데이터 보호).
-  // 없을 때만, 그 시점의 공용 손상마스터를 이 프로젝트의 스냅샷으로 한 번 복사해 넣는다 —
-  // 이후 관리자가 공용 손상마스터를 바꿔도 이미 스냅샷을 받은 이 프로젝트는 바뀌지 않는다.
-  function applyDamageMasterSnapshotIfNeeded(site){
+  // 없을 때만, 그 시점의 손상마스터(조직 공유 우선, 없으면 기기 전용 공용)를 이 프로젝트의
+  // 스냅샷으로 한 번 복사해 넣는다 — 이후 관리자가 마스터를 바꿔도 이미 스냅샷을 받은
+  // 이 프로젝트는 바뀌지 않는다.
+  async function applyDamageMasterSnapshotIfNeeded(site){
     if(!site || !site.facilityType || !site.facilityForm) return;
     const type = site.facilityType.trim();
     const form = site.facilityForm.trim();
@@ -2418,15 +2492,30 @@
     if(!proj) return;
     if(!proj.damageMaster) proj.damageMaster = {};
     if(proj.damageMaster[type] && proj.damageMaster[type][form]) return; // 이미 있으면(과거 커스텀 포함) 유지
-    const g = globalDamageMaster[type] && globalDamageMaster[type][form];
-    if(!g || !g.length) return; // 공용 손상마스터가 아직 없으면 그대로 두고 STANDARD_DB로 폴백시킨다
+
+    let source = null; // { data, version, from:'org'|'local' }
+    const orgId = proj.organizationId || null;
+    if(orgId){
+      const orgEntry = await pullOrgDamageMaster(orgId, type, form);
+      if(orgEntry && orgEntry.data && orgEntry.data.length){
+        source = { data: orgEntry.data, version: orgEntry.version, from: '조직 공유' };
+      }
+    }
+    if(!source){
+      const g = globalDamageMaster[type] && globalDamageMaster[type][form];
+      if(g && g.length){
+        source = { data: g, version: (globalDamageMasterVersion[type] && globalDamageMasterVersion[type][form]) || 1, from: '이 기기' };
+      }
+    }
+    if(!source) return; // 어디에도 없으면 그대로 두고 STANDARD_DB로 폴백시킨다
+
     if(!proj.damageMaster[type]) proj.damageMaster[type] = {};
-    proj.damageMaster[type][form] = JSON.parse(JSON.stringify(g));
+    proj.damageMaster[type][form] = JSON.parse(JSON.stringify(source.data));
     if(!proj.damageMasterVersion) proj.damageMasterVersion = {};
     if(!proj.damageMasterVersion[type]) proj.damageMasterVersion[type] = {};
-    proj.damageMasterVersion[type][form] = (globalDamageMasterVersion[type] && globalDamageMasterVersion[type][form]) || 1;
+    proj.damageMasterVersion[type][form] = source.version;
     if(typeof logActivity === 'function'){
-      logActivity('손상마스터 스냅샷 적용', (proj.name||'프로젝트') + ' — ' + type + '/' + form + ' (공용 버전 ' + proj.damageMasterVersion[type][form] + ')');
+      logActivity('손상마스터 스냅샷 적용', (proj.name||'프로젝트') + ' — ' + type + '/' + form + ' (' + source.from + ' 버전 ' + source.version + ')');
     }
   }
 
@@ -3711,12 +3800,20 @@
       return proj.damageMaster[normType][normForm];
     }
 
-    // 2. 공용(전체) 손상마스터 — 여러 프로젝트가 재사용하는 라이브러리
+    // 2. 조직 공유 손상마스터 캐시(오프라인에서도 마지막으로 받아둔 값을 그대로 씀,
+    //    새 네트워크 요청은 여기서 하지 않는다 — 화면을 그릴 때마다 불릴 수 있어서다)
+    const orgId = proj && proj.organizationId;
+    if (orgId && orgDamageMasterCache[orgId] && orgDamageMasterCache[orgId][normType] && orgDamageMasterCache[orgId][normType][normForm]) {
+      const orgEntry = orgDamageMasterCache[orgId][normType][normForm];
+      if (orgEntry && orgEntry.data && orgEntry.data.length) return orgEntry.data;
+    }
+
+    // 3. 공용(전체, 기기 전용) 손상마스터 — 여러 프로젝트가 재사용하는 라이브러리
     if (globalDamageMaster[normType] && globalDamageMaster[normType][normForm] && globalDamageMaster[normType][normForm].length) {
       return globalDamageMaster[normType][normForm];
     }
 
-    // 3. 기본 STANDARD_DB 반환
+    // 4. 기본 STANDARD_DB 반환
     if (STANDARD_DB[normType] && STANDARD_DB[normType][normForm]) {
       return STANDARD_DB[normType][normForm];
     }
@@ -4293,7 +4390,7 @@
   fmCancel.addEventListener('click', ()=>{ facilityModal.style.display='none'; });
   facilityModal.addEventListener('click', (e)=>{ if(e.target===facilityModal) facilityModal.style.display='none'; });
 
-  fmCreate.addEventListener('click', ()=>{
+  fmCreate.addEventListener('click', async ()=>{
     if(!fmName.value.trim()){ alert('시설물명을 입력해주세요.'); return; }
     // 시설물 종류는 선택사항이다 — 현장에서는 비워두고 나중에 "정보 수정"에서 채울 수 있다
 
@@ -4312,7 +4409,7 @@
         site.address = fmAddress.value.trim();
         site.agency = fmAgency.value.trim();
         site.completionYear = fmYear.value.trim();
-        applyDamageMasterSnapshotIfNeeded(site);
+        await applyDamageMasterSnapshotIfNeeded(site);
         renderSiteList();
         refreshStageHeader();
         saveState();
@@ -4344,7 +4441,7 @@
       projectId: currentProjectId
     };
     sites.push(site);
-    applyDamageMasterSnapshotIfNeeded(site);
+    await applyDamageMasterSnapshotIfNeeded(site);
     facilityModal.style.display = 'none';
     loadSite(site);
     saveState();
@@ -9047,6 +9144,7 @@
   loadOtherCandidates();
   loadDamageUsage();
   loadGlobalDamageMaster();
+  loadOrgDamageMasterCache();
   loadWorkMode();
   loadSupabaseConfig();
   loadState();
@@ -9139,6 +9237,16 @@
     dmIsDirty = false;
     document.getElementById('dmUnsavedWarning').style.display = 'none';
     document.getElementById('dmSourceNote').style.display = 'none';
+
+    // 조직 프로젝트이고 내가 그 조직 Admin일 때만 "조직 전체에 저장" 버튼을 보여준다.
+    // (Admin이 아니어도 버튼을 눌러볼 순 있지만 Supabase RLS가 막아줘서 안전하다 —
+    // 여기서는 그냥 혼란을 줄이려고 미리 숨기는 것뿐이다.)
+    const proj = projects.find(p => p.id === currentProjectId);
+    const orgBtn = document.getElementById('btnSaveDamageMasterOrg');
+    if (orgBtn) {
+      const orgId = proj && proj.organizationId;
+      orgBtn.style.display = (orgId && myRoleByOrg[orgId] === 'Admin') ? 'inline-block' : 'none';
+    }
     
     dmTypeSel.innerHTML = '<option value="">선택하세요</option>';
     Object.keys(FACILITY_FORMS).forEach(type => {
@@ -9167,7 +9275,7 @@
     dmModal.style.display = 'none';
   }
   
-  function loadDmConfig() {
+  async function loadDmConfig() {
     const type = dmTypeSel.value;
     const form = dmFormSel.value;
     if (!type || !form) return;
@@ -9177,20 +9285,27 @@
     if (!proj.damageMaster[type]) proj.damageMaster[type] = {};
 
     const sourceNote = document.getElementById('dmSourceNote');
+    const orgId = proj.organizationId || null;
+    let orgEntry = orgId && orgDamageMasterCache[orgId] && orgDamageMasterCache[orgId][type] && orgDamageMasterCache[orgId][type][form];
+
     if (proj.damageMaster[type][form]) {
       dmCurrentData = JSON.parse(JSON.stringify(proj.damageMaster[type][form]));
       const v = proj.damageMasterVersion && proj.damageMasterVersion[type] && proj.damageMasterVersion[type][form];
-      sourceNote.textContent = '📌 이 프로젝트 전용 설정을 불러왔습니다' + (v ? ' (공용 버전 ' + v + '에서 스냅샷)' : '') + '. "전체 손상마스터로 저장"을 눌러도 다른 프로젝트는 바뀌지 않습니다.';
+      sourceNote.textContent = '📌 이 프로젝트 전용 설정을 불러왔습니다' + (v ? ' (버전 ' + v + '에서 스냅샷)' : '') + '. "전체 손상마스터로 저장"을 눌러도 다른 프로젝트는 바뀌지 않습니다.';
+      sourceNote.style.display = 'block';
+    } else if (orgEntry && orgEntry.data && orgEntry.data.length) {
+      dmCurrentData = JSON.parse(JSON.stringify(orgEntry.data));
+      sourceNote.textContent = '🏢 조직(팀) 공유 손상마스터를 불러왔습니다 (버전 ' + orgEntry.version + '). 팀 관리자만 여기서 저장할 수 있습니다.';
       sourceNote.style.display = 'block';
     } else if (globalDamageMaster[type] && globalDamageMaster[type][form] && globalDamageMaster[type][form].length) {
       dmCurrentData = JSON.parse(JSON.stringify(globalDamageMaster[type][form]));
       const v = globalDamageMasterVersion[type] && globalDamageMasterVersion[type][form];
-      sourceNote.textContent = '🌐 전체(공용) 손상마스터를 불러왔습니다' + (v ? ' (버전 ' + v + ')' : '') + '. 이 프로젝트만 다르게 쓰려면 "이 프로젝트에만 저장"을 누르세요.';
+      sourceNote.textContent = '🌐 이 기기의 공용 손상마스터를 불러왔습니다' + (v ? ' (버전 ' + v + ')' : '') + '. 이 프로젝트만 다르게 쓰려면 "이 프로젝트에만 저장"을 누르세요.';
       sourceNote.style.display = 'block';
     } else {
       const std = STANDARD_DB[type] && STANDARD_DB[type][form] ? STANDARD_DB[type][form] : [];
       dmCurrentData = JSON.parse(JSON.stringify(std));
-      sourceNote.textContent = '🛠️ 시스템 기본 기준DB를 불러왔습니다. 아직 공용 손상마스터가 없습니다.';
+      sourceNote.textContent = '🛠️ 시스템 기본 기준DB를 불러왔습니다. 아직 손상마스터가 없습니다.';
       sourceNote.style.display = 'block';
     }
     
@@ -9198,6 +9313,18 @@
     dmSwitchTab('parts');
     renderDmList();
     renderDmPartsList();
+
+    // 조직 프로젝트면 온라인일 때 최신 버전을 백그라운드로 다시 확인해서, 화면을
+    // 다시 열 필요 없이 새로 받아지면 안내문구만 갱신한다(이미 입력 중인 내용은 안 건드림).
+    if (orgId && !proj.damageMaster[type][form]) {
+      const fresh = await pullOrgDamageMaster(orgId, type, form);
+      if (fresh && fresh.data && fresh.data.length && (!orgEntry || fresh.version !== orgEntry.version) && dmTypeSel.value === type && dmFormSel.value === form && !dmIsDirty) {
+        dmCurrentData = JSON.parse(JSON.stringify(fresh.data));
+        sourceNote.textContent = '🏢 조직(팀) 공유 손상마스터를 불러왔습니다 (버전 ' + fresh.version + '). 팀 관리자만 여기서 저장할 수 있습니다.';
+        renderDmList();
+        renderDmPartsList();
+      }
+    }
   }
 
   // ---- 부위 관리 (명령문 25번) ----
@@ -9441,7 +9568,7 @@
     const form = dmFormSel.value;
     if (!type || !form) return;
 
-    if(!confirm('전체(공용) 손상마스터로 저장하면, 앞으로 새로 만드는 프로젝트/시설물부터 이 내용을 기본값으로 가져갑니다.\n이미 진행 중인 다른 프로젝트의 손상마스터는 바뀌지 않습니다.\n계속할까요?')) return;
+    if(!confirm('이 기기의 공용 손상마스터로 저장하면, 이 기기에서 앞으로 새로 만드는 프로젝트/시설물부터 이 내용을 기본값으로 가져갑니다.\n다른 사람의 기기나 팀원에게는 전달되지 않습니다(팀 전체 공유는 "🏢 조직 전체에 저장"을 사용하세요).\n계속할까요?')) return;
 
     if (!globalDamageMaster[type]) globalDamageMaster[type] = {};
     globalDamageMaster[type][form] = JSON.parse(JSON.stringify(dmCurrentData));
@@ -9450,11 +9577,36 @@
     globalDamageMasterVersion[type][form] = (globalDamageMasterVersion[type][form] || 0) + 1;
 
     await saveGlobalDamageMaster();
-    logActivity('손상마스터 저장(전체 공용)', type + ' / ' + form + ' — 버전 ' + globalDamageMasterVersion[type][form] + '로 저장');
+    logActivity('손상마스터 저장(이 기기 공용)', type + ' / ' + form + ' — 버전 ' + globalDamageMasterVersion[type][form] + '로 저장');
 
     dmIsDirty = false;
     document.getElementById('dmUnsavedWarning').style.display = 'none';
-    alert('전체 손상마스터에 버전 ' + globalDamageMasterVersion[type][form] + '(으)로 저장되었습니다.\n이미 진행 중인 다른 프로젝트는 그대로이며, 새로 만드는 프로젝트부터 적용됩니다.');
+    alert('이 기기의 공용 손상마스터에 버전 ' + globalDamageMasterVersion[type][form] + '(으)로 저장되었습니다.\n이미 진행 중인 다른 프로젝트는 그대로이며, 이 기기에서 새로 만드는 프로젝트부터 적용됩니다.');
+    loadDmConfig();
+  };
+
+  // ---- 조직(팀) 전체에 저장 — Supabase ps_damage_master, 조직 Admin만 가능 ----
+  window.saveDamageMasterOrg = async function() {
+    const type = dmTypeSel.value;
+    const form = dmFormSel.value;
+    if (!type || !form) return;
+
+    const proj = projects.find(p => p.id === currentProjectId);
+    const orgId = proj && proj.organizationId;
+    if(!orgId){ alert('이 프로젝트는 조직에 속해있지 않습니다.'); return; }
+
+    if(!confirm('조직(팀) 전체 손상마스터로 저장하면, 같은 조직의 팀원들이 다음에 새 시설물을 만들 때부터 이 내용을 자동으로 받습니다.\n이미 진행 중인 다른 프로젝트는 바뀌지 않습니다.\n계속할까요?')) return;
+
+    const result = await pushOrgDamageMaster(orgId, type, form, JSON.parse(JSON.stringify(dmCurrentData)));
+    if(!result.ok){
+      alert('조직 전체 저장 실패: ' + result.reason + '\n(이 기기에는 별도로 "이 기기에 저장"을 눌러 보관할 수 있습니다.)');
+      return;
+    }
+    logActivity('손상마스터 저장(조직 공유)', type + ' / ' + form + ' — 버전 ' + result.version + '로 저장');
+
+    dmIsDirty = false;
+    document.getElementById('dmUnsavedWarning').style.display = 'none';
+    alert('조직 전체 손상마스터에 버전 ' + result.version + '(으)로 저장되었습니다.\n같은 조직 팀원의 다음 신규 시설물부터 이 내용이 적용됩니다.');
     loadDmConfig();
   };
 
