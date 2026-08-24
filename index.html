@@ -1270,6 +1270,7 @@
     </div>
     <div class="modal-foot">
       <button class="ghost" id="btnRestartCamera" style="display:none;">🔄 카메라 다시 시작</button>
+      <button class="primary" id="btnNativeCamera" style="display:none;">📷 카메라 앱으로 촬영</button>
       <button class="ghost" id="btnFileFallback">사진첩에서 선택</button>
       <button class="primary" id="btnShoot">촬영</button>
       <button class="primary" id="btnDoneCapture" style="background:#2E7D4F; border-color:#2E7D4F;">촬영 완료</button>
@@ -1337,6 +1338,7 @@
 </div>
 
 <input type="file" id="fallbackFileInput" accept="image/*" multiple>
+<input type="file" id="nativeCameraInput" accept="image/*" capture="environment">
 
 <!-- Facility Create Modal -->
 <div class="modal-backdrop" id="facilityModal" style="display:none;">
@@ -2013,6 +2015,8 @@
   const btnDoneCapture = document.getElementById('btnDoneCapture');
   const btnFileFallback = document.getElementById('btnFileFallback');
   const btnRestartCamera = document.getElementById('btnRestartCamera');
+  const btnNativeCamera = document.getElementById('btnNativeCamera');
+  const nativeCameraInput = document.getElementById('nativeCameraInput');
 
   const previewModal = document.getElementById('previewModal');
   const previewTitle = document.getElementById('previewTitle');
@@ -7496,13 +7500,38 @@
     const m = markers.find(x=>x.id===markerId);
     captureTitle.textContent = '지점 ' + m.num + ' · 사진 촬영';
     captureModal.style.display = 'flex';
-    captureHint.textContent = '카메라 권한을 확인 중입니다…';
-    video.style.display = 'block';
-    btnShoot.disabled = true;
     btnRestartCamera.style.display = 'none';
+    btnNativeCamera.style.display = 'none';
     cameraAutoRetryCount = 0;
     renderCaptureStrip(markerId);
     updateRotateHint();
+
+    if(isStandaloneApp()){
+      // 홈화면에 추가한 iOS PWA(standalone)에서는 getUserMedia 실시간 미리보기가
+      // WebKit 자체의 오래된 미해결 버그로 인해 기기/iOS버전에 따라 불규칙하게 멈추거나
+      // 작동하지 않는다(애플 개발자 포럼/WebKit Bugzilla에 수년째 보고된 문제, 앱 코드로
+      // 완전히 고칠 수 없음). Safari에서는 이미 정상 동작이 확인됐으므로, 홈화면 앱에서는
+      // 처음부터 확실히 동작하는 iOS 기본 카메라 앱으로 바로 넘겨준다.
+      video.style.display = 'none';
+      btnShoot.disabled = true;
+      btnNativeCamera.style.display = 'inline-block';
+      captureHint.innerHTML = '홈화면 앱에서는 iOS 카메라 앱을 직접 불러옵니다. 아래 "카메라 앱으로 촬영"을 눌러주세요.<br><a href="#" id="btnTryLiveCameraAnyway" style="color:var(--muted); text-decoration:underline;">그래도 실시간 카메라 미리보기 사용해보기</a>';
+      const tryLiveLink = document.getElementById('btnTryLiveCameraAnyway');
+      if(tryLiveLink){
+        tryLiveLink.addEventListener('click', (e)=>{
+          e.preventDefault();
+          btnNativeCamera.style.display = 'none';
+          video.style.display = 'block';
+          captureHint.textContent = '카메라 권한을 확인 중입니다…';
+          runCameraStartSequence();
+        });
+      }
+      return;
+    }
+
+    video.style.display = 'block';
+    btnShoot.disabled = true;
+    captureHint.textContent = '카메라 권한을 확인 중입니다…';
     await runCameraStartSequence();
   }
 
@@ -7567,6 +7596,7 @@
     stopStream();
     captureModal.style.display = 'none';
     btnRestartCamera.style.display = 'none';
+    btnNativeCamera.style.display = 'none';
     activeMarkerId = null;
     updateRotateHint();
   }
@@ -7594,8 +7624,7 @@
     fallbackFileInput.click();
   });
 
-  fallbackFileInput.addEventListener('change', async (e)=>{
-    const files = Array.from(e.target.files || []);
+  async function handleCapturedFiles(files){
     if(files.length === 0 || !activeMarkerId) return;
     for(const file of files){
       let exif = null;
@@ -7606,7 +7635,20 @@
     renderCaptureStrip(activeMarkerId);
     const m = markers.find(x=>x.id===activeMarkerId);
     captureHint.textContent = m.photos.length + '장 촬영됨. 계속 촬영하거나 ✕로 닫으세요.';
+  }
+
+  fallbackFileInput.addEventListener('change', async (e)=>{
+    await handleCapturedFiles(Array.from(e.target.files || []));
     fallbackFileInput.value = '';
+  });
+
+  btnNativeCamera.addEventListener('click', ()=>{
+    nativeCameraInput.click();
+  });
+
+  nativeCameraInput.addEventListener('change', async (e)=>{
+    await handleCapturedFiles(Array.from(e.target.files || []));
+    nativeCameraInput.value = '';
   });
 
   // ---------- 사진 품질 자동 점검 + 중복검사용 해시 ----------
