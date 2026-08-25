@@ -263,6 +263,19 @@
     font-weight:700;
     box-shadow: 0 3px 10px rgba(0,0,0,0.35);
   }
+  .btn-recenter{
+    position:absolute;
+    right: 12px; bottom: 46px;
+    z-index: 900;
+    width: 40px; height: 40px;
+    display:flex; align-items:center; justify-content:center;
+    background: var(--panel);
+    color: #3B9EFF;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    font-size: 18px;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.35);
+  }
   .move-banner{
     position:absolute;
     top: 44px; left:50%;
@@ -1225,6 +1238,7 @@
       <div id="mapView"></div>
       <div class="map-hint" id="mapHint">지도를 눌러 조사 지점을 표시하세요</div>
       <button class="gps-quickadd" id="btnAddAtGps" title="지도가 안 보여도 GPS로 바로 지점을 추가합니다">📍 현재 위치에 지점 추가</button>
+      <button class="btn-recenter" id="btnRecenterMap" title="내 위치로 지도 이동">🎯</button>
     </div>
     <div class="move-banner" id="moveBanner" style="display:none;">
       <span id="moveBannerText">이동할 새 위치를 눌러주세요</span>
@@ -2041,6 +2055,7 @@
   const tabImageMode = document.getElementById('tabImageMode');
   const tabMapMode = document.getElementById('tabMapMode');
   const btnAddAtGps = document.getElementById('btnAddAtGps');
+  const btnRecenterMap = document.getElementById('btnRecenterMap');
   const mapStage = document.getElementById('mapStage');
   const mapView = document.getElementById('mapView');
   const mapHint = document.getElementById('mapHint');
@@ -7155,6 +7170,12 @@
     commitNewMarker(marker);
   });
 
+  btnRecenterMap.addEventListener('click', ()=>{
+    if(!lastGps){ alert('아직 GPS 위치를 확인하지 못했습니다. 잠시 후 다시 시도해주세요.'); return; }
+    initMapIfNeeded();
+    if(leafletMap) leafletMap.setView([lastGps.lat, lastGps.lng], 18);
+  });
+
   // ---------- log list ----------
   function markerMatchesFilter(m){
     const photos = m.photos || [];
@@ -7481,8 +7502,16 @@
       if(err && err.name === 'StaleAttemptError') return; // 무효화된 시도 — 화면에 표시할 필요 없음
       video.style.display = 'none';
       btnShoot.disabled = true;
-      btnRestartCamera.style.display = 'inline-block';
-      captureHint.textContent = cameraErrorMessage(err);
+      if(isStandaloneApp()){
+        // 홈화면 앱에서 "그래도 실시간 카메라 시도"가 실패한 경우 — WebRTC를 계속 재시도해봐야
+        // 소용없을 가능성이 높으므로(WebKit 버그), 확실히 되는 iOS 카메라 앱으로 다시 안내한다.
+        btnShoot.style.display = 'none';
+        btnNativeCamera.style.display = 'inline-block';
+        captureHint.textContent = '실시간 카메라를 사용할 수 없습니다. 아래 "카메라 앱으로 촬영"을 이용해주세요.';
+      } else {
+        btnRestartCamera.style.display = 'inline-block';
+        captureHint.textContent = cameraErrorMessage(err);
+      }
     }
   }
 
@@ -7514,6 +7543,7 @@
       // 처음부터 확실히 동작하는 iOS 기본 카메라 앱으로 바로 넘겨준다.
       video.style.display = 'none';
       btnShoot.disabled = true;
+      btnShoot.style.display = 'none'; // 실시간미리보기를 시도조차 안 하므로, 작동안하는 회색버튼으로 남겨두지 않고 아예 숨김
       btnNativeCamera.style.display = 'inline-block';
       captureHint.innerHTML = 'iOS 카메라 앱을 불러오는 중입니다…<br><a href="#" id="btnTryLiveCameraAnyway" style="color:var(--muted); text-decoration:underline;">그래도 실시간 카메라 미리보기 사용해보기</a>';
       wireTryLiveCameraLink();
@@ -7527,6 +7557,7 @@
     }
 
     video.style.display = 'block';
+    btnShoot.style.display = ''; // Safari 등 일반 브라우저에서는 실시간 촬영 버튼을 정상 노출
     btnShoot.disabled = true;
     captureHint.textContent = '카메라 권한을 확인 중입니다…';
     await runCameraStartSequence();
@@ -7634,6 +7665,7 @@
       tryLiveLink.addEventListener('click', (e)=>{
         e.preventDefault();
         btnNativeCamera.style.display = 'none';
+        btnShoot.style.display = ''; // 실시간 미리보기를 실제로 시도하는 순간에만 다시 노출
         video.style.display = 'block';
         captureHint.textContent = '카메라 권한을 확인 중입니다…';
         runCameraStartSequence();
