@@ -481,6 +481,22 @@
     flex-direction:column;
     gap: 14px;
   }
+  @media (min-width: 880px){
+    /* 이 폭부터 .layout이 이미 2열 그리드가 되므로, 오른쪽 "기록 목록"(Inspector 역할)도
+       왼쪽 도면 패널(.stage-wrap)과 같은 무게감의 카드로 감싸 하나의 완결된 워크스페이스
+       패널처럼 보이게 한다. 안의 .log는 이미 자체 카드 스타일이 있어 겹치지 않게 지운다. */
+    .side{
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      padding: 16px;
+    }
+    .side .log{
+      border: none;
+      background: transparent;
+      padding: 0;
+    }
+  }
   .side-head{
     font-family:'JetBrains Mono', monospace;
     font-size: 11px;
@@ -2952,6 +2968,21 @@
   }
   window.addEventListener('resize', updatePcExplorerDocking);
 
+  // 안전장치: 앞으로 다른 버튼이 새로 추가되면서 siteModal을 숨기고 다시 켜주는 걸
+  // 또 깜빡할 수 있다(실제로 두 번 있었다 — "+시설물"과 "열기" 버튼). 매번 호출부를
+  // 일일이 챙기는 대신, siteModal의 style이 어떤 이유로든 바뀔 때마다 감시해서
+  // 도킹 조건이면 무조건 다시 열어준다. 기존 setupModalScrollLock과 같은 방식.
+  (function setupPcExplorerAutoRestore(){
+    if(!siteModal) return;
+    const observer = new MutationObserver(()=>{
+      const shouldDock = (appWorkMode === 'office') && window.innerWidth >= 1000;
+      if(shouldDock && siteModal.style.display !== 'flex'){
+        siteModal.style.display = 'flex';
+      }
+    });
+    observer.observe(siteModal, { attributes:true, attributeFilter:['style'] });
+  })();
+
   // 더보기 메뉴를 열 때마다, 지금 모드에 맞는 기본 펼침 상태로 맞춘다.
   // 현장모드: "관리·문서"는 접어서 화면을 단순하게 유지(현장에서 자주 쓰는 6개만 바로 보임).
   // 사무실모드: 관리 작업이 중심이므로 처음부터 펼쳐서 보여준다.
@@ -4695,6 +4726,7 @@
         loadSite(site);
         saveState();
         siteModal.style.display = 'none';
+        updatePcExplorerDocking();
       });
 
       const renameBtn = document.createElement('button');
@@ -4884,6 +4916,7 @@
         switchToProject(project.id);
         renderProjectList();
         projectModal.style.display = 'none';
+        if(document.body.classList.contains('pc-explorer-docked')) renderSiteList();
       });
 
       const renameBtn = document.createElement('button');
