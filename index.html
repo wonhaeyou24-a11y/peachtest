@@ -4527,9 +4527,9 @@
     siteModal.style.display = 'none';
     openFacilityModalForCreate();
   });
-  closeFacilityModal.addEventListener('click', ()=>{ facilityModal.style.display='none'; });
-  fmCancel.addEventListener('click', ()=>{ facilityModal.style.display='none'; });
-  facilityModal.addEventListener('click', (e)=>{ if(e.target===facilityModal) facilityModal.style.display='none'; });
+  closeFacilityModal.addEventListener('click', ()=>{ facilityModal.style.display='none'; updatePcExplorerDocking(); });
+  fmCancel.addEventListener('click', ()=>{ facilityModal.style.display='none'; updatePcExplorerDocking(); });
+  facilityModal.addEventListener('click', (e)=>{ if(e.target===facilityModal){ facilityModal.style.display='none'; updatePcExplorerDocking(); } });
 
   fmCreate.addEventListener('click', async ()=>{
     if(!fmName.value.trim()){ alert('시설물명을 입력해주세요.'); return; }
@@ -4557,6 +4557,7 @@
       }
       editingSiteId = null;
       facilityModal.style.display = 'none';
+      updatePcExplorerDocking();
       return;
     }
 
@@ -4584,6 +4585,7 @@
     sites.push(site);
     await applyDamageMasterSnapshotIfNeeded(site);
     facilityModal.style.display = 'none';
+    updatePcExplorerDocking();
     loadSite(site);
     saveState();
     fileInput.click();
@@ -4645,6 +4647,7 @@
     refreshStageHeader();
     saveState();
     fileInput.value = '';
+    updatePcExplorerDocking();
   });
 
   // ---------- 시설물 목록 모달 ----------
@@ -4711,6 +4714,8 @@
       editInfoBtn.addEventListener('click', ()=>{
         openFacilityModalForEdit(site);
         siteModal.style.display = 'none';
+        // facilityModal이 닫힐 때(취소/배경클릭/저장) updatePcExplorerDocking()이 다시
+        // 호출되므로, PC 도킹 조건이면 siteModal이 자동으로 복원된다.
       });
 
       const moveBtn = document.createElement('button');
