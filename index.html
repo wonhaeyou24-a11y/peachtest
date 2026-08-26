@@ -782,6 +782,26 @@
     #captureModal video{ height: 56vh; }
   }
   #captureModal.modal-backdrop{ padding: 8px; }
+
+  /* ---------- PHASE12: PC 사무실 Workspace 1단계 — Project Explorer 도킹 ----------
+     PC 폭(1000px 이상) + 사무실모드일 때만, 기존 "시설물 목록" 모달을 화면을 덮는
+     팝업이 아니라 항상 열려있는 좌측 탐색기 패널로 고정한다. 모달 마크업과
+     renderSiteList() 등 내부 로직은 그대로 재사용 — 이 조건을 벗어나면(모바일이거나
+     현장모드) 원래의 "열었다 닫았다 하는 모달" 동작으로 완전히 복귀한다. */
+  body.pc-explorer-docked{ padding-left: 300px; }
+  body.pc-explorer-docked #siteModal{
+    position:fixed; left:0; top:0; bottom:0; width:300px;
+    background:transparent; padding:0; margin:0;
+    display:flex; align-items:stretch; justify-content:flex-start;
+    z-index:500;
+  }
+  body.pc-explorer-docked #siteModal .modal{
+    width:300px; max-width:300px; height:100vh; max-height:100vh;
+    border-radius:0; border-top:none; border-bottom:none; border-left:none;
+    box-shadow: 2px 0 8px rgba(17,17,17,0.06);
+  }
+  body.pc-explorer-docked #siteModal .close-x{ display:none; }
+
   .rotate-hint{
     background: rgba(242,169,59,0.15);
     border: 1px solid var(--amber);
@@ -1209,9 +1229,9 @@
     <button class="ghost" id="btnWorkMode" title="사무실/현장 모드 전환 (데이터는 똑같이 공유됩니다)">📍 현장 모드</button>
     <button class="ghost office-only" id="btnDashboardQuick" title="프로젝트 현황 대시보드" style="display:none;">📊 대시보드</button>
     <button class="ghost" id="btnProjectSwitch" title="프로젝트 전환 · 관리">📁 프로젝트</button>
-    <button class="primary office-only" id="btnNewSite" title="새 시설물 추가" style="display:none;">＋ 시설물</button>
+    <button class="primary" id="btnNewSite" title="새 시설물 추가">＋ 시설물</button>
     <button class="ghost" id="btnSiteList" title="저장된 시설물 목록 보기">시설물 목록</button>
-    <button class="ghost office-only" id="btnResetImage" title="현재 시설물의 이미지를 불러오거나 교체" style="display:none;">이미지</button>
+    <button class="ghost" id="btnResetImage" title="현재 시설물의 이미지를 불러오거나 교체">이미지</button>
   </div>
   <input type="file" id="fileInput" accept="image/*">
   <input type="file" id="workFileInput" accept="application/json,.json">
@@ -1420,7 +1440,10 @@
       <button class="close-x" id="closeSiteModal" aria-label="닫기">✕</button>
     </div>
     <div class="modal-body">
-      <input type="text" id="siteSearch" placeholder="시설물 이름 검색…" class="site-search-input">
+      <div style="display:flex; gap:8px; margin-bottom:10px;">
+        <input type="text" id="siteSearch" placeholder="시설물 이름 검색…" class="site-search-input" style="flex:1;">
+        <button class="primary" id="btnNewSiteInList" style="flex-shrink:0;">＋ 시설물</button>
+      </div>
       <div id="siteListBody"></div>
     </div>
   </div>
@@ -2907,7 +2930,27 @@
     document.querySelectorAll('.office-only').forEach(el=>{
       el.style.display = (appWorkMode === 'office') ? '' : 'none';
     });
+    updatePcExplorerDocking();
   }
+
+  // PHASE12 1단계: PC 폭(1000px 이상) + 사무실모드일 때만 "시설물 목록"을
+  // 항상 열려있는 좌측 탐색기로 고정한다. 그 외(모바일/태블릿/현장모드)에서는
+  // 기존처럼 눌러서 열고 닫는 모달 그대로 동작한다 — 조건 하나로 두 모드를 오간다.
+  function updatePcExplorerDocking(){
+    if(!siteModal) return;
+    const wasDocked = document.body.classList.contains('pc-explorer-docked');
+    const shouldDock = (appWorkMode === 'office') && window.innerWidth >= 1000;
+    document.body.classList.toggle('pc-explorer-docked', shouldDock);
+    if(shouldDock){
+      renderSiteList();
+      siteModal.style.display = 'flex';
+    } else if(wasDocked){
+      // 방금까지 도킹 상태였는데 조건이 풀렸다면(창을 좁히거나 현장모드로 전환) 닫아둔다.
+      // 필요하면 "시설물 목록" 버튼으로 다시 열 수 있다 — 기존 동작 그대로.
+      siteModal.style.display = 'none';
+    }
+  }
+  window.addEventListener('resize', updatePcExplorerDocking);
 
   // 더보기 메뉴를 열 때마다, 지금 모드에 맞는 기본 펼침 상태로 맞춘다.
   // 현장모드: "관리·문서"는 접어서 화면을 단순하게 유지(현장에서 자주 쓰는 6개만 바로 보임).
@@ -4479,6 +4522,11 @@
   }
 
   btnNewSite.addEventListener('click', openFacilityModalForCreate);
+  const btnNewSiteInList = document.getElementById('btnNewSiteInList');
+  if(btnNewSiteInList) btnNewSiteInList.addEventListener('click', ()=>{
+    siteModal.style.display = 'none';
+    openFacilityModalForCreate();
+  });
   closeFacilityModal.addEventListener('click', ()=>{ facilityModal.style.display='none'; });
   fmCancel.addEventListener('click', ()=>{ facilityModal.style.display='none'; });
   facilityModal.addEventListener('click', (e)=>{ if(e.target===facilityModal) facilityModal.style.display='none'; });
@@ -4740,7 +4788,7 @@
     siteModal.style.display = 'flex';
   });
   closeSiteModal.addEventListener('click', ()=>{ siteModal.style.display = 'none'; });
-  siteModal.addEventListener('click', (e)=>{ if(e.target === siteModal) siteModal.style.display = 'none'; });
+  siteModal.addEventListener('click', (e)=>{ if(e.target === siteModal && !document.body.classList.contains('pc-explorer-docked')) siteModal.style.display = 'none'; });
   siteSearch.addEventListener('input', renderSiteList);
 
   // ---------- 프로젝트 목록 모달 ----------
