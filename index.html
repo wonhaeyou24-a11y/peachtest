@@ -766,6 +766,14 @@
     flex-direction:column;
     overflow:hidden;
   }
+  /* v1.0 Workspace: previewModal의 .modal이 Inspector 칼럼 안으로 옮겨졌을 때는
+     전체화면 모달 전용 제약(최대너비/테두리)이 어색하므로 칼럼 폭에 맞게 푼다. */
+  #inspectorInlineSlot .modal{
+    max-width: none;
+    max-height: none;
+    border: none;
+    border-radius: 0;
+  }
   .modal-head{
     display:flex; justify-content:space-between; align-items:center;
     padding: 14px 18px;
@@ -1318,6 +1326,11 @@
     <div class="log" id="log">
       <div class="log-empty">아직 지정된 지점이 없습니다. 왼쪽 이미지를 클릭해 첫 지점을 추가해보세요.</div>
     </div>
+    <!-- v1.0 Workspace 명령문 섹션16·22: PC 도킹모드에서는 지점을 클릭했을 때
+         전체화면 모달 대신 이 슬롯 안에 기존 previewModal의 콘텐츠를 그대로 옮겨와
+         보여준다(Explorer/Main/Inspector 3열이 안 가려짐). 모바일/태블릿은 기존
+         모달 그대로 사용 — inspectorInlineSlot은 그때는 항상 비어있고 숨겨져 있다. -->
+    <div id="inspectorInlineSlot" style="display:none;"></div>
   </div>
 </div>
 
@@ -4687,17 +4700,52 @@
     const curProject = projects.find(p => p.id === currentProjectId);
     if(siteModalTitle) siteModalTitle.textContent = '시설물 목록 · ' + (curProject ? curProject.name : DEFAULT_PROJECT_NAME);
 
+    siteListBody.innerHTML = '';
+
+    // ---------- v3.0 섹션21~22: Project Explorer ----------
+    // PC 도킹모드(폭 1000px+사무실모드)일 때만, 맨 위에 "프로젝트" 노드를 추가한다.
+    // 지금까지는 이 패널이 그냥 "현재 프로젝트의 시설물 목록"이었을 뿐 프로젝트를
+    // 오가거나 조사지점까지 내려다볼 수 있는 탐색기가 아니었다 — 여기서 보완한다.
+    // 모바일/태블릿의 기존 팝업 동작(아래 시설물 카드들)은 전혀 건드리지 않는다.
+    const isDocked = document.body.classList.contains('pc-explorer-docked');
+    if(isDocked){
+      const projRow = document.createElement('div');
+      projRow.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 10px; margin-bottom:10px; background:var(--panel-2); border:1px solid var(--line); border-radius:6px;';
+      const projLabel = document.createElement('div');
+      projLabel.style.cssText = 'font-size:12px; color:var(--muted); font-family:JetBrains Mono, monospace;';
+      projLabel.textContent = '📁 프로젝트';
+      const projName = document.createElement('div');
+      projName.style.cssText = 'font-weight:700; font-size:14px;';
+      projName.textContent = curProject ? curProject.name : DEFAULT_PROJECT_NAME;
+      const projSwitchBtn = document.createElement('button');
+      projSwitchBtn.className = 'ghost';
+      projSwitchBtn.style.cssText = 'padding:4px 8px; font-size:11px;';
+      projSwitchBtn.textContent = '전환';
+      projSwitchBtn.addEventListener('click', ()=>{ renderProjectList(); projectModal.style.display = 'flex'; });
+      const projTop = document.createElement('div');
+      projTop.appendChild(projLabel);
+      projTop.appendChild(projName);
+      projRow.appendChild(projTop);
+      projRow.appendChild(projSwitchBtn);
+      siteListBody.appendChild(projRow);
+    }
+
     if(projectSites.length === 0){
-      siteListBody.innerHTML = '<div class="log-empty">이 프로젝트에 저장된 시설물이 없습니다. "＋ 시설물"로 시작하세요.</div>';
+      const empty = document.createElement('div');
+      empty.className = 'log-empty';
+      empty.textContent = '이 프로젝트에 저장된 시설물이 없습니다. "＋ 시설물"로 시작하세요.';
+      siteListBody.appendChild(empty);
       return;
     }
     const q = (siteSearch.value || '').trim().toLowerCase();
     const filtered = q ? projectSites.filter(s => s.name.toLowerCase().includes(q)) : projectSites;
     if(filtered.length === 0){
-      siteListBody.innerHTML = '<div class="log-empty">검색 결과가 없습니다.</div>';
+      const empty = document.createElement('div');
+      empty.className = 'log-empty';
+      empty.textContent = '검색 결과가 없습니다.';
+      siteListBody.appendChild(empty);
       return;
     }
-    siteListBody.innerHTML = '';
     filtered.slice().sort((a,b)=> new Date(b.savedAt||0) - new Date(a.savedAt||0)).forEach(site=>{
       const row = document.createElement('div');
       row.className = 'site-row' + (site.id === currentSiteId ? ' active' : '');
@@ -4816,6 +4864,44 @@
       row.appendChild(info);
       row.appendChild(actions);
       siteListBody.appendChild(row);
+
+      // ---------- v3.0 섹션22: 시설물 아래 조사지점(마커) 트리 ----------
+      // PC 도킹모드에서만 펼침/접기를 제공한다. 지점 데이터는 이 시설물이 지금
+      // 화면에 열려있는지 여부와 상관없이 site.markers에 항상 보존되어 있으므로
+      // 새 데이터 조회 없이 그대로 읽어서 보여준다.
+      if(isDocked){
+        const siteMarkers = (site.markers || []).slice().sort((a,b)=>a.num-b.num);
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'ghost';
+        toggleBtn.style.cssText = 'width:100%; text-align:left; font-size:11px; padding:4px 8px; margin:-6px 0 4px; color:var(--muted); background:transparent; border:none; box-shadow:none;';
+        toggleBtn.textContent = (siteMarkers.length ? '▶ 조사지점 ' + siteMarkers.length + '개 보기' : '조사지점 없음');
+        toggleBtn.disabled = siteMarkers.length === 0;
+        const tree = document.createElement('div');
+        tree.style.cssText = 'display:none; flex-direction:column; gap:2px; margin:0 0 8px 14px; padding-left:10px; border-left:2px solid var(--line);';
+        siteMarkers.forEach(m=>{
+          const leaf = document.createElement('button');
+          leaf.className = 'ghost';
+          leaf.style.cssText = 'text-align:left; font-size:12px; padding:4px 8px; box-shadow:none;';
+          const photoCount = (m.photos||[]).length;
+          leaf.textContent = '📍 지점 ' + m.num + (photoCount ? ' · 사진 ' + photoCount + '장' : ' · 미촬영');
+          leaf.addEventListener('click', async ()=>{
+            if(site.id !== currentSiteId){
+              commitLiveToCurrentSite();
+              await loadSite(site);
+              saveState();
+            }
+            openPreview(m.id);
+          });
+          tree.appendChild(leaf);
+        });
+        toggleBtn.addEventListener('click', ()=>{
+          const open = tree.style.display === 'flex';
+          tree.style.display = open ? 'none' : 'flex';
+          toggleBtn.textContent = (open ? '▶' : '▼') + ' 조사지점 ' + siteMarkers.length + '개 보기';
+        });
+        siteListBody.appendChild(toggleBtn);
+        siteListBody.appendChild(tree);
+      }
     });
   }
 
@@ -8032,8 +8118,35 @@
     saveState();
   }
 
+  // v1.0 Workspace 명령문 섹션16·22: PC/태블릿 사무실모드에서는 지점 상세보기를
+  // 전체화면 모달이 아니라 Inspector 칼럼 안에 그대로 옮겨서 보여준다. previewModal
+  // 안의 .modal 콘텐츠(제목/사진그리드/버튼 전부)는 손대지 않고 DOM 위치만 옮긴다 —
+  // 이벤트 리스너는 엘리먼트에 붙어있으므로 이동해도 그대로 작동한다.
+  const previewModalInner = previewModal.querySelector('.modal');
+  const inspectorInlineSlot = document.getElementById('inspectorInlineSlot');
+  function isPcInspectorInline(){
+    return appWorkMode === 'office' && window.innerWidth >= 880;
+  }
+  function dockPreviewInline(){
+    if(!inspectorInlineSlot || !previewModalInner) return;
+    inspectorInlineSlot.appendChild(previewModalInner);
+    inspectorInlineSlot.style.display = 'block';
+    if(log) log.style.display = 'none';
+    previewModal.style.display = 'none';
+  }
+  function undockPreviewInline(){
+    if(!inspectorInlineSlot || !previewModalInner) return;
+    if(inspectorInlineSlot.contains(previewModalInner)){
+      previewModal.appendChild(previewModalInner);
+    }
+    inspectorInlineSlot.style.display = 'none';
+    if(log) log.style.display = '';
+  }
+
   function renderPreviewGridIfOpen(markerId){
-    if(previewModal.style.display !== 'none' && activeMarkerId === markerId){
+    const isOpen = previewModal.style.display !== 'none' ||
+      (inspectorInlineSlot && inspectorInlineSlot.style.display !== 'none');
+    if(isOpen && activeMarkerId === markerId){
       renderPreviewGrid(markerId);
     }
   }
@@ -8042,7 +8155,12 @@
   function openPreview(markerId){
     activeMarkerId = markerId;
     renderPreviewGrid(markerId);
-    previewModal.style.display = 'flex';
+    if(isPcInspectorInline()){
+      dockPreviewInline();
+    } else {
+      undockPreviewInline(); // 혹시 이전에 인라인으로 옮겨져 있었다면 원위치
+      previewModal.style.display = 'flex';
+    }
   }
 
   function renderPreviewGrid(markerId){
@@ -8706,7 +8824,10 @@
     a.remove();
   }
 
-  closePreview.addEventListener('click', ()=>{ previewModal.style.display = 'none'; });
+  closePreview.addEventListener('click', ()=>{
+    if(inspectorInlineSlot && inspectorInlineSlot.style.display !== 'none'){ undockPreviewInline(); }
+    previewModal.style.display = 'none';
+  });
   previewModal.addEventListener('click', (e)=>{ if(e.target === previewModal) previewModal.style.display = 'none'; });
 
   btnAddMorePhotos.addEventListener('click', ()=>{
