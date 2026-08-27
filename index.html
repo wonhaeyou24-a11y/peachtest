@@ -158,6 +158,16 @@
   @media (max-width: 880px){
     .layout{ grid-template-columns: 1fr; }
   }
+  /* STEP16 Inspector 접기(섹션35): 완전히 숨기지 않고 토글버튼(▶)만 남는 좁은 바로
+     줄인다 — 이렇게 해야 접은 뒤에도 다시 펼 수 있는 진입점이 계속 보인다. */
+  .layout.inspector-collapsed{ grid-template-columns: 1fr 40px; }
+  .layout.inspector-collapsed .side{ padding: 16px 6px; overflow:hidden; }
+  .layout.inspector-collapsed .side-head > span:first-child,
+  .layout.inspector-collapsed #sideCount,
+  .layout.inspector-collapsed #btnToggleLogFilter,
+  .layout.inspector-collapsed .log-filter,
+  .layout.inspector-collapsed .log,
+  .layout.inspector-collapsed #inspectorInlineSlot{ display:none !important; }
 
   .stage-wrap{
     border: 1px solid var(--line);
@@ -1271,6 +1281,7 @@
     <button class="ghost" id="btnProjectSwitch" title="프로젝트 전환 · 관리">📁 프로젝트</button>
     <button class="primary" id="btnNewSite" title="새 시설물 추가">＋ 시설물</button>
     <button class="ghost" id="btnSiteList" title="저장된 시설물 목록 보기">시설물 목록</button>
+    <button class="ghost office-only" id="btnToggleExplorer" title="탐색기 접기/펼치기" style="display:none;">◀ 탐색기</button>
     <button class="ghost" id="btnResetImage" title="현재 시설물의 이미지를 불러오거나 교체">이미지</button>
   </div>
   <input type="file" id="fileInput" accept="image/*">
@@ -1288,7 +1299,7 @@
   <span class="sb-item" id="sbLib" style="display:none; color:var(--danger);" title="지도/ZIP/보고서 기능에 필요한 라이브러리를 아직 기기에 저장하지 못했습니다. 인터넷이 연결된 곳에서 앱을 한 번 실행하면 이후 오프라인에서도 계속 사용할 수 있습니다.">⚠ 지도·보고서 기능 준비 필요(온라인 1회 필요)</span>
 </div>
 
-<div class="layout">
+<div class="layout" id="mainLayout">
   <div class="stage-wrap">
     <div class="mode-tabs">
       <button class="mode-tab active" id="tabImageMode">도면 모드</button>
@@ -1327,6 +1338,7 @@
     <div class="side-head">
       <span style="display:flex; align-items:center; gap:6px;">기록 목록
         <button class="ghost icon-btn" id="btnToggleLogFilter" title="검색 · 중요도 필터" style="padding:2px 7px; font-size:12px;">🔍</button>
+        <button class="ghost icon-btn" id="btnToggleInspector" title="Inspector 접기/펼치기" style="padding:2px 7px; font-size:12px; display:none;">▶</button>
       </span>
       <span id="sideCount">0 / 0 촬영됨</span>
     </div>
@@ -1979,6 +1991,7 @@
   const btnResetImage = document.getElementById('btnResetImage');
   const btnNewSite = document.getElementById('btnNewSite');
   const btnSiteList = document.getElementById('btnSiteList');
+  const btnToggleExplorer = document.getElementById('btnToggleExplorer');
   const btnWorkMode = document.getElementById('btnWorkMode');
   const btnDashboardQuick = document.getElementById('btnDashboardQuick');
   const btnProjectSwitch = document.getElementById('btnProjectSwitch');
@@ -2976,15 +2989,21 @@
       el.style.display = (appWorkMode === 'office') ? '' : 'none';
     });
     updatePcExplorerDocking();
+    if(typeof updateInspectorCollapse === 'function') updateInspectorCollapse();
   }
 
-  // PHASE12 1단계: PC 폭(1000px 이상) + 사무실모드일 때만 "시설물 목록"을
-  // 항상 열려있는 좌측 탐색기로 고정한다. 그 외(모바일/태블릿/현장모드)에서는
-  // 기존처럼 눌러서 열고 닫는 모달 그대로 동작한다 — 조건 하나로 두 모드를 오간다.
+  // STEP15 태블릿 최적화: 기존 .layout 2열 그리드가 이미 880px부터 활성화되므로,
+  // Explorer 도킹도 같은 기준(880px)으로 맞춘다 — PC 전용(1000px)이 아니라
+  // 태블릿에서도 사무실모드 3열 구조를 쓸 수 있어야 한다는 명령문 요구사항 반영.
+  // isExplorerCollapsed(): 사용자가 접기 버튼으로 Explorer를 일부러 숨겼는지 여부.
+  function isExplorerCollapsed(){
+    return document.body.classList.contains('pc-explorer-collapsed');
+  }
   function updatePcExplorerDocking(){
     if(!siteModal) return;
     const wasDocked = document.body.classList.contains('pc-explorer-docked');
-    const shouldDock = (appWorkMode === 'office') && window.innerWidth >= 1000;
+    const canDock = (appWorkMode === 'office') && window.innerWidth >= 880;
+    const shouldDock = canDock && !isExplorerCollapsed();
     document.body.classList.toggle('pc-explorer-docked', shouldDock);
     if(shouldDock){
       renderSiteList();
@@ -2994,8 +3013,33 @@
       // 필요하면 "시설물 목록" 버튼으로 다시 열 수 있다 — 기존 동작 그대로.
       siteModal.style.display = 'none';
     }
+    // STEP16: 접기 토글버튼은 "지금 도킹할 수 있는 상태"(폭+모드 조건 충족)일 때만 보인다 —
+    // 접혀있어도 이 버튼은 계속 보여야 다시 펼 수 있으므로 shouldDock이 아니라 canDock 기준.
+    if(btnToggleExplorer){
+      btnToggleExplorer.style.display = canDock ? '' : 'none';
+      btnToggleExplorer.textContent = isExplorerCollapsed() ? '▶ 탐색기' : '◀ 탐색기';
+    }
   }
   window.addEventListener('resize', updatePcExplorerDocking);
+
+  // STEP16 Inspector 접기(섹션35). Explorer와 별개로 독립 토글 — 도면/지도를
+  // 크게 보고 싶을 때 오른쪽 기록목록 칼럼을 접어 Main에 공간을 더 준다.
+  const mainLayout = document.getElementById('mainLayout');
+  const btnToggleInspector = document.getElementById('btnToggleInspector');
+  function updateInspectorCollapse(){
+    if(!mainLayout || !btnToggleInspector) return;
+    const canShow = (appWorkMode === 'office') && window.innerWidth >= 880;
+    btnToggleInspector.style.display = canShow ? '' : 'none';
+    if(!canShow){ mainLayout.classList.remove('inspector-collapsed'); return; }
+    const collapsed = document.body.classList.contains('inspector-collapsed');
+    mainLayout.classList.toggle('inspector-collapsed', collapsed);
+    btnToggleInspector.textContent = collapsed ? '◀' : '▶';
+  }
+  if(btnToggleInspector) btnToggleInspector.addEventListener('click', ()=>{
+    document.body.classList.toggle('inspector-collapsed');
+    updateInspectorCollapse();
+  });
+  window.addEventListener('resize', updateInspectorCollapse);
 
   // 안전장치: 앞으로 다른 버튼이 새로 추가되면서 siteModal을 숨기고 다시 켜주는 걸
   // 또 깜빡할 수 있다(실제로 두 번 있었다 — "+시설물"과 "열기" 버튼). 매번 호출부를
@@ -3004,7 +3048,7 @@
   (function setupPcExplorerAutoRestore(){
     if(!siteModal) return;
     const observer = new MutationObserver(()=>{
-      const shouldDock = (appWorkMode === 'office') && window.innerWidth >= 1000;
+      const shouldDock = (appWorkMode === 'office') && window.innerWidth >= 880 && !isExplorerCollapsed();
       if(shouldDock && siteModal.style.display !== 'flex'){
         siteModal.style.display = 'flex';
       }
@@ -4711,6 +4755,11 @@
   });
 
   // ---------- 시설물 목록 모달 ----------
+  // Explorer 트리(시설물별 조사지점 목록)의 펼침/접기 상태. renderSiteList()가
+  // 선택 변경 등으로 자주 다시 호출되므로, 이 상태를 함수 밖에 둬서 매번 초기화되지
+  // 않게 한다 — 안 그러면 지점을 클릭할 때마다 방금 펼친 트리가 도로 닫혀버린다.
+  const expandedSiteIds = new Set();
+
   function renderSiteList(){
     const projectSites = sites.filter(s => s.projectId === currentProjectId);
     const curProject = projects.find(p => p.id === currentProjectId);
@@ -4887,17 +4936,24 @@
       // 새 데이터 조회 없이 그대로 읽어서 보여준다.
       if(isDocked){
         const siteMarkers = (site.markers || []).slice().sort((a,b)=>a.num-b.num);
+        const hasActiveHere = siteMarkers.some(m => m.id === activeMarkerId);
+        if(hasActiveHere) expandedSiteIds.add(site.id); // 선택된 지점이 있는 시설물은 항상 펼친 상태로 보여준다
+        const isExpanded = expandedSiteIds.has(site.id);
         const toggleBtn = document.createElement('button');
         toggleBtn.className = 'ghost';
         toggleBtn.style.cssText = 'width:100%; text-align:left; font-size:11px; padding:4px 8px; margin:-6px 0 4px; color:var(--muted); background:transparent; border:none; box-shadow:none;';
-        toggleBtn.textContent = (siteMarkers.length ? '▶ 조사지점 ' + siteMarkers.length + '개 보기' : '조사지점 없음');
+        toggleBtn.textContent = (siteMarkers.length ? (isExpanded ? '▼' : '▶') + ' 조사지점 ' + siteMarkers.length + '개 보기' : '조사지점 없음');
         toggleBtn.disabled = siteMarkers.length === 0;
         const tree = document.createElement('div');
-        tree.style.cssText = 'display:none; flex-direction:column; gap:2px; margin:0 0 8px 14px; padding-left:10px; border-left:2px solid var(--line);';
+        tree.style.cssText = 'display:' + (isExpanded ? 'flex' : 'none') + '; flex-direction:column; gap:2px; margin:0 0 8px 14px; padding-left:10px; border-left:2px solid var(--line);';
         siteMarkers.forEach(m=>{
           const leaf = document.createElement('button');
+          const isSelected = m.id === activeMarkerId;
           leaf.className = 'ghost';
-          leaf.style.cssText = 'text-align:left; font-size:12px; padding:4px 8px; box-shadow:none;';
+          // Workspace v1.0 섹션26: Main/Inspector에서 선택된 지점을 Explorer에서도 강조 —
+          // 3영역(Explorer/Main/Inspector) 중 마지막 남은 방향의 연동.
+          leaf.style.cssText = 'text-align:left; font-size:12px; padding:4px 8px; box-shadow:none;' +
+            (isSelected ? ' border-color:#2E6DA4; background:rgba(46,109,164,0.12); font-weight:700;' : '');
           const photoCount = (m.photos||[]).length;
           leaf.textContent = '📍 지점 ' + m.num + (photoCount ? ' · 사진 ' + photoCount + '장' : ' · 미촬영');
           leaf.addEventListener('click', async ()=>{
@@ -4913,6 +4969,7 @@
         toggleBtn.addEventListener('click', ()=>{
           const open = tree.style.display === 'flex';
           tree.style.display = open ? 'none' : 'flex';
+          if(open) expandedSiteIds.delete(site.id); else expandedSiteIds.add(site.id);
           toggleBtn.textContent = (open ? '▶' : '▼') + ' 조사지점 ' + siteMarkers.length + '개 보기';
         });
         siteListBody.appendChild(toggleBtn);
@@ -4925,6 +4982,10 @@
     siteSearch.value = '';
     renderSiteList();
     siteModal.style.display = 'flex';
+  });
+  if(btnToggleExplorer) btnToggleExplorer.addEventListener('click', ()=>{
+    document.body.classList.toggle('pc-explorer-collapsed');
+    updatePcExplorerDocking();
   });
   closeSiteModal.addEventListener('click', ()=>{ siteModal.style.display = 'none'; });
   siteModal.addEventListener('click', (e)=>{ if(e.target === siteModal && !document.body.classList.contains('pc-explorer-docked')) siteModal.style.display = 'none'; });
@@ -8176,6 +8237,9 @@
     // activeMarkerId를 이미 참조하도록 고쳐뒀으니, 다시 그리기만 하면 된다 —
     // xPct/yPct/lat/lng 등 실제 데이터는 전혀 건드리지 않는다.
     if(currentMode === 'image'){ renderMarkers(); } else { renderMapMarkers(); }
+    if(typeof updatePcExplorerDocking === 'function' && document.body.classList.contains('pc-explorer-docked')){
+      renderSiteList(); // Explorer 트리에서도 지금 선택된 지점을 강조(펼침상태는 유지됨)
+    }
     if(isPcInspectorInline()){
       dockPreviewInline();
     } else {
