@@ -267,6 +267,54 @@
     color: var(--muted);
   }
 
+  /* ---------- MOBILE UI 명령문 섹션6: 뷰스위처 통합(모바일 전용) ----------
+     .mode-tabs와 #drawingTabs는 원래 DOM상 형제라, 여기서는 JS(switchMode/
+     renderDrawingTabs)를 전혀 안 건드리고 부모(.view-switcher)만 가로 flex로
+     만들어 하나의 스크롤 가능한 pill 줄처럼 보이게 한다. drawingTabs의
+     display:none/flex 제어는 그대로 존중된다(지도모드일 땐 자동으로 안 보임). */
+  @media (max-width: 880px){
+    .view-switcher{
+      display:flex;
+      align-items:center;
+      gap:6px;
+      overflow-x:auto;
+      -webkit-overflow-scrolling:touch;
+      padding: 8px 10px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+    }
+    .view-switcher .mode-tabs{
+      display:flex;
+      flex-shrink:0;
+      gap:6px;
+      border-bottom:none;
+    }
+    .view-switcher .mode-tab{
+      flex:none;
+      flex-shrink:0;
+      border-radius: 18px;
+      padding: 8px 16px;
+      border-bottom:none;
+      background: var(--panel-2);
+    }
+    .view-switcher .mode-tab.active{
+      background:#1C1C1E;
+      color:#fff;
+      border-bottom:none;
+    }
+    .view-switcher .drawing-tabs{
+      padding:0;
+      border-bottom:none;
+      background:transparent;
+      overflow-x:visible;
+    }
+    .view-switcher .drawing-tab.active{
+      background:#1C1C1E;
+      border-color:#1C1C1E;
+      color:#fff;
+    }
+  }
+
   .map-stage{
     position:relative;
     width:100%;
@@ -1526,11 +1574,13 @@
 
 <div class="layout" id="mainLayout">
   <div class="stage-wrap">
-    <div class="mode-tabs">
-      <button class="mode-tab active" id="tabImageMode">도면 모드</button>
-      <button class="mode-tab" id="tabMapMode">지도 모드</button>
+    <div class="view-switcher">
+      <div class="mode-tabs">
+        <button class="mode-tab active" id="tabImageMode">도면 모드</button>
+        <button class="mode-tab" id="tabMapMode">지도 모드</button>
+      </div>
+      <div class="drawing-tabs" id="drawingTabs" style="display:none;"></div>
     </div>
-    <div class="drawing-tabs" id="drawingTabs" style="display:none;"></div>
     <div class="stage-head">
       <span id="stageStatus">이미지 없음</span>
       <span id="stageCount">지점 0개</span>
