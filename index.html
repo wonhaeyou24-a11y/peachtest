@@ -156,7 +156,7 @@
     margin: 0 auto;
   }
   @media (max-width: 880px){
-    .layout{ grid-template-columns: 1fr; }
+    .layout{ grid-template-columns: 1fr; padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
   }
   /* STEP16 Inspector 접기(섹션35): 완전히 숨기지 않고 토글버튼(▶)만 남는 좁은 바로
      줄인다 — 이렇게 해야 접은 뒤에도 다시 펼 수 있는 진입점이 계속 보인다. */
@@ -852,6 +852,65 @@
   }
   body.pc-explorer-docked #siteModal .close-x{ display:none; }
 
+  /* ---------- MOBILE UI/UX 명령문: 하단 고정 액션바 ----------
+     880px 이하(모바일)에서만 나타난다. 도면모드에서는 [기록목록][필터][검색][정렬]
+     4개 아이콘버튼, 지도모드에서는 큰 주황색 [사진 촬영] 버튼 하나로 바뀐다.
+     기존 검색(logSearch)/필터(urgencyFilter)/GPS지점추가(btnAddAtGps) 로직을
+     그대로 재사용하고, 새 UI는 그 진입점만 하단에 다시 배치한 것이다. */
+  #mobileBottomBar{
+    display:none;
+    position: fixed;
+    left:0; right:0; bottom:0;
+    z-index: 400;
+    background: rgba(255,255,255,0.92);
+    backdrop-filter: blur(12px);
+    border-top: 1px solid var(--line);
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+  }
+  @media (max-width: 880px){
+    #mobileBottomBar{ display:block; }
+  }
+  #mobileBottomBar .drawing-actions{
+    display:grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+  }
+  #mobileBottomBar .drawing-actions button{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:2px;
+    padding: 7px 4px;
+    font-size: 11px;
+    font-weight:600;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    color: var(--text);
+  }
+  #mobileBottomBar .drawing-actions button.on{ color: var(--amber-text); }
+  #mobileBottomBar .drawing-actions button .ic{ font-size: 18px; }
+  #mobileBottomBar .map-action{
+    display:none;
+  }
+  #mobileBottomBar.map-mode .drawing-actions{ display:none; }
+  #mobileBottomBar.map-mode .map-action{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    width:100%;
+    padding: 14px;
+    border-radius: 16px;
+    background: #FF9500;
+    color:#fff;
+    font-size: 16px;
+    font-weight:800;
+    border:none;
+    box-shadow: 0 6px 16px rgba(255,149,0,0.35);
+  }
+  #mobileBottomBar.map-mode .map-action:active{ filter:brightness(0.95); }
+
   .rotate-hint{
     background: rgba(242,169,59,0.15);
     border: 1px solid var(--amber);
@@ -1297,6 +1356,16 @@
   <span class="sb-item" id="sbBattery" style="display:none;">🔋 --%</span>
   <span class="sb-item" id="sbToday">오늘 조사 0건</span>
   <span class="sb-item" id="sbLib" style="display:none; color:var(--danger);" title="지도/ZIP/보고서 기능에 필요한 라이브러리를 아직 기기에 저장하지 못했습니다. 인터넷이 연결된 곳에서 앱을 한 번 실행하면 이후 오프라인에서도 계속 사용할 수 있습니다.">⚠ 지도·보고서 기능 준비 필요(온라인 1회 필요)</span>
+</div>
+
+<div id="mobileBottomBar">
+  <div class="drawing-actions">
+    <button type="button" id="mbtnLog"><span class="ic">📋</span>기록목록</button>
+    <button type="button" id="mbtnFilter"><span class="ic">🔽</span>필터</button>
+    <button type="button" id="mbtnSearch"><span class="ic">🔍</span>검색</button>
+    <button type="button" id="mbtnSort"><span class="ic">↕️</span>정렬</button>
+  </div>
+  <button type="button" class="map-action" id="mbtnPhoto"><span>📷</span>사진 촬영</button>
 </div>
 
 <div class="layout" id="mainLayout">
@@ -1962,9 +2031,16 @@
   const logSearch = document.getElementById('logSearch');
   const urgencyFilter = document.getElementById('urgencyFilter');
   const btnToggleLogFilter = document.getElementById('btnToggleLogFilter');
+  const mobileBottomBar = document.getElementById('mobileBottomBar');
+  const mbtnLog = document.getElementById('mbtnLog');
+  const mbtnFilter = document.getElementById('mbtnFilter');
+  const mbtnSearch = document.getElementById('mbtnSearch');
+  const mbtnSort = document.getElementById('mbtnSort');
+  const mbtnPhoto = document.getElementById('mbtnPhoto');
   const logFilterWrap = document.getElementById('logFilterWrap');
   let logFilterText = '';
   let logFilterUrgency = '';
+  let logSortMode = 'num'; // 'num' | 'recent' — MOBILE UI 명령문 하단바 "정렬" 버튼용
 
   btnToggleLogFilter.addEventListener('click', ()=>{
     const nowHidden = logFilterWrap.style.display === 'none';
@@ -1984,6 +2060,34 @@
       renderLog();
     });
   });
+
+  // ---------- MOBILE UI 명령문: 하단 액션바 ----------
+  // 새 버튼을 만들되 동작은 전부 기존 함수/엘리먼트를 그대로 재사용한다.
+  if(mbtnLog) mbtnLog.addEventListener('click', ()=>{
+    log.scrollIntoView({ behavior:'smooth', block:'start' });
+  });
+  if(mbtnFilter) mbtnFilter.addEventListener('click', ()=>{
+    const nowHidden = logFilterWrap.style.display === 'none';
+    logFilterWrap.style.display = nowHidden ? 'flex' : 'none';
+    mbtnFilter.classList.toggle('on', nowHidden);
+    log.scrollIntoView({ behavior:'smooth', block:'start' });
+  });
+  if(mbtnSearch) mbtnSearch.addEventListener('click', ()=>{
+    logFilterWrap.style.display = 'flex';
+    mbtnFilter.classList.add('on');
+    log.scrollIntoView({ behavior:'smooth', block:'start' });
+    logSearch.focus();
+  });
+  if(mbtnSort) mbtnSort.addEventListener('click', ()=>{
+    logSortMode = (logSortMode === 'num') ? 'recent' : 'num';
+    mbtnSort.classList.toggle('on', logSortMode === 'recent');
+    mbtnSort.querySelector('.ic').textContent = logSortMode === 'recent' ? '🕐' : '↕️';
+    renderLog();
+  });
+  if(mbtnPhoto) mbtnPhoto.addEventListener('click', ()=>{
+    btnAddAtGps.click(); // 기존 "현재 위치에 지점 추가"(GPS확인→지점생성→자동 카메라오픈) 그대로 재사용
+  });
+
   const fileInput = document.getElementById('fileInput');
   const workFileInput = document.getElementById('workFileInput');
   const fallbackFileInput = document.getElementById('fallbackFileInput');
@@ -7450,6 +7554,7 @@
     // 실제 저장 시점(사진 추가/손상 입력 등)에 site.mode를 그대로 반영하므로 데이터가
     // 유실되지 않는다 — 대신 탭 누를 때마다 "저장 중"이 불필요하게 뜨는 것과 잦은
     // 저장으로 인한 부하(간헐적 저장실패 가능성 포함)를 줄인다.
+    if(mobileBottomBar) mobileBottomBar.classList.toggle('map-mode', mode === 'map');
   }
 
   // ================================================================
@@ -7592,7 +7697,11 @@
       return;
     }
     log.innerHTML = '';
-    filtered.slice().sort((a,b)=>a.num-b.num).forEach(m=>{
+    // MOBILE UI 명령문: 하단 액션바 "정렬" 버튼과 연동 — 번호순(기본) 또는 최신순
+    const sorted = filtered.slice().sort((a,b)=>
+      logSortMode === 'recent' ? (b.createdAt||'').localeCompare(a.createdAt||'') : a.num-b.num
+    );
+    sorted.forEach(m=>{
       const item = document.createElement('div');
       item.className = 'log-item';
       const photos = m.photos || [];
