@@ -588,6 +588,65 @@
     border-bottom: 1px solid var(--line);
   }
   .log-item:last-child{ border-bottom:none; }
+  /* MOBILE UI 명령문 섹션16·17: 기록목록 한 줄 압축(모바일 전용). 각 칸은
+     flex-shrink/grow와 min-width:0+ellipsis로 절대 2줄로 안 넘어가게 한다. */
+  .log-item-mobile{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    cursor:pointer;
+  }
+  .log-item-mobile:last-child{ border-bottom:none; }
+  .log-item-mobile:active{ background: var(--panel-2); }
+  .log-item-mobile .lim-num{
+    font-family:'JetBrains Mono', monospace;
+    font-weight:700;
+    font-size: 11px;
+    width: 20px; height:20px;
+    border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    background: var(--amber-dim);
+    color: var(--amber-text);
+    border: 1px solid var(--amber);
+    flex-shrink:0;
+  }
+  .log-item-mobile .lim-origin{
+    font-size: 11px;
+    font-weight:700;
+    padding: 2px 6px;
+    border-radius: 5px;
+    flex-shrink:0;
+  }
+  .log-item-mobile .lim-origin.new{ background: rgba(46,109,164,0.14); color:#2E6DA4; }
+  .log-item-mobile .lim-origin.existing{ background: rgba(192,57,43,0.12); color:#C0392B; }
+  .log-item-mobile .lim-origin.none{ background: var(--panel-2); color: var(--muted); }
+  .log-item-mobile .lim-comp{
+    font-size: 12px;
+    color: var(--muted);
+    flex-shrink:0;
+    max-width: 26vw;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .log-item-mobile .lim-type{
+    font-size: 13px;
+    font-weight:600;
+    flex: 1 1 auto;
+    min-width:0;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .log-item-mobile .lim-time{
+    font-size: 11px;
+    color: var(--muted);
+    font-family:'JetBrains Mono', monospace;
+    flex-shrink:0;
+  }
+  .log-item-mobile .lim-chev{
+    color: var(--muted);
+    flex-shrink:0;
+    font-size:16px;
+  }
   .log-toprow{
     display:flex;
     align-items:baseline;
@@ -910,6 +969,74 @@
     box-shadow: 0 6px 16px rgba(255,149,0,0.35);
   }
   #mobileBottomBar.map-mode .map-action:active{ filter:brightness(0.95); }
+
+  /* ---------- MOBILE UI 명령문 섹션3~5: 모바일 전용 상단 헤더 ---------- */
+  #mobileHeader{
+    display:none;
+    align-items:center;
+    gap:8px;
+    padding: 10px 12px calc(8px + env(safe-area-inset-top));
+    padding-top: max(10px, env(safe-area-inset-top));
+    background: rgba(255,255,255,0.92);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+    position: sticky;
+    top:0;
+    z-index: 350;
+  }
+  @media (max-width: 880px){
+    #mobileHeader{ display:flex; }
+    /* 모바일에서는 새 헤더가 이 역할을 대신하므로 기존 topbar/statusbar는 숨긴다.
+       DOM 자체는 그대로 남아있고 JS도 계속 값을 갱신한다 — #mobileHeader 쪽은
+       MutationObserver로 그 값을 그대로 미러링한다(아래 JS 참고). */
+    .topbar, .statusbar{ display:none; }
+  }
+  .mh-more, .mh-settings{
+    flex-shrink:0;
+    width:32px; height:32px;
+    border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    font-size:16px;
+    background: var(--panel-2);
+    border:1px solid var(--line);
+    box-shadow:none;
+    padding:0;
+  }
+  .mh-online{
+    flex-shrink:0;
+    font-size:11px;
+    font-weight:700;
+    color: #1F8A4C;
+    white-space:nowrap;
+  }
+  .mh-online.offline{ color:#B8860B; }
+  .mh-center{
+    flex:1 1 auto;
+    min-width:0;
+    text-align:center;
+  }
+  .mh-project{
+    font-size:13px;
+    font-weight:800;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .mh-facility{
+    font-size:11px;
+    color: var(--muted);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .mh-save{
+    flex-shrink:0;
+    font-size:11px;
+    font-weight:700;
+    color: var(--muted);
+    white-space:nowrap;
+    max-width: 22vw;
+    overflow:hidden; text-overflow:ellipsis;
+  }
+  .mh-save.saving{ color: var(--amber-text); }
+  .mh-save.saved{ color:#1F8A4C; }
+  .mh-save.failed{ color:#C0392B; }
 
   .rotate-hint{
     background: rgba(242,169,59,0.15);
@@ -1323,6 +1450,17 @@
 
 <body>
 
+<div id="mobileHeader">
+  <button type="button" class="mh-more" id="mhMore" title="더보기">⋯</button>
+  <span class="mh-online" id="mhOnline">● 온라인</span>
+  <div class="mh-center">
+    <div class="mh-project" id="mhProject">프로젝트 불러오는 중…</div>
+    <div class="mh-facility" id="mhFacility">시설물을 선택하세요</div>
+  </div>
+  <span class="mh-save" id="mhSave">● 저장됨</span>
+  <button type="button" class="mh-settings" id="mhSettings" title="설정">⚙</button>
+</div>
+
 <div class="topbar">
   <div class="brand">
     <div class="brand-title-group">
@@ -1651,6 +1789,14 @@
     </div>
     <div class="modal-body">
       <div class="more-menu">
+        <button class="more-item" id="mmProjectSwitch">
+          <span class="more-item-title">📁 프로젝트 전환</span>
+          <span class="more-item-desc">다른 프로젝트로 이동하거나 새 프로젝트를 만듭니다</span>
+        </button>
+        <button class="more-item" id="mmSiteList">
+          <span class="more-item-title">🏗️ 시설물 목록</span>
+          <span class="more-item-desc">현재 프로젝트의 시설물을 전환하거나 새로 추가합니다</span>
+        </button>
         <button class="more-item" id="btnCompleteFacility">
           <span class="more-item-title" id="btnCompleteFacilityTitle">시설물 조사완료</span>
           <span class="more-item-desc" id="btnCompleteFacilityDesc">누락 여부를 먼저 확인한 뒤 완료 처리합니다</span>
@@ -3144,6 +3290,7 @@
     updateInspectorCollapse();
   });
   window.addEventListener('resize', updateInspectorCollapse);
+  window.addEventListener('resize', ()=>{ if(typeof renderLog === 'function') renderLog(); });
 
   // 안전장치: 앞으로 다른 버튼이 새로 추가되면서 siteModal을 숨기고 다시 켜주는 걸
   // 또 깜빡할 수 있다(실제로 두 번 있었다 — "+시설물"과 "열기" 버튼). 매번 호출부를
@@ -4216,6 +4363,8 @@
       stageStatus.textContent = name + typeForm + ' · 클릭하여 지점 추가·확대해서 정밀 표시' + statusBadge;
     }
     if(typeof updateCompleteMenuLabel === 'function') updateCompleteMenuLabel();
+    const mhFacility = document.getElementById('mhFacility');
+    if(mhFacility) mhFacility.textContent = name || '시설물을 선택하세요';
   }
 
   function resetStageToEmpty(){
@@ -7702,6 +7851,63 @@
       logSortMode === 'recent' ? (b.createdAt||'').localeCompare(a.createdAt||'') : a.num-b.num
     );
     sorted.forEach(m=>{
+      if(window.innerWidth <= 880){
+        renderLogItemMobile(m);
+      } else {
+        renderLogItemDesktop(m);
+      }
+    });
+  }
+
+  // MOBILE UI 명령문 섹션16·17: 기록목록을 한 줄(번호·신규/기존·부위·손상명·시간·화살표)로
+  // 압축한다. "절대 2줄 구조로 만들지 않는다"는 요구사항에 맞춰 텍스트는 CSS로 각각
+  // ellipsis 처리한다. 손상 정보는 이 지점의 사진들 중 첫 손상을 대표로 사용 — 데이터
+  // 구조(marker.photos[].damages[])는 전혀 바꾸지 않고 읽기만 한다.
+  function renderLogItemMobile(m){
+    const photos = m.photos || [];
+    let rep = null;
+    for(const p of photos){ if(p.damages && p.damages.length){ rep = p.damages[0]; break; } }
+
+    const item = document.createElement('div');
+    item.className = 'log-item-mobile';
+    item.addEventListener('click', ()=> openPreview(m.id));
+
+    const numEl = document.createElement('span');
+    numEl.className = 'lim-num';
+    numEl.textContent = m.num;
+
+    const originEl = document.createElement('span');
+    const isNew = rep ? rep.damageOrigin === 'NEW' : null;
+    originEl.className = 'lim-origin' + (isNew === true ? ' new' : isNew === false ? ' existing' : ' none');
+    originEl.textContent = isNew === true ? '신규' : isNew === false ? '기존' : '—';
+
+    const compEl = document.createElement('span');
+    compEl.className = 'lim-comp';
+    compEl.textContent = (rep && rep.component) || '부위 미입력';
+
+    const typeEl = document.createElement('span');
+    typeEl.className = 'lim-type';
+    typeEl.textContent = (rep && rep.damageType) || (photos.length ? '손상 미입력' : '미촬영');
+
+    const timeEl = document.createElement('span');
+    timeEl.className = 'lim-time';
+    const t = m.createdAt ? new Date(m.createdAt) : null;
+    timeEl.textContent = t ? t.toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit'}) : '';
+
+    const chevEl = document.createElement('span');
+    chevEl.className = 'lim-chev';
+    chevEl.textContent = '›';
+
+    item.appendChild(numEl);
+    item.appendChild(originEl);
+    item.appendChild(compEl);
+    item.appendChild(typeEl);
+    item.appendChild(timeEl);
+    item.appendChild(chevEl);
+    log.appendChild(item);
+  }
+
+  function renderLogItemDesktop(m){
       const item = document.createElement('div');
       item.className = 'log-item';
       const photos = m.photos || [];
@@ -7820,7 +8026,6 @@
       item.appendChild(topRow);
       item.appendChild(midRow);
       log.appendChild(item);
-    });
   }
 
   // ---------- camera capture ----------
@@ -9977,6 +10182,54 @@
   loadDamageUsage();
   loadGlobalDamageMaster();
   loadOrgDamageMasterCache();
+  // ---------- MOBILE UI 명령문 섹션3~5: 모바일 헤더 연동 ----------
+  // 클릭은 전부 기존 버튼으로 위임한다(새 로직 없음).
+  (function setupMobileHeader(){
+    const mhMore = document.getElementById('mhMore');
+    const mhSettings = document.getElementById('mhSettings');
+    const mhOnline = document.getElementById('mhOnline');
+    const mhSave = document.getElementById('mhSave');
+    const mhProject = document.getElementById('mhProject');
+    const mhFacility = document.getElementById('mhFacility');
+    const mmProjectSwitch = document.getElementById('mmProjectSwitch');
+    const mmSiteList = document.getElementById('mmSiteList');
+    if(!mhMore) return;
+
+    mhMore.addEventListener('click', ()=> btnMore.click());
+    mhSettings.addEventListener('click', ()=> btnMore.click());
+    if(mmProjectSwitch) mmProjectSwitch.addEventListener('click', ()=>{
+      moreModal.style.display = 'none';
+      btnProjectSwitch.click();
+    });
+    if(mmSiteList) mmSiteList.addEventListener('click', ()=>{
+      moreModal.style.display = 'none';
+      btnSiteList.click();
+    });
+
+    // 기존 상태 표시 요소(sbNet/sbSave/projectLabel)는 그대로 두고 텍스트만 그대로
+    // 복사해서 보여준다 — 어디서 그 값을 바꾸든(코드 여러 곳에서 갱신됨) 자동 반영되도록
+    // MutationObserver를 쓴다. 새로 값을 계산하는 로직은 전혀 없다.
+    function mirrorText(src, dest, extra){
+      if(!src || !dest) return;
+      const sync = ()=>{
+        dest.textContent = src.textContent;
+        if(extra) extra(dest);
+      };
+      sync();
+      new MutationObserver(sync).observe(src, { characterData:true, childList:true, subtree:true });
+    }
+    mirrorText(sbNet, mhOnline, (el)=>{
+      el.classList.toggle('offline', !/온라인/.test(el.textContent));
+    });
+    mirrorText(sbSave, mhSave, (el)=>{
+      const t = el.textContent;
+      el.classList.toggle('saving', /저장 중|저장중/.test(t));
+      el.classList.toggle('saved', /저장됨|저장완료/.test(t));
+      el.classList.toggle('failed', /실패/.test(t));
+    });
+    mirrorText(projectLabel, mhProject);
+  })();
+
   loadWorkMode();
   loadSupabaseConfig();
   loadState();
