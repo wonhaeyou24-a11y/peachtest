@@ -156,7 +156,16 @@
     margin: 0 auto;
   }
   @media (max-width: 880px){
-    .layout{ grid-template-columns: 1fr; padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+    .layout{
+      grid-template-columns: 1fr;
+      padding-left:0; padding-right:0; gap:0;
+      padding-bottom: calc(76px + env(safe-area-inset-bottom));
+    }
+    /* mockup처럼 도면/지도 영역이 화면 폭 전체를 채운다 — 좌우 테두리·모서리 제거 */
+    .stage-wrap{ border-left:none; border-right:none; border-radius:0; }
+    .side{ padding-left:0; padding-right:0; }
+    .side-head, .log-filter{ padding-left:14px; padding-right:14px; }
+    .log{ border-left:none; border-right:none; border-radius: 16px 16px 0 0; }
   }
   /* STEP16 Inspector 접기(섹션35): 완전히 숨기지 않고 토글버튼(▶)만 남는 좁은 바로
      줄인다 — 이렇게 해야 접은 뒤에도 다시 펼 수 있는 진입점이 계속 보인다. */
@@ -974,9 +983,9 @@
   #mobileHeader{
     display:none;
     align-items:center;
-    gap:8px;
-    padding: 10px 12px calc(8px + env(safe-area-inset-top));
-    padding-top: max(10px, env(safe-area-inset-top));
+    gap:10px;
+    padding: 12px 14px calc(12px + env(safe-area-inset-top));
+    padding-top: max(12px, env(safe-area-inset-top));
     background: rgba(255,255,255,0.92);
     backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--line);
@@ -991,19 +1000,23 @@
        MutationObserver로 그 값을 그대로 미러링한다(아래 JS 참고). */
     .topbar, .statusbar{ display:none; }
   }
-  .mh-more, .mh-settings{
+  .mh-more{
     flex-shrink:0;
-    width:32px; height:32px;
+    width:34px; height:34px;
     border-radius:50%;
     display:flex; align-items:center; justify-content:center;
-    font-size:16px;
+    font-size:18px;
     background: var(--panel-2);
     border:1px solid var(--line);
     box-shadow:none;
     padding:0;
   }
-  .mh-online{
+  .mh-left-status, .mh-right-status{
     flex-shrink:0;
+    display:flex;
+    align-items:center;
+  }
+  .mh-online{
     font-size:11px;
     font-weight:700;
     color: #1F8A4C;
@@ -1016,23 +1029,25 @@
     text-align:center;
   }
   .mh-project{
-    font-size:13px;
+    font-size:15px;
     font-weight:800;
+    line-height:1.3;
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   }
   .mh-facility{
-    font-size:11px;
+    font-size:12px;
     color: var(--muted);
+    line-height:1.3;
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   }
   .mh-save{
-    flex-shrink:0;
     font-size:11px;
     font-weight:700;
     color: var(--muted);
     white-space:nowrap;
-    max-width: 22vw;
+    max-width: 24vw;
     overflow:hidden; text-overflow:ellipsis;
+    display:inline-block;
   }
   .mh-save.saving{ color: var(--amber-text); }
   .mh-save.saved{ color:#1F8A4C; }
@@ -1452,13 +1467,16 @@
 
 <div id="mobileHeader">
   <button type="button" class="mh-more" id="mhMore" title="더보기">⋯</button>
-  <span class="mh-online" id="mhOnline">● 온라인</span>
+  <div class="mh-left-status">
+    <span class="mh-online" id="mhOnline">● 온라인</span>
+  </div>
   <div class="mh-center">
     <div class="mh-project" id="mhProject">프로젝트 불러오는 중…</div>
     <div class="mh-facility" id="mhFacility">시설물을 선택하세요</div>
   </div>
-  <span class="mh-save" id="mhSave">● 저장됨</span>
-  <button type="button" class="mh-settings" id="mhSettings" title="설정">⚙</button>
+  <div class="mh-right-status">
+    <span class="mh-save" id="mhSave">● 저장됨</span>
+  </div>
 </div>
 
 <div class="topbar">
@@ -10186,7 +10204,6 @@
   // 클릭은 전부 기존 버튼으로 위임한다(새 로직 없음).
   (function setupMobileHeader(){
     const mhMore = document.getElementById('mhMore');
-    const mhSettings = document.getElementById('mhSettings');
     const mhOnline = document.getElementById('mhOnline');
     const mhSave = document.getElementById('mhSave');
     const mhProject = document.getElementById('mhProject');
@@ -10196,7 +10213,6 @@
     if(!mhMore) return;
 
     mhMore.addEventListener('click', ()=> btnMore.click());
-    mhSettings.addEventListener('click', ()=> btnMore.click());
     if(mmProjectSwitch) mmProjectSwitch.addEventListener('click', ()=>{
       moreModal.style.display = 'none';
       btnProjectSwitch.click();
