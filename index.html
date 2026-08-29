@@ -138,18 +138,6 @@
   }
   button.primary:hover{ filter: brightness(1.08); }
   button.primary:active{ box-shadow: 0 1px 4px rgba(242,169,59,0.3); }
-  /* MOBILE UI 명령문 섹션15: 모바일에서는 Primary Action에 iOS 계열 고채도
-     오렌지(#FF9500)를 쓴다 — 이미 하단바 "사진 촬영" 버튼에 적용한 색과 통일.
-     PC/태블릿은 기존 브랜드 앰버색을 그대로 유지한다(디자인 정체성 보존). */
-  @media (max-width: 880px){
-    button.primary{
-      background: #FF9500;
-      color:#fff;
-      border-color: #FF9500;
-      box-shadow: 0 3px 10px rgba(255,149,0,0.38);
-    }
-    button.primary:active{ box-shadow: 0 1px 4px rgba(255,149,0,0.3); }
-  }
   /* 텍스트 버튼: 그림자 최소화 */
   button.ghost{ background: transparent; box-shadow: none; }
   button.ghost:active{ box-shadow: none; }
@@ -1050,20 +1038,13 @@
   #mobileBottomBar .map-action{
     display:none;
   }
-  #mobileBottomBar .map-action-row{ display:none; }
   #mobileBottomBar.map-mode .drawing-actions{ display:none; }
-  #mobileBottomBar.map-mode .map-action-row{
-    display:flex;
-    align-items:stretch;
-    gap:8px;
-    width:100%;
-  }
   #mobileBottomBar.map-mode .map-action{
     display:flex;
-    flex:1 1 auto;
     align-items:center;
     justify-content:center;
     gap:10px;
+    width:100%;
     padding: 14px;
     border-radius: 16px;
     background: #FF9500;
@@ -1074,19 +1055,6 @@
     box-shadow: 0 6px 16px rgba(255,149,0,0.35);
   }
   #mobileBottomBar.map-mode .map-action:active{ filter:brightness(0.95); }
-  #mobileBottomBar.map-mode .map-action-secondary{
-    flex:0 0 52px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    font-size:20px;
-    border-radius: 16px;
-    background: var(--panel-2);
-    border: 1px solid var(--line);
-    color: var(--text);
-    box-shadow:none;
-  }
-  #mobileBottomBar.map-mode .map-action-secondary:active{ background: var(--line); }
 
   /* ---------- MOBILE UI 명령문 섹션3~5: 모바일 전용 상단 헤더 ---------- */
   #mobileHeader{
@@ -1634,10 +1602,7 @@
     <button type="button" id="mbtnSearch"><span class="ic">🔍</span>검색</button>
     <button type="button" id="mbtnSort"><span class="ic">↕️</span>정렬</button>
   </div>
-  <div class="map-action-row">
-    <button type="button" class="map-action" id="mbtnPhoto"><span>📷</span>사진 촬영</button>
-    <button type="button" class="map-action-secondary" id="mbtnPhotoThenPick" title="먼저 촬영하고, 정확한 위치는 지도에서 나중에 지정합니다">📍</button>
-  </div>
+  <button type="button" class="map-action" id="mbtnPhoto"><span>📷</span>사진 촬영</button>
 </div>
 
 <div class="layout" id="mainLayout">
@@ -2328,7 +2293,6 @@
   const mbtnSearch = document.getElementById('mbtnSearch');
   const mbtnSort = document.getElementById('mbtnSort');
   const mbtnPhoto = document.getElementById('mbtnPhoto');
-  const mbtnPhotoThenPick = document.getElementById('mbtnPhotoThenPick');
   const logFilterWrap = document.getElementById('logFilterWrap');
   let logFilterText = '';
   let logFilterUrgency = '';
@@ -2405,17 +2369,6 @@
   });
   if(mbtnPhoto) mbtnPhoto.addEventListener('click', ()=>{
     btnAddAtGps.click(); // 기존 "현재 위치에 지점 추가"(GPS확인→지점생성→자동 카메라오픈) 그대로 재사용
-  });
-  if(mbtnPhotoThenPick) mbtnPhotoThenPick.addEventListener('click', ()=>{
-    // 워크플로우B: 정확한 위치를 나중에 지도에서 고를 것이므로, 우선 임시 위치에
-    // 지점을 만들고 촬영부터 한다(GPS가 있으면 GPS, 없으면 현재 지도 중심 좌표).
-    initMapIfNeeded();
-    const center = (lastGps) ? { lat:lastGps.lat, lng:lastGps.lng }
-      : (leafletMap ? { lat: leafletMap.getCenter().lat, lng: leafletMap.getCenter().lng } : null);
-    if(!center){ alert('지도를 아직 불러오지 못했습니다. 잠시 후 다시 시도해주세요.'); return; }
-    const marker = newMarkerBase({ lat: center.lat, lng: center.lng }, lastGps ? 'device-gps' : 'manual');
-    pendingLocationPickMarkerId = marker.id;
-    commitNewMarker(marker); // 내부에서 openCapture()까지 자동 실행됨
   });
 
   const fileInput = document.getElementById('fileInput');
@@ -7605,10 +7558,6 @@
 
   // ---------- 지점 위치 이동 모드 ----------
   let movingMarkerId = null;
-  // MOBILE UI 명령문 섹션9 워크플로우B: "사진 촬영 → 지도에서 위치 선택"을 위한 상태.
-  // 이 마커ID로 촬영이 끝나면(closeCaptureModal 참고) 자동으로 위치보정(이동)모드에
-  // 들어간다 — 기존 startMoveMode()를 그대로 재사용하고 새 이동로직은 만들지 않는다.
-  let pendingLocationPickMarkerId = null;
 
   function startMoveMode(markerId){
     const m = markers.find(x => x.id === markerId);
@@ -8505,17 +8454,6 @@
     captureModal.style.display = 'none';
     btnRestartCamera.style.display = 'none';
     btnNativeCamera.style.display = 'none';
-    // MOBILE UI 명령문 워크플로우B: 방금 촬영한 지점이 "위치는 나중에 지도에서
-    // 정확히 지정하기로 한" 임시 지점이었다면, 촬영을 마친 지금 자동으로
-    // 위치보정(이동) 모드에 들어간다 — 기존 startMoveMode()를 그대로 쓴다.
-    if(pendingLocationPickMarkerId && pendingLocationPickMarkerId === activeMarkerId){
-      const mid = pendingLocationPickMarkerId;
-      pendingLocationPickMarkerId = null;
-      activeMarkerId = null;
-      updateRotateHint();
-      startMoveMode(mid);
-      return;
-    }
     activeMarkerId = null;
     updateRotateHint();
   }
