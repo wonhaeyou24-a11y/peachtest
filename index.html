@@ -169,8 +169,7 @@
   }
   @media (max-width: 880px){
     .layout{
-      display:block; /* grid+position:fixed 자식 조합의 iOS Safari 렌더링 버그
-        가능성을 원천 차단 — 모바일은 어차피 1열이라 grid가 필요 없다 */
+      grid-template-columns: 1fr;
       padding-left:0; padding-right:0; gap:0;
       padding-bottom: calc(76px + env(safe-area-inset-bottom));
     }
@@ -2359,13 +2358,6 @@
   function setBottomSheetExpanded(expand){
     if(!sideEl) return;
     sideEl.classList.toggle('sheet-expanded', expand);
-    // 버그수정: Bottom Sheet가 열리고 닫힐 때마다 지도가 실제로 보이는 화면 영역이
-    // 바뀌는데, Leaflet은 컨테이너 크기가 바뀌었다는 걸 스스로 알아채지 못해서
-    // 타일이 어긋나거나 겹쳐 보이는 문제가 있었다(사용자가 스크린샷으로 신고한
-    // "완전 꼬였어" 증상의 실제 원인). CSS 트랜지션(0.28s)이 끝난 뒤 재계산한다.
-    if(currentMode === 'map' && leafletMap){
-      setTimeout(()=>{ leafletMap.invalidateSize(); }, 320);
-    }
   }
   function toggleBottomSheet(){
     setBottomSheetExpanded(!(sideEl && sideEl.classList.contains('sheet-expanded')));
@@ -2383,10 +2375,6 @@
   function updateMobileBottombarHeight(){
     if(mobileBottomBar && window.innerWidth <= 880){
       document.documentElement.style.setProperty('--mobile-bottombar-h', mobileBottomBar.offsetHeight + 'px');
-    }
-    // 창 크기·화면 회전이 바뀔 때도 마찬가지로 지도 크기를 다시 알려준다.
-    if(currentMode === 'map' && leafletMap){
-      setTimeout(()=>{ leafletMap.invalidateSize(); }, 100);
     }
   }
   window.addEventListener('resize', updateMobileBottombarHeight);
