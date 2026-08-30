@@ -138,18 +138,6 @@
   }
   button.primary:hover{ filter: brightness(1.08); }
   button.primary:active{ box-shadow: 0 1px 4px rgba(242,169,59,0.3); }
-  /* MOBILE UI 명령문 섹션15: 모바일에서는 Primary Action에 iOS 계열 고채도
-     오렌지(#FF9500)를 쓴다 — 이미 하단바 "사진 촬영" 버튼에 적용한 색과 통일.
-     PC/태블릿은 기존 브랜드 앰버색을 그대로 유지한다(디자인 정체성 보존). */
-  @media (max-width: 880px){
-    button.primary{
-      background: #FF9500;
-      color:#fff;
-      border-color: #FF9500;
-      box-shadow: 0 3px 10px rgba(255,149,0,0.38);
-    }
-    button.primary:active{ box-shadow: 0 1px 4px rgba(255,149,0,0.3); }
-  }
   /* 텍스트 버튼: 그림자 최소화 */
   button.ghost{ background: transparent; box-shadow: none; }
   button.ghost:active{ box-shadow: none; }
@@ -174,39 +162,10 @@
       padding-bottom: calc(76px + env(safe-area-inset-bottom));
     }
     /* mockup처럼 도면/지도 영역이 화면 폭 전체를 채운다 — 좌우 테두리·모서리 제거 */
-    .stage-wrap{ border-left:none; border-right:none; border-radius:0; min-height: 52vh; }
-    /* ---------- MOBILE UI 명령문 섹션12: 기록목록 = 진짜 Bottom Sheet ----------
-       기본(축소) 상태에서는 도면/지도가 화면 대부분을 차지하고, 목록은 손잡이+
-       제목 줄만 화면 하단에 살짝 걸쳐 보인다. 손잡이나 "기록 목록" 제목을 탭하면
-       확장되어 목록을 크게 볼 수 있다. 드래그(스와이프)까지는 이번 범위에 넣지
-       않고 탭 토글로 구현했다 — 핵심 요구사항("작게 있다가 눌러서 확장")은 충족된다. */
-    .side{
-      position: fixed;
-      left:0; right:0;
-      bottom: var(--mobile-bottombar-h, 76px);
-      height: 40vh;
-      max-height: 40vh;
-      padding:0;
-      background: var(--panel);
-      border-radius: 18px 18px 0 0;
-      box-shadow: 0 -6px 20px rgba(17,17,17,0.12);
-      border-top: 1px solid var(--line);
-      z-index: 380;
-      transition: height .28s cubic-bezier(.2,.8,.2,1), max-height .28s cubic-bezier(.2,.8,.2,1);
-      overflow: hidden;
-    }
-    .side.sheet-expanded{ height: 84vh; max-height: 84vh; }
-    .side-drag-handle{
-      display:flex;
-      justify-content:center;
-      padding: 9px 0 2px;
-      flex-shrink:0;
-      cursor:pointer;
-    }
-    .side-drag-handle .bar{ width:38px; height:4px; border-radius:2px; background: var(--line); }
-    .side-head{ padding: 4px 14px 8px; flex-shrink:0; cursor:pointer; }
-    .log-filter{ padding: 0 14px; flex-shrink:0; }
-    .log{ flex:1 1 auto; max-height:none; margin: 0 14px 10px; }
+    .stage-wrap{ border-left:none; border-right:none; border-radius:0; }
+    .side{ padding-left:0; padding-right:0; }
+    .side-head, .log-filter{ padding-left:14px; padding-right:14px; }
+    .log{ border-left:none; border-right:none; border-radius: 16px 16px 0 0; }
   }
   /* STEP16 Inspector 접기(섹션35): 완전히 숨기지 않고 토글버튼(▶)만 남는 좁은 바로
      줄인다 — 이렇게 해야 접은 뒤에도 다시 펼 수 있는 진입점이 계속 보인다. */
@@ -1050,20 +1009,13 @@
   #mobileBottomBar .map-action{
     display:none;
   }
-  #mobileBottomBar .map-action-row{ display:none; }
   #mobileBottomBar.map-mode .drawing-actions{ display:none; }
-  #mobileBottomBar.map-mode .map-action-row{
-    display:flex;
-    align-items:stretch;
-    gap:8px;
-    width:100%;
-  }
   #mobileBottomBar.map-mode .map-action{
     display:flex;
-    flex:1 1 auto;
     align-items:center;
     justify-content:center;
     gap:10px;
+    width:100%;
     padding: 14px;
     border-radius: 16px;
     background: #FF9500;
@@ -1074,19 +1026,6 @@
     box-shadow: 0 6px 16px rgba(255,149,0,0.35);
   }
   #mobileBottomBar.map-mode .map-action:active{ filter:brightness(0.95); }
-  #mobileBottomBar.map-mode .map-action-secondary{
-    flex:0 0 52px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    font-size:20px;
-    border-radius: 16px;
-    background: var(--panel-2);
-    border: 1px solid var(--line);
-    color: var(--text);
-    box-shadow:none;
-  }
-  #mobileBottomBar.map-mode .map-action-secondary:active{ background: var(--line); }
 
   /* ---------- MOBILE UI 명령문 섹션3~5: 모바일 전용 상단 헤더 ---------- */
   #mobileHeader{
@@ -1142,17 +1081,13 @@
     font-weight:800;
     line-height:1.3;
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-    cursor:pointer;
   }
   .mh-facility{
     font-size:12px;
     color: var(--muted);
     line-height:1.3;
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-    cursor:pointer;
   }
-  .mh-project:active, .mh-facility:active{ opacity:0.55; }
-  .mh-caret{ font-size:10px; opacity:0.55; }
   .mh-save{
     font-size:11px;
     font-weight:700;
@@ -1584,8 +1519,8 @@
     <span class="mh-online" id="mhOnline">● 온라인</span>
   </div>
   <div class="mh-center">
-    <div class="mh-project" id="mhProject" role="button" tabindex="0"><span id="mhProjectText">프로젝트 불러오는 중…</span> <span class="mh-caret">▾</span></div>
-    <div class="mh-facility" id="mhFacility" role="button" tabindex="0"><span id="mhFacilityText">시설물을 선택하세요</span> <span class="mh-caret">▾</span></div>
+    <div class="mh-project" id="mhProject">프로젝트 불러오는 중…</div>
+    <div class="mh-facility" id="mhFacility">시설물을 선택하세요</div>
   </div>
   <div class="mh-right-status">
     <span class="mh-save" id="mhSave">● 저장됨</span>
@@ -1634,10 +1569,7 @@
     <button type="button" id="mbtnSearch"><span class="ic">🔍</span>검색</button>
     <button type="button" id="mbtnSort"><span class="ic">↕️</span>정렬</button>
   </div>
-  <div class="map-action-row">
-    <button type="button" class="map-action" id="mbtnPhoto"><span>📷</span>사진 촬영</button>
-    <button type="button" class="map-action-secondary" id="mbtnPhotoThenPick" title="먼저 촬영하고, 정확한 위치는 지도에서 나중에 지정합니다">📍</button>
-  </div>
+  <button type="button" class="map-action" id="mbtnPhoto"><span>📷</span>사진 촬영</button>
 </div>
 
 <div class="layout" id="mainLayout">
@@ -1678,8 +1610,7 @@
   </div>
 
   <div class="side">
-    <div class="side-drag-handle" id="sideDragHandle"><div class="bar"></div></div>
-    <div class="side-head" id="sideHead">
+    <div class="side-head">
       <span style="display:flex; align-items:center; gap:6px;">기록 목록
         <button class="ghost icon-btn" id="btnToggleLogFilter" title="검색 · 중요도 필터" style="padding:2px 7px; font-size:12px;">🔍</button>
         <button class="ghost icon-btn" id="btnToggleInspector" title="Inspector 접기/펼치기" style="padding:2px 7px; font-size:12px; display:none;">▶</button>
@@ -1933,14 +1864,6 @@
         <button class="more-item" id="mmSiteList">
           <span class="more-item-title">🏗️ 시설물 목록</span>
           <span class="more-item-desc">현재 프로젝트의 시설물을 전환하거나 새로 추가합니다</span>
-        </button>
-        <button class="more-item" id="mmNewSite">
-          <span class="more-item-title">＋ 시설물 추가</span>
-          <span class="more-item-desc">새 시설물을 만들고 도면 이미지를 바로 불러옵니다</span>
-        </button>
-        <button class="more-item" id="mmResetImage">
-          <span class="more-item-title">🖼️ 도면 이미지 불러오기 · 교체</span>
-          <span class="more-item-desc">현재 시설물의 도면 이미지를 새로 등록하거나 바꿉니다</span>
         </button>
         <button class="more-item" id="btnCompleteFacility">
           <span class="more-item-title" id="btnCompleteFacilityTitle">시설물 조사완료</span>
@@ -2328,7 +2251,6 @@
   const mbtnSearch = document.getElementById('mbtnSearch');
   const mbtnSort = document.getElementById('mbtnSort');
   const mbtnPhoto = document.getElementById('mbtnPhoto');
-  const mbtnPhotoThenPick = document.getElementById('mbtnPhotoThenPick');
   const logFilterWrap = document.getElementById('logFilterWrap');
   let logFilterText = '';
   let logFilterUrgency = '';
@@ -2353,48 +2275,21 @@
     });
   });
 
-  // ---------- MOBILE UI 명령문 섹션12: 기록목록 Bottom Sheet ----------
-  const sideEl = document.querySelector('.side');
-  function setBottomSheetExpanded(expand){
-    if(!sideEl) return;
-    sideEl.classList.toggle('sheet-expanded', expand);
-  }
-  function toggleBottomSheet(){
-    setBottomSheetExpanded(!(sideEl && sideEl.classList.contains('sheet-expanded')));
-  }
-  const sideDragHandle = document.getElementById('sideDragHandle');
-  const sideHead = document.getElementById('sideHead');
-  if(sideDragHandle) sideDragHandle.addEventListener('click', toggleBottomSheet);
-  if(sideHead) sideHead.addEventListener('click', (e)=>{
-    // 헤더 안의 검색/접기 버튼을 눌렀을 때는 시트 토글과 겹치지 않게 한다.
-    if(e.target.closest('button')) return;
-    toggleBottomSheet();
-  });
-  // 하단 액션바 폭·safe-area가 기기마다 달라서, 실제 렌더링된 높이를 재서
-  // Bottom Sheet가 그 위에 정확히 자리잡도록 CSS 변수로 반영한다.
-  function updateMobileBottombarHeight(){
-    if(mobileBottomBar && window.innerWidth <= 880){
-      document.documentElement.style.setProperty('--mobile-bottombar-h', mobileBottomBar.offsetHeight + 'px');
-    }
-  }
-  window.addEventListener('resize', updateMobileBottombarHeight);
-  setTimeout(updateMobileBottombarHeight, 0);
-
   // ---------- MOBILE UI 명령문: 하단 액션바 ----------
   // 새 버튼을 만들되 동작은 전부 기존 함수/엘리먼트를 그대로 재사용한다.
   if(mbtnLog) mbtnLog.addEventListener('click', ()=>{
-    setBottomSheetExpanded(true);
+    log.scrollIntoView({ behavior:'smooth', block:'start' });
   });
   if(mbtnFilter) mbtnFilter.addEventListener('click', ()=>{
     const nowHidden = logFilterWrap.style.display === 'none';
     logFilterWrap.style.display = nowHidden ? 'flex' : 'none';
     mbtnFilter.classList.toggle('on', nowHidden);
-    setBottomSheetExpanded(true);
+    log.scrollIntoView({ behavior:'smooth', block:'start' });
   });
   if(mbtnSearch) mbtnSearch.addEventListener('click', ()=>{
     logFilterWrap.style.display = 'flex';
     mbtnFilter.classList.add('on');
-    setBottomSheetExpanded(true);
+    log.scrollIntoView({ behavior:'smooth', block:'start' });
     logSearch.focus();
   });
   if(mbtnSort) mbtnSort.addEventListener('click', ()=>{
@@ -2405,17 +2300,6 @@
   });
   if(mbtnPhoto) mbtnPhoto.addEventListener('click', ()=>{
     btnAddAtGps.click(); // 기존 "현재 위치에 지점 추가"(GPS확인→지점생성→자동 카메라오픈) 그대로 재사용
-  });
-  if(mbtnPhotoThenPick) mbtnPhotoThenPick.addEventListener('click', ()=>{
-    // 워크플로우B: 정확한 위치를 나중에 지도에서 고를 것이므로, 우선 임시 위치에
-    // 지점을 만들고 촬영부터 한다(GPS가 있으면 GPS, 없으면 현재 지도 중심 좌표).
-    initMapIfNeeded();
-    const center = (lastGps) ? { lat:lastGps.lat, lng:lastGps.lng }
-      : (leafletMap ? { lat: leafletMap.getCenter().lat, lng: leafletMap.getCenter().lng } : null);
-    if(!center){ alert('지도를 아직 불러오지 못했습니다. 잠시 후 다시 시도해주세요.'); return; }
-    const marker = newMarkerBase({ lat: center.lat, lng: center.lng }, lastGps ? 'device-gps' : 'manual');
-    pendingLocationPickMarkerId = marker.id;
-    commitNewMarker(marker); // 내부에서 openCapture()까지 자동 실행됨
   });
 
   const fileInput = document.getElementById('fileInput');
@@ -4547,8 +4431,8 @@
       stageStatus.textContent = name + typeForm + ' · 클릭하여 지점 추가·확대해서 정밀 표시' + statusBadge;
     }
     if(typeof updateCompleteMenuLabel === 'function') updateCompleteMenuLabel();
-    const mhFacilityText = document.getElementById('mhFacilityText');
-    if(mhFacilityText) mhFacilityText.textContent = name || '시설물을 선택하세요';
+    const mhFacility = document.getElementById('mhFacility');
+    if(mhFacility) mhFacility.textContent = name || '시설물을 선택하세요';
   }
 
   function resetStageToEmpty(){
@@ -7605,10 +7489,6 @@
 
   // ---------- 지점 위치 이동 모드 ----------
   let movingMarkerId = null;
-  // MOBILE UI 명령문 섹션9 워크플로우B: "사진 촬영 → 지도에서 위치 선택"을 위한 상태.
-  // 이 마커ID로 촬영이 끝나면(closeCaptureModal 참고) 자동으로 위치보정(이동)모드에
-  // 들어간다 — 기존 startMoveMode()를 그대로 재사용하고 새 이동로직은 만들지 않는다.
-  let pendingLocationPickMarkerId = null;
 
   function startMoveMode(markerId){
     const m = markers.find(x => x.id === markerId);
@@ -8505,17 +8385,6 @@
     captureModal.style.display = 'none';
     btnRestartCamera.style.display = 'none';
     btnNativeCamera.style.display = 'none';
-    // MOBILE UI 명령문 워크플로우B: 방금 촬영한 지점이 "위치는 나중에 지도에서
-    // 정확히 지정하기로 한" 임시 지점이었다면, 촬영을 마친 지금 자동으로
-    // 위치보정(이동) 모드에 들어간다 — 기존 startMoveMode()를 그대로 쓴다.
-    if(pendingLocationPickMarkerId && pendingLocationPickMarkerId === activeMarkerId){
-      const mid = pendingLocationPickMarkerId;
-      pendingLocationPickMarkerId = null;
-      activeMarkerId = null;
-      updateRotateHint();
-      startMoveMode(mid);
-      return;
-    }
     activeMarkerId = null;
     updateRotateHint();
   }
@@ -10402,16 +10271,6 @@
       moreModal.style.display = 'none';
       btnSiteList.click();
     });
-    const mmNewSite = document.getElementById('mmNewSite');
-    const mmResetImage = document.getElementById('mmResetImage');
-    if(mmNewSite) mmNewSite.addEventListener('click', ()=>{
-      moreModal.style.display = 'none';
-      btnNewSite.click();
-    });
-    if(mmResetImage) mmResetImage.addEventListener('click', ()=>{
-      moreModal.style.display = 'none';
-      btnResetImage.click();
-    });
 
     // 기존 상태 표시 요소(sbNet/sbSave/projectLabel)는 그대로 두고 텍스트만 그대로
     // 복사해서 보여준다 — 어디서 그 값을 바꾸든(코드 여러 곳에서 갱신됨) 자동 반영되도록
@@ -10434,12 +10293,7 @@
       el.classList.toggle('saved', /저장됨|저장완료/.test(t));
       el.classList.toggle('failed', /실패/.test(t));
     });
-    mirrorText(projectLabel, document.getElementById('mhProjectText'));
-
-    // 지적사항 반영: 프로젝트명/시설물명 각각 탭하면 전환 UI가 열리게 — 기존
-    // btnProjectSwitch/btnSiteList 그대로 위임(새 로직 없음).
-    mhProject.addEventListener('click', ()=> btnProjectSwitch.click());
-    mhFacility.addEventListener('click', ()=> btnSiteList.click());
+    mirrorText(projectLabel, mhProject);
   })();
 
   loadWorkMode();
