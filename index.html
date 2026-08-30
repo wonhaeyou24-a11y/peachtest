@@ -158,11 +158,16 @@
   @media (max-width: 880px){
     .layout{
       grid-template-columns: 1fr;
-      padding-left:0; padding-right:0; gap:0;
+      padding-left:0; padding-right:0;
+      padding-top: 0 !important; /* 상단 여백 제거 */
+      gap: 4px !important;
       padding-bottom: calc(20px + env(safe-area-inset-bottom)) !important;
     }
     /* mockup처럼 도면/지도 영역이 화면 폭 전체를 채운다 — 좌우 테두리·모서리 제거 */
-    .stage-wrap{ border-left:none; border-right:none; border-radius:0; }
+    .stage-wrap{
+      border-left:none; border-right:none; border-radius:0;
+      margin-top: 0 !important;
+    }
     .side{ padding-left:0; padding-right:0; }
     .side-head, .log-filter{ padding-left:14px; padding-right:14px; }
     .log{ border-left:none; border-right:none; border-radius: 16px 16px 0 0; }
@@ -276,25 +281,28 @@
     .view-switcher{
       display:flex;
       align-items:center;
-      gap:4px;
       overflow-x:auto;
       -webkit-overflow-scrolling:touch;
-      padding: 6px 10px;
+      margin-top: 0 !important;
+      padding: 4px 10px !important;
+      gap: 6px !important;
       background: var(--panel);
-      border-bottom: 1px solid var(--line);
+      border-bottom: 1px solid rgba(0, 0, 0, 0.05);
     }
     .view-switcher .mode-tabs{
       display:flex;
       flex-shrink:0;
-      gap:4px;
+      gap: 6px !important;
       border-bottom:none;
     }
-    .view-switcher .mode-tab{
+    .view-switcher .mode-tab,
+    .view-switcher button{
       flex:none;
       flex-shrink:0;
-      border-radius: 18px;
-      padding: 6px 12px;
-      font-size: 12px;
+      padding: 5px 10px !important;
+      font-size: 12px !important;
+      height: 30px !important;
+      border-radius: 8px !important;
       border-bottom:none;
       background: var(--panel-2);
     }
@@ -308,6 +316,7 @@
       border-bottom:none;
       background:transparent;
       overflow-x:visible;
+      gap: 6px;
     }
     .view-switcher .drawing-tab.active{
       background:#1C1C1E;
@@ -458,17 +467,26 @@
     touch-action: none;
   }
   @media (max-width: 880px) {
-    /* 스테이지 헤더 여백 최소화 */
+    /* 3. 시설물 가이드/지점 안내 텍스트 슬림화 */
     .stage-head {
-      padding: 6px 12px;
-      font-size: 10px;
+      padding: 3px 10px !important;
+      min-height: unset !important;
+      font-size: 10px !important;
+      line-height: 1.3 !important;
     }
 
-    /* 도면 작업 영역 높이 확장 (4:3 비율 대신 시원한 세로 확보) */
+    /* 4. 도면 및 지도 작업 영역(Stage) 확장 */
     .stage {
-      aspect-ratio: auto;
-      height: 48vh; /* 모바일에서 도면을 더 크게 표시 */
-      min-height: 300px;
+      /* 4:3 고정 비율 해제 -> 뷰포트 높이 기반으로 위아래 시원하게 확장 */
+      aspect-ratio: auto !important;
+      height: 48vh !important; 
+      min-height: 280px !important;
+      border-radius: 12px !important;
+    }
+
+    /* 5. 지도 뷰어 높이도 도면과 동일하게 일치 */
+    #mapStage {
+      height: 100% !important;
     }
   }
   .stage.empty{ cursor: default; }
@@ -1086,9 +1104,9 @@
   #mobileHeader{
     display:none;
     align-items:center;
-    gap:8px;
-    padding: 8px 12px calc(8px + env(safe-area-inset-top));
-    padding-top: max(8px, env(safe-area-inset-top));
+    gap: 6px;
+    padding: 6px 12px 4px;
+    padding-top: max(6px, env(safe-area-inset-top));
     background: rgba(255,255,255,0.92);
     backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--line);
@@ -1097,11 +1115,27 @@
     z-index: 350;
   }
   @media (max-width: 880px){
-    #mobileHeader{ display:flex; }
+    /* 1. 최상단 프로젝트/상태 헤더 여백 최소화 */
+    #mobileHeader {
+      display: flex;
+      padding: 6px 12px 4px !important;
+      padding-top: max(6px, env(safe-area-inset-top)) !important;
+      gap: 6px !important;
+      min-height: unset !important;
+    }
     /* 모바일에서는 새 헤더가 이 역할을 대신하므로 기존 topbar/statusbar는 숨긴다.
        DOM 자체는 그대로 남아있고 JS도 계속 값을 갱신한다 — #mobileHeader 쪽은
        MutationObserver로 그 값을 그대로 미러링한다(아래 JS 참고). */
     .topbar, .statusbar{ display:none; }
+
+    .mh-project {
+      font-size: 13px !important;
+      line-height: 1.2 !important;
+    }
+
+    .mh-facility {
+      font-size: 11px !important;
+    }
   }
   .mh-more{
     flex-shrink:0;
@@ -1132,7 +1166,7 @@
     text-align:center;
   }
   .mh-project{
-    font-size:14px;
+    font-size:13px;
     font-weight:800;
     line-height:1.2;
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
