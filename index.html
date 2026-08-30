@@ -156,21 +156,48 @@
     margin: 0 auto;
   }
   @media (max-width: 880px){
-    /* 1. 전체 화면 스크롤 원천 차단 (단일 앱 화면 고정) */
+    /* 1. 검색창 및 중요도 필터칩 완전 제거 (ID 및 하위 요소 강제 숨김) */
+    #logFilter,
+    .log-filter,
+    .log-filter-row,
+    .log-search-row,
+    .log-filter-chips,
+    #logSearchWrap,
+    #logFilterChips,
+    #logSearchInput,
+    #logFilterWrap {
+      display: none !important;
+      height: 0 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      border: none !important;
+    }
+
+    /* 2. 기록 목록 헤더 여백 최소화 */
+    .log-head,
+    .log-header,
+    .side-head {
+      padding: 6px 10px 4px !important;
+      min-height: unset !important;
+      font-size: 11px !important;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.05) !important;
+    }
+
+    /* 3. 전체 단일 화면 뷰포트 고정 */
     html, body {
       height: 100% !important;
       height: 100dvh !important;
-      overflow: hidden !important; /* 바깥 스크롤 발생 방지 */
+      overflow: hidden !important;
     }
 
-    /* 5. 메인 레이아웃: 플렉스 100% 채움 */
-    .layout{
-      height: calc(100dvh - 90px - env(safe-area-inset-top)) !important;
+    .layout {
+      height: calc(100dvh - 84px - env(safe-area-inset-top)) !important;
       display: flex !important;
       flex-direction: column !important;
       padding: 0 10px !important;
-      padding-bottom: max(16px, env(safe-area-inset-bottom)) !important;
-      gap: 6px !important;
+      /* 하단 안전 여백을 6px 수준으로 줄여 리스트 가시 공간 확보 */
+      padding-bottom: max(6px, env(safe-area-inset-bottom)) !important;
+      gap: 4px !important;
       overflow: hidden !important;
     }
     /* mockup처럼 도면/지도 영역이 화면 폭 전체를 채운다 — 좌우 테두리·모서리 제거 */
@@ -186,21 +213,23 @@
       flex: 1 1 0%;
       min-height: 0;
       overflow: hidden;
-      gap: 6px;
+      gap: 4px;
     }
-    .side-head, .log-filter{ padding-left:14px; padding-right:14px; flex-shrink: 0; }
-    /* 9. 기록 목록: 남은 높이를 꽉 채우고 목록 내부에서만 부드럽게 스크롤 */
+    .side-head{ padding-left:10px; padding-right:10px; flex-shrink: 0; }
+    /* 6. 기록 목록: 남은 높이를 채우며 1행 더 확보 */
     .log{
       border-left:none; border-right:none; border-radius: 16px 16px 0 0;
       flex: 1 1 0% !important;
       min-height: 0 !important;
       overflow-y: auto !important;
       -webkit-overflow-scrolling: touch !important;
-      padding-bottom: 24px !important; /* 홈 인디케이터 안전 여백 */
+      /* 도면 모드 하단 여백 축소: 24px -> 8px (지점 1줄 추가 노출) */
+      padding-bottom: 8px !important;
     }
 
+    /* 지도 모드 하단 촬영 버튼 바 안전 여백 유지 */
     body.is-map-mode .log {
-      padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important;
+      padding-bottom: calc(64px + env(safe-area-inset-bottom)) !important;
     }
   }
   /* STEP16 Inspector 접기(섹션35): 완전히 숨기지 않고 토글버튼(▶)만 남는 좁은 바로
@@ -508,21 +537,21 @@
       flex-shrink: 0 !important;
     }
 
-    /* 6. 도면 모드: 작업창 높이 (도면 뷰어 + 남은 영역 전체 기록목록) */
+    /* 4. 도면 모드 작업창 (하단 목록을 1줄 더 올리기 위해 높이 미세 최적화) */
     .stage {
       aspect-ratio: auto !important;
-      height: 38vh !important;
-      min-height: 230px !important;
-      max-height: 320px !important;
+      height: 36vh !important;
+      min-height: 220px !important;
+      max-height: 290px !important;
       border-radius: 12px !important;
     }
 
-    /* 7. 지도 모드: 딱 지점 1행(약 46px) 높이만 더 확보 */
+    /* 5. 지도 모드 작업창 (도면 대비 1행 +46px 유지) */
     body.is-map-mode .stage,
     #mapStage {
-      height: calc(38vh + 46px) !important;
-      min-height: 276px !important;
-      max-height: 366px !important;
+      height: calc(36vh + 46px) !important;
+      min-height: 266px !important;
+      max-height: 336px !important;
     }
   }
   .stage.empty{ cursor: default; }
@@ -1205,7 +1234,7 @@
 
     /* 지도 모드일 때는 촬영 버튼 높이만큼 내부 패딩 확보하여 마지막 항목 가림 방지 */
     body.is-map-mode .log {
-      padding-bottom: calc(68px + env(safe-area-inset-bottom)) !important;
+      padding-bottom: calc(64px + env(safe-area-inset-bottom)) !important;
     }
   }
   #mobileBottomBar .drawing-actions{
