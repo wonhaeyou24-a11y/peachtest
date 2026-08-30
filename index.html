@@ -156,22 +156,48 @@
     margin: 0 auto;
   }
   @media (max-width: 880px){
+    /* 1. 전체 화면 스크롤 원천 차단 (단일 앱 화면 고정) */
+    html, body {
+      height: 100% !important;
+      height: 100dvh !important;
+      overflow: hidden !important; /* 바깥 스크롤 발생 방지 */
+    }
+
+    /* 5. 메인 레이아웃: 플렉스 100% 채움 */
     .layout{
-      grid-template-columns: 1fr;
-      padding-left:0; padding-right:0;
-      padding-top: 2px !important;
+      height: calc(100dvh - 90px - env(safe-area-inset-top)) !important;
+      display: flex !important;
+      flex-direction: column !important;
+      padding: 0 10px !important;
+      padding-bottom: max(16px, env(safe-area-inset-bottom)) !important;
       gap: 6px !important;
-      /* 도면 모드일 때도 하단 홈 인디케이터에 글자가 걸치지 않도록 안전 여백 확보 */
-      padding-bottom: calc(28px + env(safe-area-inset-bottom)) !important;
+      overflow: hidden !important;
     }
     /* mockup처럼 도면/지도 영역이 화면 폭 전체를 채운다 — 좌우 테두리·모서리 제거 */
     .stage-wrap{
       border-left:none; border-right:none; border-radius:0;
-      margin-top: 0 !important;
+      margin: 0 !important;
+      flex-shrink: 0 !important;
     }
-    .side{ padding-left:0; padding-right:0; }
-    .side-head, .log-filter{ padding-left:14px; padding-right:14px; }
-    .log{ border-left:none; border-right:none; border-radius: 16px 16px 0 0; }
+    .side{
+      padding-left:0; padding-right:0;
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 0%;
+      min-height: 0;
+      overflow: hidden;
+      gap: 6px;
+    }
+    .side-head, .log-filter{ padding-left:14px; padding-right:14px; flex-shrink: 0; }
+    /* 9. 기록 목록: 남은 높이를 꽉 채우고 목록 내부에서만 부드럽게 스크롤 */
+    .log{
+      border-left:none; border-right:none; border-radius: 16px 16px 0 0;
+      flex: 1 1 0% !important;
+      min-height: 0 !important;
+      overflow-y: auto !important;
+      -webkit-overflow-scrolling: touch !important;
+      padding-bottom: 20px !important; /* 도면 모드 하단 안전 여백 */
+    }
   }
   /* STEP16 Inspector 접기(섹션35): 완전히 숨기지 않고 토글버튼(▶)만 남는 좁은 바로
      줄인다 — 이렇게 해야 접은 뒤에도 다시 펼 수 있는 진입점이 계속 보인다. */
@@ -279,15 +305,16 @@
      만들어 하나의 스크롤 가능한 pill 줄처럼 보이게 한다. drawingTabs의
      display:none/flex 제어는 그대로 존중된다(지도모드일 땐 자동으로 안 보임). */
   @media (max-width: 880px){
-    /* 2. 탭 영역: 상하 간격 살짝 부여하여 답답함 해소 */
+    /* 3. 모드 탭 바 */
     .view-switcher{
       display:flex;
       align-items:center;
       overflow-x:auto;
       -webkit-overflow-scrolling:touch;
-      margin-top: 2px !important;
-      padding: 6px 12px !important;
+      margin-top: 0 !important;
+      padding: 4px 12px !important;
       gap: 6px !important;
+      flex-shrink: 0 !important;
       background: var(--panel);
       border-bottom: 1px solid rgba(0, 0, 0, 0.05);
     }
@@ -301,10 +328,10 @@
     .view-switcher button{
       flex:none;
       flex-shrink:0;
-      padding: 6px 12px !important;
+      padding: 5px 12px !important;
       font-size: 12px !important;
-      height: 32px !important;
-      border-radius: 9px !important;
+      height: 30px !important;
+      border-radius: 8px !important;
       border-bottom:none;
       background: var(--panel-2);
     }
@@ -469,25 +496,29 @@
     touch-action: none;
   }
   @media (max-width: 880px) {
-    /* 안내 가이드 텍스트 라인 간격 */
+    /* 4. 안내 텍스트 바 */
     .stage-head {
-      padding: 4px 12px 6px !important;
+      padding: 4px 12px !important;
       min-height: unset !important;
       font-size: 10.5px !important;
+      flex-shrink: 0 !important;
     }
 
-    /* 3. 도면 모드: 기록 목록을 위로 올려 리스트를 더 넓게 확보 */
+    /* 6. 도면 모드: 작업창 높이 (도면 뷰어 + 남은 영역 전체 기록목록) */
     .stage {
       aspect-ratio: auto !important;
-      height: 43vh !important; /* 도면 높이를 적당히 줄여 기록 목록이 위로 올라옴 */
-      min-height: 250px !important;
+      height: 38vh !important;
+      min-height: 230px !important;
+      max-height: 320px !important;
       border-radius: 12px !important;
     }
 
-    /* 4. 지도 모드: 내 위치가 가려지지 않도록 지도를 한 칸 더 넓게(목록을 아래로) */
+    /* 7. 지도 모드: 딱 지점 1행(약 46px) 높이만 더 확보 */
+    body.is-map-mode .stage,
     #mapStage {
-      height: 50vh !important; /* 지도를 더 시원하게 확장 */
-      min-height: 320px !important;
+      height: calc(38vh + 46px) !important;
+      min-height: 276px !important;
+      max-height: 366px !important;
     }
   }
   .stage.empty{ cursor: default; }
@@ -1043,26 +1074,27 @@
     padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
   }
   @media (max-width: 880px){
-    /* 도면 모드일 때는 하단 바 자체를 숨겨 기록 목록 영역을 최대로 확보 */
+    /* 8. 하단 사진 촬영 바 (지도 모드 전용) */
     #mobileBottomBar {
       display: none !important;
     }
 
-    /* 지도 모드 하단 바 및 여백 조정 */
     #mobileBottomBar.map-mode {
       display: block !important;
-      padding: 8px 12px calc(8px + env(safe-area-inset-bottom)) !important;
+      position: fixed !important;
+      left: 0 !important;
+      right: 0 !important;
+      bottom: 0 !important;
+      padding: 6px 12px calc(8px + env(safe-area-inset-bottom)) !important;
+      background: rgba(255, 255, 255, 0.95) !important;
+      backdrop-filter: blur(10px) !important;
+      -webkit-backdrop-filter: blur(10px) !important;
+      z-index: 1000 !important;
     }
 
-    body:has(#mobileBottomBar.map-mode[style*="display: block"]) .layout,
-    body.is-map-mode .layout {
-      padding-bottom: calc(84px + env(safe-area-inset-bottom)) !important;
-    }
-
-    /* 기록 목록 컨테이너 스크롤 영역 최적화 */
-    .log {
-      min-height: 180px;
-      padding-bottom: 8px;
+    /* 지도 모드일 때는 촬영 버튼 높이만큼 내부 패딩 확보하여 마지막 항목 가림 방지 */
+    body.is-map-mode .log {
+      padding-bottom: calc(68px + env(safe-area-inset-bottom)) !important;
     }
   }
   #mobileBottomBar .drawing-actions{
@@ -1110,9 +1142,9 @@
   #mobileHeader{
     display:none;
     align-items:center;
-    gap: 8px;
-    padding: 10px 14px 8px;
-    padding-top: max(10px, env(safe-area-inset-top));
+    gap: 6px;
+    padding: 8px 14px 6px;
+    padding-top: max(8px, env(safe-area-inset-top));
     background: rgba(255,255,255,0.92);
     backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--line);
@@ -1121,13 +1153,14 @@
     z-index: 350;
   }
   @media (max-width: 880px){
-    /* 1. 상단 헤더: 터치 실수 방지용 적정 여백 유지 */
+    /* 2. 상단 헤더 */
     #mobileHeader {
       display: flex;
-      padding: 10px 14px 8px !important;
-      padding-top: max(10px, env(safe-area-inset-top)) !important;
-      gap: 8px !important;
+      padding: 8px 14px 6px !important;
+      padding-top: max(8px, env(safe-area-inset-top)) !important;
+      gap: 6px !important;
       min-height: unset !important;
+      flex-shrink: 0 !important;
     }
     /* 모바일에서는 새 헤더가 이 역할을 대신하므로 기존 topbar/statusbar는 숨긴다.
        DOM 자체는 그대로 남아있고 JS도 계속 값을 갱신한다 — #mobileHeader 쪽은
