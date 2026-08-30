@@ -196,7 +196,11 @@
       min-height: 0 !important;
       overflow-y: auto !important;
       -webkit-overflow-scrolling: touch !important;
-      padding-bottom: 20px !important; /* 도면 모드 하단 안전 여백 */
+      padding-bottom: 24px !important; /* 홈 인디케이터 안전 여백 */
+    }
+
+    body.is-map-mode .log {
+      padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important;
     }
   }
   /* STEP16 Inspector 접기(섹션35): 완전히 숨기지 않고 토글버튼(▶)만 남는 좁은 바로
@@ -888,6 +892,113 @@
     border: 1px solid var(--line);
     background: var(--panel-2);
     color: var(--text);
+  }
+
+  /* ========================================================
+     프로젝트 & 시설물 컴팩트 카드 (원터치 전환 / 활성 강조 / 자동 배지)
+     ======================================================== */
+  .compact-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    position: relative;
+  }
+
+  .compact-card:active {
+    background: var(--panel-2);
+    transform: scale(0.99);
+  }
+
+  /* 활성화된 프로젝트/시설물 카드 강조 테두리 */
+  .compact-card.is-active {
+    border: 2px solid #F2A93B !important;
+    background: rgba(242, 169, 59, 0.04) !important;
+    box-shadow: 0 2px 8px rgba(242, 169, 59, 0.15);
+  }
+
+  .card-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .card-title-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .card-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .active-pill {
+    font-size: 10px;
+    font-weight: 700;
+    color: #E65100;
+    background: #FFE0B2;
+    padding: 2px 6px;
+    border-radius: 6px;
+    flex-shrink: 0;
+  }
+
+  /* 자동 상태 표시 뱃지 */
+  .auto-status-badge {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 8px;
+    flex-shrink: 0;
+  }
+  .status-ready { background: #F2F2F7; color: #8E8E93; }          /* 준비중 */
+  .status-prepared { background: #E3F2FD; color: #1976D2; }       /* 준비완료(사무실) */
+  .status-progress { background: #FFF3E0; color: #E65100; }       /* 조사중(현장) */
+  .status-done { background: #E8F5E9; color: #2E7D32; }           /* 조사완료 */
+
+  .card-meta-row {
+    font-size: 11.5px;
+    color: var(--muted);
+    margin: 5px 0 8px;
+  }
+
+  .card-actions-row {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .card-btn {
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 5px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .card-btn:active {
+    background: #E5E5EA;
+  }
+
+  .card-btn.danger {
+    color: #FF3B30;
+    background: rgba(255, 59, 48, 0.08);
+    border-color: rgba(255, 59, 48, 0.2);
   }
 
   .icon-btn{
@@ -1963,6 +2074,7 @@
     </div>
     <div class="modal-body">
       <div class="field-grid">
+        <label>프로젝트명 *<input id="piName" type="text" placeholder="예: OO시설 정밀안전점검"></label>
         <label>발주처<input id="piClient" type="text" placeholder="예: OO시설공단"></label>
         <label>조사자<input id="piInspector" type="text" placeholder="예: 홍길동"></label>
         <label>조사기간 시작<input id="piStartDate" type="date"></label>
@@ -2458,6 +2570,7 @@
   const projectSearch = document.getElementById('projectSearch');
   const projectInfoModal = document.getElementById('projectInfoModal');
   const closeProjectInfoModal = document.getElementById('closeProjectInfoModal');
+  const piName = document.getElementById('piName');
   const piClient = document.getElementById('piClient');
   const piInspector = document.getElementById('piInspector');
   const piStartDate = document.getElementById('piStartDate');
@@ -5207,6 +5320,58 @@
   // Explorer 트리(시설물별 조사지점 목록)의 펼침/접기 상태. renderSiteList()가
   // 선택 변경 등으로 자주 다시 호출되므로, 이 상태를 함수 밖에 둬서 매번 초기화되지
   // 않게 한다 — 안 그러면 지점을 클릭할 때마다 방금 펼친 트리가 도로 닫혀버린다.
+  // ================================================================
+  // 상태 관리 자동화 로직
+  // ================================================================
+  function computeProjectStatus(project) {
+    const projectSites = sites.filter(s => s.projectId === project.id);
+    if (!projectSites || projectSites.length === 0) {
+      return { text: '준비중', class: 'status-ready' };
+    }
+    
+    const allDone = projectSites.every(s => computeFacilityStatus(s).text === '조사완료');
+    if (allDone && projectSites.length > 0) {
+      return { text: '조사완료', class: 'status-done' };
+    }
+
+    const hasAnyPhotoOrMark = projectSites.some(s => {
+      const ms = (s.id === currentSiteId ? markers : (s.markers || []));
+      return ms.length > 0;
+    });
+    if (hasAnyPhotoOrMark) {
+      return { text: '조사중', class: 'status-progress' };
+    }
+
+    const hasDrawingsOrInfo = projectSites.some(s => (s.drawings && s.drawings.length > 0) || s.baseImageSrc || s.facilityType);
+    if (hasDrawingsOrInfo) {
+      return { text: '준비완료', class: 'status-prepared' };
+    }
+
+    return { text: '준비중', class: 'status-ready' };
+  }
+
+  function computeFacilityStatus(site) {
+    const siteMarkers = (site.id === currentSiteId ? markers : (site.markers || []));
+    if (!siteMarkers || siteMarkers.length === 0) {
+      const hasDrawings = (site.drawings && site.drawings.length > 0) || site.baseImageSrc;
+      return (hasDrawings || site.facilityType)
+        ? { text: '준비완료', class: 'status-prepared' } 
+        : { text: '준비중', class: 'status-ready' };
+    }
+
+    const total = siteMarkers.length;
+    const taken = siteMarkers.filter(m => (m.photos && m.photos.length > 0) || m.isCaptured).length;
+
+    if (total > 0 && taken === total) {
+      return { text: '조사완료', class: 'status-done' };
+    }
+    if (taken > 0) {
+      return { text: '조사중 (' + taken + '/' + total + ')', class: 'status-progress' };
+    }
+    return { text: '조사대기', class: 'status-ready' };
+  }
+
+  // ---------- 시설물 목록 모달 ----------
   const expandedSiteIds = new Set();
 
   function renderSiteList(){
@@ -5216,11 +5381,6 @@
 
     siteListBody.innerHTML = '';
 
-    // ---------- v3.0 섹션21~22: Project Explorer ----------
-    // PC 도킹모드(폭 1000px+사무실모드)일 때만, 맨 위에 "프로젝트" 노드를 추가한다.
-    // 지금까지는 이 패널이 그냥 "현재 프로젝트의 시설물 목록"이었을 뿐 프로젝트를
-    // 오가거나 조사지점까지 내려다볼 수 있는 탐색기가 아니었다 — 여기서 보완한다.
-    // 모바일/태블릿의 기존 팝업 동작(아래 시설물 카드들)은 전혀 건드리지 않는다.
     const isDocked = document.body.classList.contains('pc-explorer-docked');
     if(isDocked){
       const projRow = document.createElement('div');
@@ -5261,66 +5421,72 @@
       return;
     }
     filtered.slice().sort((a,b)=> new Date(b.savedAt||0) - new Date(a.savedAt||0)).forEach(site=>{
-      const row = document.createElement('div');
-      row.className = 'site-row' + (site.id === currentSiteId ? ' active' : '');
-
-      const info = document.createElement('div');
-      info.className = 'site-info';
-      const title = document.createElement('div');
-      title.className = 'site-name';
-      title.textContent = site.name + (site.id === currentSiteId ? ' (현재 작업 중)' : '');
-      const meta = document.createElement('div');
-      meta.className = 'site-meta';
-      const pCount = (site.markers || []).length;
+      const isActive = site.id === currentSiteId;
+      const status = computeFacilityStatus(site);
+      const siteMarkers = (isActive ? markers : (site.markers || []));
+      const pCount = siteMarkers.length;
       const dateStr = site.savedAt ? new Date(site.savedAt).toLocaleString('ko-KR') : '';
-      meta.textContent = facilityStatusLabel(site) + ' · 지점 ' + pCount + '개 · ' + dateStr;
-      info.appendChild(title);
-      info.appendChild(meta);
 
-      const actions = document.createElement('div');
-      actions.className = 'site-actions';
-
-      const openBtn = document.createElement('button');
-      openBtn.textContent = site.id === currentSiteId ? '열림' : '열기';
-      openBtn.disabled = site.id === currentSiteId;
-      openBtn.addEventListener('click', ()=>{
-        commitLiveToCurrentSite();
-        loadSite(site);
-        saveState();
+      const card = document.createElement('div');
+      card.className = 'compact-card' + (isActive ? ' is-active' : '');
+      card.addEventListener('click', ()=>{
+        if(!isActive){
+          commitLiveToCurrentSite();
+          loadSite(site);
+          saveState();
+        }
         siteModal.style.display = 'none';
         updatePcExplorerDocking();
       });
 
-      const renameBtn = document.createElement('button');
-      renameBtn.textContent = '이름변경';
-      renameBtn.addEventListener('click', ()=>{
-        const newName = prompt('시설물 이름을 입력하세요', site.name);
-        if(newName && newName.trim()){
-          site.name = newName.trim();
-          renderSiteList();
-          refreshStageHeader();
-          saveState();
-        }
-      });
+      const headerRow = document.createElement('div');
+      headerRow.className = 'card-header-row';
+      const titleGroup = document.createElement('div');
+      titleGroup.className = 'card-title-group';
+      const title = document.createElement('span');
+      title.className = 'card-title';
+      title.textContent = site.name;
+      titleGroup.appendChild(title);
+      if(isActive){
+        const activePill = document.createElement('span');
+        activePill.className = 'active-pill';
+        activePill.textContent = '작업중';
+        titleGroup.appendChild(activePill);
+      }
+      const badge = document.createElement('span');
+      badge.className = 'auto-status-badge ' + status.class;
+      badge.textContent = status.text;
+      headerRow.appendChild(titleGroup);
+      headerRow.appendChild(badge);
 
-      const editInfoBtn = document.createElement('button');
-      editInfoBtn.textContent = site.facilityType ? '정보 수정' : '📝 정보 보완';
-      editInfoBtn.addEventListener('click', ()=>{
+      const metaRow = document.createElement('div');
+      metaRow.className = 'card-meta-row';
+      metaRow.textContent = (site.facilityType ? '유형: ' + site.facilityType + (site.facilityForm ? ' (' + site.facilityForm + ')' : '') : '정보 미등록') +
+        ' · 지점 ' + pCount + '개' + (dateStr ? ' · ' + dateStr : '');
+
+      const actionsRow = document.createElement('div');
+      actionsRow.className = 'card-actions-row';
+      actionsRow.addEventListener('click', (e)=> e.stopPropagation());
+
+      // [수정] 통합 버튼: 시설물명 및 기본정보 수정
+      const editBtn = document.createElement('button');
+      editBtn.className = 'card-btn';
+      editBtn.textContent = '수정';
+      editBtn.addEventListener('click', ()=>{
         openFacilityModalForEdit(site);
         siteModal.style.display = 'none';
-        // facilityModal이 닫힐 때(취소/배경클릭/저장) updatePcExplorerDocking()이 다시
-        // 호출되므로, PC 도킹 조건이면 siteModal이 자동으로 복원된다.
       });
 
       const moveBtn = document.createElement('button');
-      moveBtn.textContent = '프로젝트 이동';
+      moveBtn.className = 'card-btn';
+      moveBtn.textContent = '이동';
       moveBtn.addEventListener('click', ()=>{
         if(projects.length <= 1){ alert('이동할 다른 프로젝트가 없습니다. 먼저 "📁 프로젝트"에서 새 프로젝트를 만들어주세요.'); return; }
-        // 인라인 선택 상자를 토글해서 대상 프로젝트를 고른다
-        let existingSel = row.querySelector('.site-move-select');
+        let existingSel = card.querySelector('.site-move-select');
         if(existingSel){ existingSel.remove(); return; }
         const sel = document.createElement('select');
         sel.className = 'site-move-select';
+        sel.style.marginTop = '6px';
         sel.innerHTML = '<option value="">이동할 프로젝트 선택…</option>' +
           projects.filter(p=>p.id !== site.projectId).map(p=>'<option value="'+p.id+'">'+escapeHtml(p.name)+'</option>').join('');
         sel.addEventListener('change', ()=>{
@@ -5329,23 +5495,21 @@
           if(!target) return;
           site.projectId = target.id;
           if(site.id === currentSiteId){
-            // 현재 작업 중인 시설물을 다른 프로젝트로 옮기면, 화면상 혼란을 막기 위해
-            // 이동한 프로젝트로 함께 전환한다 (데이터 자체는 그대로 보존됨)
             currentProjectId = target.id;
             renderProjectHeader();
           }
           saveState();
           renderSiteList();
         });
-        row.appendChild(sel);
+        card.appendChild(sel);
       });
 
       const delBtn = document.createElement('button');
-      delBtn.className = 'site-delete';
+      delBtn.className = 'card-btn danger';
       delBtn.textContent = '삭제';
       delBtn.addEventListener('click', ()=>{
-        const pointCount = (site.markers||[]).length;
-        const photoCount = (site.markers||[]).reduce((s,m)=>s+(m.photos||[]).length,0);
+        const pointCount = siteMarkers.length;
+        const photoCount = siteMarkers.reduce((s,m)=>s+(m.photos||[]).length,0);
         if(!confirm('"' + site.name + '" 시설물을 삭제할까요?\n(조사점 ' + pointCount + '개, 사진 ' + photoCount + '장)\n휴지통으로 이동되며, "⋯ → 휴지통"에서 복원할 수 있습니다.')) return;
         if(site.id === currentSiteId) commitLiveToCurrentSite();
         const proj = projects.find(p => p.id === site.projectId);
@@ -5370,42 +5534,37 @@
         saveState();
       });
 
-      actions.appendChild(openBtn);
-      actions.appendChild(renameBtn);
-      actions.appendChild(editInfoBtn);
-      actions.appendChild(moveBtn);
-      actions.appendChild(delBtn);
-      row.appendChild(info);
-      row.appendChild(actions);
-      siteListBody.appendChild(row);
+      actionsRow.appendChild(editBtn);
+      actionsRow.appendChild(moveBtn);
+      actionsRow.appendChild(delBtn);
 
-      // ---------- v3.0 섹션22: 시설물 아래 조사지점(마커) 트리 ----------
-      // PC 도킹모드에서만 펼침/접기를 제공한다. 지점 데이터는 이 시설물이 지금
-      // 화면에 열려있는지 여부와 상관없이 site.markers에 항상 보존되어 있으므로
-      // 새 데이터 조회 없이 그대로 읽어서 보여준다.
+      card.appendChild(headerRow);
+      card.appendChild(metaRow);
+      card.appendChild(actionsRow);
+
+      // PC 도킹모드 조사지점 트리
       if(isDocked){
-        const siteMarkers = (site.markers || []).slice().sort((a,b)=>a.num-b.num);
-        const hasActiveHere = siteMarkers.some(m => m.id === activeMarkerId);
-        if(hasActiveHere) expandedSiteIds.add(site.id); // 선택된 지점이 있는 시설물은 항상 펼친 상태로 보여준다
+        const sMarkers = siteMarkers.slice().sort((a,b)=>a.num-b.num);
+        const hasActiveHere = sMarkers.some(m => m.id === activeMarkerId);
+        if(hasActiveHere) expandedSiteIds.add(site.id);
         const isExpanded = expandedSiteIds.has(site.id);
         const toggleBtn = document.createElement('button');
         toggleBtn.className = 'ghost';
-        toggleBtn.style.cssText = 'width:100%; text-align:left; font-size:11px; padding:4px 8px; margin:-6px 0 4px; color:var(--muted); background:transparent; border:none; box-shadow:none;';
-        toggleBtn.textContent = (siteMarkers.length ? (isExpanded ? '▼' : '▶') + ' 조사지점 ' + siteMarkers.length + '개 보기' : '조사지점 없음');
-        toggleBtn.disabled = siteMarkers.length === 0;
+        toggleBtn.style.cssText = 'width:100%; text-align:left; font-size:11px; padding:4px 8px; margin:4px 0 0; color:var(--muted); background:transparent; border:none; box-shadow:none;';
+        toggleBtn.textContent = (sMarkers.length ? (isExpanded ? '▼' : '▶') + ' 조사지점 ' + sMarkers.length + '개 보기' : '조사지점 없음');
+        toggleBtn.disabled = sMarkers.length === 0;
         const tree = document.createElement('div');
-        tree.style.cssText = 'display:' + (isExpanded ? 'flex' : 'none') + '; flex-direction:column; gap:2px; margin:0 0 8px 14px; padding-left:10px; border-left:2px solid var(--line);';
-        siteMarkers.forEach(m=>{
+        tree.style.cssText = 'display:' + (isExpanded ? 'flex' : 'none') + '; flex-direction:column; gap:2px; margin:4px 0 4px 8px; padding-left:8px; border-left:2px solid var(--line);';
+        sMarkers.forEach(m=>{
           const leaf = document.createElement('button');
           const isSelected = m.id === activeMarkerId;
           leaf.className = 'ghost';
-          // Workspace v1.0 섹션26: Main/Inspector에서 선택된 지점을 Explorer에서도 강조 —
-          // 3영역(Explorer/Main/Inspector) 중 마지막 남은 방향의 연동.
           leaf.style.cssText = 'text-align:left; font-size:12px; padding:4px 8px; box-shadow:none;' +
             (isSelected ? ' border-color:#2E6DA4; background:rgba(46,109,164,0.12); font-weight:700;' : '');
           const photoCount = (m.photos||[]).length;
           leaf.textContent = '📍 지점 ' + m.num + (photoCount ? ' · 사진 ' + photoCount + '장' : ' · 미촬영');
-          leaf.addEventListener('click', async ()=>{
+          leaf.addEventListener('click', async (e)=>{
+            e.stopPropagation();
             if(site.id !== currentSiteId){
               commitLiveToCurrentSite();
               await loadSite(site);
@@ -5415,15 +5574,18 @@
           });
           tree.appendChild(leaf);
         });
-        toggleBtn.addEventListener('click', ()=>{
+        toggleBtn.addEventListener('click', (e)=>{
+          e.stopPropagation();
           const open = tree.style.display === 'flex';
           tree.style.display = open ? 'none' : 'flex';
           if(open) expandedSiteIds.delete(site.id); else expandedSiteIds.add(site.id);
-          toggleBtn.textContent = (open ? '▶' : '▼') + ' 조사지점 ' + siteMarkers.length + '개 보기';
+          toggleBtn.textContent = (open ? '▶' : '▼') + ' 조사지점 ' + sMarkers.length + '개 보기';
         });
-        siteListBody.appendChild(toggleBtn);
-        siteListBody.appendChild(tree);
+        card.appendChild(toggleBtn);
+        card.appendChild(tree);
       }
+
+      siteListBody.appendChild(card);
     });
   }
 
@@ -5476,95 +5638,77 @@
     }
     projectListBody.innerHTML = '';
     filteredProjects.slice().sort((a,b)=> new Date(b.savedAt||0) - new Date(a.savedAt||0)).forEach(project=>{
+      const isActive = project.id === currentProjectId;
+      const status = computeProjectStatus(project);
       const facilityCount = sites.filter(s => s.projectId === project.id).length;
-      const row = document.createElement('div');
-      row.className = 'site-row' + (project.id === currentProjectId ? ' active' : '');
-
-      const info = document.createElement('div');
-      info.className = 'site-info';
-      const title = document.createElement('div');
-      title.className = 'site-name';
-      title.textContent = (project.isTemp ? '⚡ ' : '') + project.name + (project.id === currentProjectId ? ' (현재 프로젝트)' : '');
-      const meta = document.createElement('div');
-      meta.className = 'site-meta';
       const dateStr = project.savedAt ? new Date(project.savedAt).toLocaleString('ko-KR') : '';
-      meta.textContent = projectStatusLabel(project) + ' · ' + projectBackupLabel(project) + ' · 시설물 ' + facilityCount + '개 · ' + dateStr +
-        (project.standardDbVersion ? ' · DB ' + project.standardDbVersion : '');
-      info.appendChild(title);
-      info.appendChild(meta);
 
-      if(project.client || project.inspector){
-        const bizMeta = document.createElement('div');
-        bizMeta.className = 'site-meta';
-        bizMeta.textContent = [project.client ? '발주처 ' + project.client : '', project.inspector ? '조사자 ' + project.inspector : ''].filter(Boolean).join(' · ');
-        info.appendChild(bizMeta);
-      }
-
-      const stageRow = document.createElement('div');
-      stageRow.className = 'damage-type-scroll';
-      stageRow.style.marginTop = '6px';
-      WORKFLOW_STAGES.forEach(stage=>{
-        const chip = document.createElement('button');
-        chip.type = 'button';
-        chip.className = 'damage-type-btn' + (projectWorkflowStage(project) === stage ? ' active' : '');
-        chip.style.cssText = 'min-height:32px; padding:5px 12px; font-size:12px;';
-        chip.textContent = stage;
-        chip.addEventListener('click', ()=>{
-          project.workflowStage = stage;
-          renderProjectList();
-          saveState();
-        });
-        stageRow.appendChild(chip);
-      });
-      info.appendChild(stageRow);
-
-      const actions = document.createElement('div');
-      actions.className = 'site-actions';
-
-      const openBtn = document.createElement('button');
-      openBtn.textContent = project.id === currentProjectId ? '선택됨' : '전환';
-      openBtn.disabled = project.id === currentProjectId;
-      openBtn.addEventListener('click', ()=>{
-        switchToProject(project.id);
-        renderProjectList();
+      const card = document.createElement('div');
+      card.className = 'compact-card' + (isActive ? ' is-active' : '');
+      card.addEventListener('click', ()=>{
+        if(!isActive){
+          switchToProject(project.id);
+        }
         projectModal.style.display = 'none';
         if(document.body.classList.contains('pc-explorer-docked')) renderSiteList();
       });
 
-      const renameBtn = document.createElement('button');
-      renameBtn.textContent = '이름변경';
-      renameBtn.addEventListener('click', ()=>{
-        const newName = prompt('프로젝트 이름을 입력하세요', project.name);
-        if(newName && newName.trim()){
-          project.name = newName.trim();
-          project.savedAt = new Date().toISOString();
-          renderProjectList();
-          renderProjectHeader();
-          saveState();
-        }
-      });
+      const headerRow = document.createElement('div');
+      headerRow.className = 'card-header-row';
+      const titleGroup = document.createElement('div');
+      titleGroup.className = 'card-title-group';
+      const title = document.createElement('span');
+      title.className = 'card-title';
+      title.textContent = (project.isTemp ? '⚡ ' : '') + project.name;
+      titleGroup.appendChild(title);
+      if(isActive){
+        const activePill = document.createElement('span');
+        activePill.className = 'active-pill';
+        activePill.textContent = '작업중';
+        titleGroup.appendChild(activePill);
+      }
+      const badge = document.createElement('span');
+      badge.className = 'auto-status-badge ' + status.class;
+      badge.textContent = status.text;
+      headerRow.appendChild(titleGroup);
+      headerRow.appendChild(badge);
+
+      const metaRow = document.createElement('div');
+      metaRow.className = 'card-meta-row';
+      metaRow.textContent = '시설물 ' + facilityCount + '개 · ' + (dateStr || '최근') +
+        (project.client ? ' · ' + project.client : '') +
+        (project.inspector ? ' (' + project.inspector + ')' : '');
+
+      const actionsRow = document.createElement('div');
+      actionsRow.className = 'card-actions-row';
+      actionsRow.addEventListener('click', (e)=> e.stopPropagation());
+
+      // [수정] 통합 버튼: 이름 및 정보 수정
+      const editBtn = document.createElement('button');
+      editBtn.className = 'card-btn';
+      editBtn.textContent = '수정';
+      editBtn.addEventListener('click', ()=> openProjectInfoModal(project));
+
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'card-btn';
+      copyBtn.textContent = '복사';
+      copyBtn.addEventListener('click', ()=> duplicateProject(project));
 
       const backupBtn = document.createElement('button');
-      backupBtn.textContent = '📦 백업';
-      backupBtn.title = '이 프로젝트의 모든 시설물을 ZIP 파일 하나로 내보냅니다';
+      backupBtn.className = 'card-btn';
+      backupBtn.textContent = '백업';
       backupBtn.addEventListener('click', ()=> exportProjectBackup(project));
 
-      const completeProjectBtn = document.createElement('button');
-      completeProjectBtn.textContent = project.status === '조사완료' ? '🏁 완료됨' : (project.status === '완료 후 수정됨' ? '🏁 재완료' : '🏁 조사완료');
-      completeProjectBtn.title = '프로젝트 전체 누락검수 후 조사완료 처리';
-      completeProjectBtn.addEventListener('click', ()=> openProjectCompletionGate(project));
-
       const delBtn = document.createElement('button');
-      delBtn.className = 'site-delete';
+      delBtn.className = 'card-btn danger';
       delBtn.textContent = '삭제';
       delBtn.addEventListener('click', ()=>{
         if(projects.length <= 1){ alert('프로젝트가 최소 1개는 있어야 합니다.'); return; }
-
         if(facilityCount > 0){
           const backedUp = project.backupStatus === '백업완료';
           const backupNote = backedUp
             ? '이 프로젝트는 백업이 완료된 상태입니다.'
-            : '⚠ 이 프로젝트는 아직 백업하지 않았습니다. 먼저 백업하려면 "취소"를 누른 뒤 "📦 백업"을 이용해주세요.';
+            : '⚠ 이 프로젝트는 아직 백업하지 않았습니다. 먼저 백업하려면 "취소"를 누른 뒤 "백업"을 이용해주세요.';
           const msg = '"' + project.name + '" 프로젝트에는 시설물이 ' + facilityCount + '개 있습니다.\n' + backupNote +
             '\n\n삭제하면 시설물은 완전히 사라지지 않고 휴지통으로 이동됩니다 ("⋯ → 휴지통"에서 나중에 복원 가능).\n\n그래도 삭제할까요?';
           if(!confirm(msg)) return;
@@ -5585,7 +5729,7 @@
         projects = projects.filter(p => p.id !== project.id);
         if(currentProjectId === project.id){
           const nextId = projects[0].id;
-          currentProjectId = null; // switchToProject의 '이미 같은 프로젝트' 가드를 피하기 위해 먼저 비워둠
+          currentProjectId = null;
           switchToProject(nextId);
         }
         renderProjectList();
@@ -5593,50 +5737,35 @@
         saveState();
       });
 
-      let formalizeBtn = null;
+      actionsRow.appendChild(editBtn);
+      actionsRow.appendChild(copyBtn);
       if(project.isTemp){
-        formalizeBtn = document.createElement('button');
-        formalizeBtn.textContent = '정식 전환';
-        formalizeBtn.title = '임시 표시를 해제하고 정식 프로젝트로 전환합니다';
+        const formalizeBtn = document.createElement('button');
+        formalizeBtn.className = 'card-btn';
+        formalizeBtn.textContent = '정식전환';
         formalizeBtn.addEventListener('click', ()=>{
-          const needsInfo = sites.filter(s => s.projectId === project.id && !s.facilityType).length;
           delete project.isTemp;
           renderProjectList();
           saveState();
-          if(needsInfo > 0){
-            alert('정식 프로젝트로 전환했습니다.\n아직 상세정보가 필요한 시설물이 ' + needsInfo + '개 있습니다.\n"시설물 목록"에서 "📝 정보 보완"으로 채워주세요.');
-          } else {
-            alert('정식 프로젝트로 전환했습니다.');
-          }
+          alert('정식 프로젝트로 전환했습니다.');
         });
+        actionsRow.appendChild(formalizeBtn);
       }
+      actionsRow.appendChild(backupBtn);
+      actionsRow.appendChild(delBtn);
 
-      const infoBtn = document.createElement('button');
-      infoBtn.textContent = '정보수정';
-      infoBtn.addEventListener('click', ()=> openProjectInfoModal(project));
+      card.appendChild(headerRow);
+      card.appendChild(metaRow);
+      card.appendChild(actionsRow);
 
-      const copyBtn = document.createElement('button');
-      copyBtn.textContent = '복사';
-      copyBtn.title = '이 프로젝트와 모든 시설물을 통째로 복사합니다';
-      copyBtn.addEventListener('click', ()=> duplicateProject(project));
-
-      actions.appendChild(openBtn);
-      actions.appendChild(renameBtn);
-      actions.appendChild(infoBtn);
-      actions.appendChild(copyBtn);
-      if(formalizeBtn) actions.appendChild(formalizeBtn);
-      actions.appendChild(completeProjectBtn);
-      actions.appendChild(backupBtn);
-      actions.appendChild(delBtn);
-      row.appendChild(info);
-      row.appendChild(actions);
-      projectListBody.appendChild(row);
+      projectListBody.appendChild(card);
     });
   }
 
   let editingProjectInfoId = null;
   function openProjectInfoModal(project){
     editingProjectInfoId = project.id;
+    if(piName) piName.value = project.name || '';
     piClient.value = project.client || '';
     piInspector.value = project.inspector || '';
     piStartDate.value = project.surveyStartDate || '';
@@ -5649,11 +5778,14 @@
   piSave.addEventListener('click', ()=>{
     const project = projects.find(p => p.id === editingProjectInfoId);
     if(project){
+      if(piName && piName.value.trim()) project.name = piName.value.trim();
       project.client = piClient.value.trim();
       project.inspector = piInspector.value.trim();
       project.surveyStartDate = piStartDate.value;
       project.surveyEndDate = piEndDate.value;
+      project.savedAt = new Date().toISOString();
       renderProjectList();
+      renderProjectHeader();
       saveState();
     }
     projectInfoModal.style.display = 'none';
