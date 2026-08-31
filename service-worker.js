@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-shot-v6-stability-optimization'; // pinch zoom 안정화 + saveState 저장 큐 + 야외용 라이트 UI 적용 버전.
+const CACHE_NAME = 'point-shot-v7-step1-baseline'; // PeachShot STEP 1 안정화 및 Baseline 버전
 // 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
 // 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
 // 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.
@@ -22,7 +22,6 @@ const VENDOR_ASSETS = [
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
   'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
   'https://unpkg.com/docx@8.0.4/build/index.js',
-  'https://cdn.jsdelivr.net/npm/docx@8.0.4/build/index.js',
   'https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js'
 ];
 
