@@ -4767,8 +4767,18 @@
     }
   }
 
+  // 전역 초대 캐시 (로그인/회원가입 폼 연동용)
+  window._pendingInviteInfo = null;
+
   async function verifyInvitationToken(rawToken){
-    if(!rawToken || !rawToken.trim()) return { ok:false, valid:false, status:'INVALID', reason:'초대 토큰이 비어있습니다.' };
+    if(!rawToken || !rawToken.trim()){
+      console.log('[PeachShot Invite Debug] verifyInvitationToken: 토큰 없음', {
+        hasToken: false, target_email: null, valid: false, status: 'NO_TOKEN',
+        current_auth_email: (supabaseSession && supabaseSession.user) ? supabaseSession.user.email : null,
+        accept_rpc_called: false, accept_rpc_result: null, pending_invite_deleted: false
+      });
+      return { ok:false, valid:false, status:'INVALID', reason:'초대 토큰이 비어있습니다.' };
+    }
     if(!supabaseClient) return { ok:false, valid:false, status:'INVALID', reason:'Supabase 연결 필요' };
 
     try{
@@ -4777,40 +4787,94 @@
       });
 
       if(error || !data){
+        console.log('[PeachShot Invite Debug] verifyInvitationToken: RPC 오류 또는 데이터 없음', {
+          hasToken: true, target_email: null, valid: false, status: 'ERROR',
+          current_auth_email: (supabaseSession && supabaseSession.user) ? supabaseSession.user.email : null,
+          accept_rpc_called: false, accept_rpc_result: null, pending_invite_deleted: true
+        });
+        try{ sessionStorage.removeItem(PENDING_INVITE_KEY); }catch(e){}
+        window._pendingInviteInfo = null;
         return { ok:false, valid:false, status:'INVALID', reason:'유효하지 않거나 만료된 초대 링크입니다.' };
       }
 
       const invData = Array.isArray(data) ? data[0] : (typeof data === 'object' && data !== null ? data : {});
-      const isValid = (invData.valid !== false) && (invData.status !== 'EXPIRED') && (invData.status !== 'REVOKED') && (invData.status !== 'USED');
+      const rawStatus = invData.status || (invData.valid === false ? 'INVALID' : 'VALID');
+      const isValid = (invData.valid === true || (invData.valid !== false && !['EXPIRED', 'REVOKED', 'USED', 'INVALID'].includes(rawStatus)));
+      const status = isValid ? 'VALID' : rawStatus;
+
+      console.log('[PeachShot Invite Debug] verifyInvitationToken 결과:', {
+        hasToken: true,
+        target_email: invData.target_email || null,
+        valid: isValid,
+        status: status,
+        current_auth_email: (supabaseSession && supabaseSession.user) ? supabaseSession.user.email : null,
+        accept_rpc_called: false,
+        accept_rpc_result: null,
+        pending_invite_deleted: !isValid
+      });
 
       if(!isValid){
+        let reason = '유효하지 않거나 만료된 초대 링크입니다.';
+        if(status === 'EXPIRED') reason = '만료된 초대 링크입니다. (유효기간 초과)';
+        else if(status === 'REVOKED') reason = '취소된 초대 링크입니다.';
+        else if(status === 'USED') reason = '이미 사용된 초대 링크입니다.';
+        
+        try{ sessionStorage.removeItem(PENDING_INVITE_KEY); }catch(e){}
+        window._pendingInviteInfo = null;
+
         return {
           ok: false,
           valid: false,
-          status: invData.status || 'INVALID',
-          reason: '유효하지 않거나 만료된 초대 링크입니다.'
+          status: status,
+          reason: reason
         };
       }
 
-      return {
+      const info = {
         ok: true,
         valid: true,
         status: 'VALID',
+        invitation_id: invData.invitation_id || invData.id,
         organization_id: invData.organization_id,
         organization_name: invData.organization_name || '조직',
         role: invData.role || 'Inspector',
-        target_email: invData.target_email || null,
+        target_email: invData.target_email ? invData.target_email.toLowerCase().trim() : null,
         expires_at: invData.expires_at || null
       };
+      window._pendingInviteInfo = info;
+      return info;
     }catch(e){
       console.warn('get_org_invitation RPC 호출 예외', e);
       return { ok:false, valid:false, status:'INVALID', reason:'유효하지 않거나 만료된 초대 링크입니다.' };
     }
   }
 
-  async function acceptOrganizationInvitation(rawToken){
+  async function acceptOrganizationInvitation(rawToken, expectedEmail = null){
     if(!supabaseClient || !supabaseSession) return { ok:false, reason:'로그인이 필요합니다.' };
-    if(!rawToken || !rawToken.trim()) return { ok:false, reason:'유효하지 않은 초대 토큰입니다.' };
+    if(!rawToken || !rawToken.trim()) return { ok:false, permanentFailure:true, reason:'유효하지 않은 초대 토큰입니다.' };
+
+    const currentAuthEmail = supabaseSession.user && supabaseSession.user.email ? supabaseSession.user.email.toLowerCase().trim() : '';
+
+    // 클라이언트 1차 방어: 기대 이메일과 현재 로그인 이메일 불일치 검증
+    if(expectedEmail && currentAuthEmail && expectedEmail.toLowerCase().trim() !== currentAuthEmail){
+      console.log('[PeachShot Invite Debug] acceptOrganizationInvitation: 이메일 불일치로 RPC 호출 차단', {
+        hasToken: true,
+        target_email: expectedEmail,
+        valid: false,
+        status: 'EMAIL_MISMATCH',
+        current_auth_email: currentAuthEmail,
+        accept_rpc_called: false,
+        accept_rpc_result: 'FAIL (Email Mismatch)',
+        pending_invite_deleted: true
+      });
+      try{ sessionStorage.removeItem(PENDING_INVITE_KEY); }catch(e){}
+      window._pendingInviteInfo = null;
+      return {
+        ok: false,
+        permanentFailure: true,
+        reason: `이 초대는 ${expectedEmail} 계정 전용입니다. (현재 로그인: ${currentAuthEmail})`
+      };
+    }
 
     try{
       const { data, error } = await supabaseClient.rpc('accept_org_invitation', {
@@ -4820,12 +4884,32 @@
       if(error){
         const msg = (error.message || '').toLowerCase();
         let reason = error.message || '초대 수락 실패';
+        let permanentFailure = false;
         if(msg.includes('email') || msg.includes('mismatch') || msg.includes('이메일')){
           reason = '이 초대는 현재 로그인한 이메일 주소로 사용할 수 없습니다.';
-        } else if(msg.includes('expire') || msg.includes('invalid') || msg.includes('used') || msg.includes('revoked') || msg.includes('만료') || msg.includes('취소')){
+          permanentFailure = true;
+        } else if(msg.includes('expire') || msg.includes('invalid') || msg.includes('used') || msg.includes('revoked') || msg.includes('만료') || msg.includes('취소') || msg.includes('not found') || msg.includes('찾을 수 없')){
           reason = '유효하지 않거나 만료된 초대 링크입니다.';
+          permanentFailure = true;
         }
-        return { ok:false, reason };
+
+        console.log('[PeachShot Invite Debug] accept_org_invitation RPC 실패:', {
+          hasToken: true,
+          target_email: expectedEmail,
+          valid: false,
+          status: 'RPC_ERROR',
+          current_auth_email: currentAuthEmail,
+          accept_rpc_called: true,
+          accept_rpc_result: 'FAIL: ' + reason,
+          pending_invite_deleted: permanentFailure
+        });
+
+        if(permanentFailure){
+          try{ sessionStorage.removeItem(PENDING_INVITE_KEY); }catch(e){}
+          window._pendingInviteInfo = null;
+        }
+
+        return { ok:false, reason, permanentFailure };
       }
 
       const resData = Array.isArray(data) ? data[0] : (typeof data === 'object' && data !== null ? data : {});
@@ -4833,6 +4917,20 @@
       const orgName = resData.organization_name;
       const role = resData.role || 'Inspector';
       const memberId = resData.member_id;
+
+      console.log('[PeachShot Invite Debug] accept_org_invitation RPC 성공:', {
+        hasToken: true,
+        target_email: expectedEmail,
+        valid: true,
+        status: 'ACCEPTED',
+        current_auth_email: currentAuthEmail,
+        accept_rpc_called: true,
+        accept_rpc_result: 'SUCCESS',
+        pending_invite_deleted: true
+      });
+
+      try{ sessionStorage.removeItem(PENDING_INVITE_KEY); }catch(e){}
+      window._pendingInviteInfo = null;
 
       if(orgId){
         setActiveOrganization(orgId);
@@ -4849,7 +4947,7 @@
       };
     }catch(e){
       console.warn('accept_org_invitation RPC 호출 예외', e);
-      return { ok:false, reason: e.message || '가입 처리 중 오류' };
+      return { ok:false, reason: e.message || '가입 처리 중 오류', permanentFailure:false };
     }
   }
 
@@ -4926,8 +5024,19 @@
       if(token){
         sessionStorage.setItem(PENDING_INVITE_KEY, token.trim());
         if(window.history && window.history.replaceState){
-          const cleanUrl = window.location.pathname.replace(/\/invite\/[^\/]+/, '') || './';
-          window.history.replaceState(null, '', cleanUrl);
+          try{
+            const currentUrl = new URL(window.location.href);
+            currentUrl.searchParams.delete('invite');
+            currentUrl.searchParams.delete('token');
+            if(currentUrl.hash && currentUrl.hash.includes('invite')){
+              currentUrl.hash = currentUrl.hash.replace(/#?\/invite\/[^\/]+/, '').replace(/invite=[^&]+/, '');
+            }
+            const cleanUrl = currentUrl.pathname + (currentUrl.searchParams.toString() ? '?' + currentUrl.searchParams.toString() : '') + (currentUrl.hash || '');
+            window.history.replaceState(null, '', cleanUrl);
+          }catch(e){
+            const cleanUrl = window.location.pathname.replace(/\/invite\/[^\/]+/, '') || './';
+            window.history.replaceState(null, '', cleanUrl);
+          }
         }
       }
     }catch(e){
@@ -4935,37 +5044,77 @@
     }
   }
 
+  let isProcessingPendingInvite = false;
+
   async function checkAndProcessPendingInvite(){
+    if(isProcessingPendingInvite) return;
     let pendingToken = null;
     try{ pendingToken = sessionStorage.getItem(PENDING_INVITE_KEY); }catch(e){}
-    if(!pendingToken) return;
+    if(!pendingToken || !pendingToken.trim()) return;
 
-    if(!supabaseClient || !supabaseSession){
-      try{
-        const check = await verifyInvitationToken(pendingToken);
-        if(check && check.valid){
-          showInvitationWelcomeModal(check.organization_name, check.role, check.expires_at, check.target_email);
-        } else {
-          alert(check.reason || '유효하지 않거나 만료된 초대 링크입니다.');
-          sessionStorage.removeItem(PENDING_INVITE_KEY);
-        }
-      }catch(e){ console.warn('초대 사전 확인 오류', e); }
-      return;
-    }
-
+    isProcessingPendingInvite = true;
     try{
-      const result = await acceptOrganizationInvitation(pendingToken);
-      sessionStorage.removeItem(PENDING_INVITE_KEY);
+      // 1단계: 항상 get_org_invitation으로 초대 유효성 사전 검증
+      const check = await verifyInvitationToken(pendingToken);
+      if(!check || !check.valid){
+        try{ sessionStorage.removeItem(PENDING_INVITE_KEY); }catch(e){}
+        window._pendingInviteInfo = null;
+        alert(check ? check.reason : '유효하지 않거나 만료된 초대 링크입니다.');
+        renderCloudSyncBody();
+        return;
+      }
+
+      // 2단계: 미로그인 상태인 경우 환영 배너 표출 및 로그인 폼 안내
+      if(!supabaseClient || !supabaseSession){
+        showInvitationWelcomeModal(check.organization_name, check.role, check.expires_at, check.target_email);
+        return;
+      }
+
+      // 3단계: 로그인 완료 상태인 경우 대상 이메일 일치 검증
+      const currentAuthEmail = (supabaseSession.user && supabaseSession.user.email) ? supabaseSession.user.email.toLowerCase().trim() : '';
+      if(check.target_email && currentAuthEmail && check.target_email.toLowerCase().trim() !== currentAuthEmail){
+        console.log('[PeachShot Invite Debug] checkAndProcessPendingInvite: 로그인 이메일 불일치로 처리 중단', {
+          hasToken: true,
+          target_email: check.target_email,
+          valid: false,
+          status: 'EMAIL_MISMATCH',
+          current_auth_email: currentAuthEmail,
+          accept_rpc_called: false,
+          accept_rpc_result: 'FAIL (Email Mismatch)',
+          pending_invite_deleted: true
+        });
+        try{ sessionStorage.removeItem(PENDING_INVITE_KEY); }catch(e){}
+        window._pendingInviteInfo = null;
+        alert(`⚠️ 초대받은 이메일(${check.target_email})과 현재 로그인된 계정(${currentAuthEmail})이 일치하지 않습니다.\n초대받은 이메일 계정으로 다시 로그인해주세요.`);
+        renderCloudSyncBody();
+        return;
+      }
+
+      // 4단계: 서버 accept_org_invitation RPC 호출
+      const result = await acceptOrganizationInvitation(pendingToken, check.target_email);
       if(result.ok){
-        alert(`🎉 ${result.organization_name || '조직'}에 성공적으로 가입되었습니다!\n역할: ${result.role || 'Inspector'}`);
+        try{ sessionStorage.removeItem(PENDING_INVITE_KEY); }catch(e){}
+        window._pendingInviteInfo = null;
+        if(result.organization_id){
+          setActiveOrganization(result.organization_id);
+        }
         await loadMyOrganizations();
+        await loadState();
         renderCloudSyncBody();
         renderProjectList();
+        alert(`🎉 ${result.organization_name || '조직'}에 성공적으로 가입되었습니다!\n역할: ${result.role || 'Inspector'}`);
       } else {
+        if(result.permanentFailure || (result.reason && (result.reason.includes('이메일') || result.reason.includes('만료') || result.reason.includes('취소') || result.reason.includes('유효하지')))){
+          try{ sessionStorage.removeItem(PENDING_INVITE_KEY); }catch(e){}
+          window._pendingInviteInfo = null;
+        }
         alert('초대 가입 안내: ' + (result.reason || '초대 수락 실패'));
+        renderCloudSyncBody();
       }
     }catch(e){
-      console.warn('초대 가입 처리 실패', e);
+      console.warn('초대 가입 처리 오류', e);
+    }finally{
+      isProcessingPendingInvite = false;
     }
   }
 
@@ -4973,9 +5122,10 @@
     btnCloudSync.click();
     setTimeout(()=>{
       const banner = document.createElement('div');
+      banner.id = 'psInviteWelcomeBanner';
       banner.style.cssText = 'background:rgba(255,107,53,0.12); border:1px solid var(--accent); border-radius:8px; padding:12px; margin-bottom:12px;';
-      const expText = expiresAt ? `<div style="font-size:11px; color:var(--sub); margin-top:2px;">만료 일시: ${new Date(expiresAt).toLocaleString('ko-KR')}</div>` : '';
-      const emailText = targetEmail ? `<div style="font-size:11px; color:var(--sub);">초대 대상 이메일: <strong>${escapeHtml(targetEmail)}</strong></div>` : '';
+      const expText = expiresAt ? `<div style="font-size:11px; color:var(--sub); margin-top:2px;">만료 일시: ${escapeHtml(new Date(expiresAt).toLocaleString('ko-KR'))}</div>` : '';
+      const emailText = targetEmail ? `<div style="font-size:12px; color:var(--accent); font-weight:600; margin-top:3px;">초대 대상 이메일: <strong>${escapeHtml(targetEmail)}</strong></div>` : '';
       banner.innerHTML = `
         <div style="font-weight:700; color:var(--accent); font-size:14px; margin-bottom:4px;">✉️ 팀 초대 링크 확인 완료</div>
         <div style="font-size:13px; line-height:1.5;">
@@ -4983,12 +5133,18 @@
           ${emailText}
           ${expText}
           <div style="margin-top:8px; font-weight:600; color:var(--text); background:var(--panel); padding:8px; border-radius:4px; border:1px solid var(--line);">
-            초대 링크를 확인했습니다.<br>초대를 수락하려면 로그인하세요.
+            ${targetEmail ? `초대받은 이메일(<strong>${escapeHtml(targetEmail)}</strong>)로 로그인 또는 회원가입하세요.` : '초대 링크를 확인했습니다.<br>초대를 수락하려면 로그인하세요.'}
           </div>
         </div>
       `;
-      if(cloudSyncBody && cloudSyncBody.firstChild){
-        cloudSyncBody.insertBefore(banner, cloudSyncBody.firstChild);
+      if(cloudSyncBody){
+        const prevBanner = document.getElementById('psInviteWelcomeBanner');
+        if(prevBanner) prevBanner.remove();
+        if(cloudSyncBody.firstChild){
+          cloudSyncBody.insertBefore(banner, cloudSyncBody.firstChild);
+        } else {
+          cloudSyncBody.appendChild(banner);
+        }
       }
     }, 100);
   }
@@ -5170,11 +5326,18 @@
       const emailInput = document.createElement('input');
       emailInput.type = 'email'; emailInput.placeholder = '이메일 주소 (예: user@example.com)';
       emailInput.style.cssText = 'width:100%; box-sizing:border-box; margin:10px 0 8px; padding:9px 10px; background:var(--panel-2); border:1px solid var(--line); border-radius:6px; color:var(--text); font-family:inherit; font-size:13px;';
+      
+      // 초대 대상 이메일이 지정된 경우 해당 이메일 자동 채우기
+      if(window._pendingInviteInfo && window._pendingInviteInfo.target_email){
+        emailInput.value = window._pendingInviteInfo.target_email;
+      }
+
       const pwInput = document.createElement('input');
       pwInput.type = 'password'; pwInput.placeholder = '비밀번호 (6자 이상)';
       pwInput.style.cssText = emailInput.style.cssText;
       const statusMsg = document.createElement('div');
       statusMsg.className = 'hint';
+      statusMsg.style.cssText = 'margin-top:6px; font-size:12px; line-height:1.4;';
       const row = document.createElement('div');
       row.style.cssText = 'display:flex; gap:8px; margin-top:4px;';
       const signInBtn = document.createElement('button');
@@ -5185,17 +5348,39 @@
       signInBtn.addEventListener('click', async ()=>{
         if(!supabaseClient) initSupabaseClient();
         if(!supabaseClient){ alert('인터넷 연결을 확인해주세요.'); return; }
-        if(!emailInput.value.trim() || !pwInput.value){ alert('이메일과 비밀번호를 입력해주세요.'); return; }
+        const inputEmail = emailInput.value.trim().toLowerCase();
+        if(!inputEmail || !pwInput.value){ alert('이메일과 비밀번호를 입력해주세요.'); return; }
+
+        if(window._pendingInviteInfo && window._pendingInviteInfo.target_email){
+          const expected = window._pendingInviteInfo.target_email.toLowerCase().trim();
+          if(inputEmail !== expected){
+            statusMsg.innerHTML = `<span style="color:#ff4d4f; font-weight:600;">⚠️ 초대받은 이메일(${escapeHtml(expected)})과 다른 이메일입니다.</span>`;
+            alert(`⚠️ 초대받은 이메일(${expected})과 다른 이메일입니다.\n초대받은 계정으로 로그인해주세요.`);
+            return;
+          }
+        }
+
         statusMsg.textContent = '로그인 중…';
-        const { error } = await supabaseClient.auth.signInWithPassword({ email: emailInput.value.trim(), password: pwInput.value });
+        const { error } = await supabaseClient.auth.signInWithPassword({ email: inputEmail, password: pwInput.value });
         statusMsg.textContent = error ? ('로그인 실패: ' + error.message) : '';
       });
       signUpBtn.addEventListener('click', async ()=>{
         if(!supabaseClient) initSupabaseClient();
         if(!supabaseClient){ alert('인터넷 연결을 확인해주세요.'); return; }
-        if(!emailInput.value.trim() || !pwInput.value){ alert('이메일과 비밀번호를 입력해주세요.'); return; }
+        const inputEmail = emailInput.value.trim().toLowerCase();
+        if(!inputEmail || !pwInput.value){ alert('이메일과 비밀번호를 입력해주세요.'); return; }
+
+        if(window._pendingInviteInfo && window._pendingInviteInfo.target_email){
+          const expected = window._pendingInviteInfo.target_email.toLowerCase().trim();
+          if(inputEmail !== expected){
+            statusMsg.innerHTML = `<span style="color:#ff4d4f; font-weight:600;">⚠️ 초대받은 이메일(${escapeHtml(expected)})과 다른 이메일입니다.</span>`;
+            alert(`⚠️ 초대받은 이메일(${expected})과 다른 이메일입니다.\n초대받은 이메일 계정으로 회원가입을 진행해주세요.`);
+            return;
+          }
+        }
+
         statusMsg.textContent = '가입 처리 중…';
-        const { error } = await supabaseClient.auth.signUp({ email: emailInput.value.trim(), password: pwInput.value });
+        const { error } = await supabaseClient.auth.signUp({ email: inputEmail, password: pwInput.value });
         statusMsg.textContent = error ? ('가입 실패: ' + error.message) : '가입 완료! 자동 로그인되거나 인증 메일이 발송되었습니다.';
       });
       row.appendChild(signInBtn); row.appendChild(signUpBtn);
