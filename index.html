@@ -7138,21 +7138,23 @@
   // 로컬 데이터를 최우선으로 보호하며 Entity 단위 동기화 및 충돌 감지 지원
   // ================================================================
   const ENTITY_SYNC_QUEUE_KEY = 'point-shot-entity-sync-queue';
-  const CONFLICT_RECORDS_KEY = 'point-shot-conflict-records';
+  // CONFLICT_RECORDS_KEY는 상단에서 이미 선언됨
   const SYNC_CURSOR_KEY = 'point-shot-sync-cursor';
   const PEACHSHOT_SYNC_CHANNEL_NAME = 'peachshot_sync_channel';
 
-  // Multi-tab 동기화 알림용 BroadcastChannel (미지원 환경 안전 처리)
-  let syncBroadcastChannel = null;
-  if(typeof window !== 'undefined' && window.BroadcastChannel){
+  // Multi-tab 동기화 알림용 BroadcastChannel (상단 선언 재사용 및 리스너 등록)
+  if(!syncBroadcastChannel && typeof window !== 'undefined' && window.BroadcastChannel){
     try{
       syncBroadcastChannel = new BroadcastChannel(PEACHSHOT_SYNC_CHANNEL_NAME);
-      syncBroadcastChannel.onmessage = (msg)=>{
+    }catch(e){}
+  }
+  if(syncBroadcastChannel){
+    try{
+      syncBroadcastChannel.addEventListener('message', (msg)=>{
         if(msg && msg.data && msg.data.type === 'SYNC_COMPLETED'){
-          // 타 탭에서 동기화 완료 알림 수신 시 상태 갱신
           updateSyncStatusIndicator();
         }
-      };
+      });
     }catch(e){}
   }
 
