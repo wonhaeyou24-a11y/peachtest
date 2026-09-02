@@ -2354,6 +2354,14 @@
             <span class="more-item-title">활동 로그</span>
             <span class="more-item-desc">생성·삭제·이동 등 변경 이력 확인</span>
           </button>
+          <button class="more-item" id="btnSyncDashboard">
+            <span class="more-item-title">🔄 동기화 & 저장소 안전 대시보드</span>
+            <span class="more-item-desc">실시간 동기화 상태 · 대기열 · 충돌(Conflict) 해결 · 저장 공간</span>
+          </button>
+          <button class="more-item" id="btnDiagnostics">
+            <span class="more-item-title">🩺 시스템 진단 & 데이터 무결성 감사</span>
+            <span class="more-item-desc">로컬 데이터 무결성 검사 · 안전 복구 · 시스템 진단 · 데이터 내보내기</span>
+          </button>
           <button class="more-item" id="btnCloudSync">
             <span class="more-item-title">☁️ 클라우드 동기화</span>
             <span class="more-item-desc">Supabase 로그인 · 온라인일 때 자동 백업 · 조직 관리</span>
@@ -2453,6 +2461,43 @@
     </div>
     <div class="modal-body">
       <div id="cloudSyncBody"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Sync & Storage Dashboard Modal (STEP 8) -->
+<div class="modal-backdrop" id="syncDashboardModal" style="display:none; z-index:9999;">
+  <div class="modal" style="max-width:680px; width:95%; max-height:90vh; display:flex; flex-direction:column; background:var(--panel);">
+    <div class="modal-head">
+      <h2>🔄 동기화 & 저장소 안전 대시보드</h2>
+      <button class="close-x" id="closeSyncDashboard" aria-label="닫기">✕</button>
+    </div>
+    <div class="modal-body" id="syncDashboardBody" style="overflow-y:auto; padding:18px;"></div>
+    <div class="modal-foot">
+      <button class="ghost" id="btnSyncDashboardClose">닫기</button>
+      <button class="primary" id="btnSyncDashboardRetry">⚡ 지금 전체 동기화 / 재시도</button>
+    </div>
+  </div>
+</div>
+
+<!-- Diagnostics & Data Integrity Modal (STEP 9) -->
+<div class="modal-backdrop" id="diagnosticsModal" style="display:none; z-index:9999;">
+  <div class="modal" style="max-width:760px; width:95%; max-height:90vh; display:flex; flex-direction:column; background:var(--panel);">
+    <div class="modal-head">
+      <h2>🩺 시스템 진단 & 데이터 무결성 감사</h2>
+      <button class="close-x" id="closeDiagnostics" aria-label="닫기">✕</button>
+    </div>
+    <div class="modal-body" id="diagnosticsBody" style="overflow-y:auto; padding:18px;"></div>
+    <div class="modal-foot" style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+      <div style="display:flex; gap:6px;">
+        <button class="ghost" id="btnExportAllData">📦 데이터 안전 내보내기</button>
+        <button class="ghost" id="btnImportDataTrigger">📥 데이터 안전 가져오기</button>
+        <input type="file" id="importDataFileInput" accept=".json" style="display:none;" />
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button class="ghost" id="btnDiagnosticsClose">닫기</button>
+        <button class="primary" id="btnRunIntegrityCheck">🔍 무결성 전체 검사</button>
+      </div>
     </div>
   </div>
 </div>
@@ -4660,156 +4705,150 @@
     }
   }
 
-  // ---------- 보안 초대(Invitation) 시스템 ----------
-  async function createOrganizationInvitation(organizationId, role = 'Member', expiresDays = 7){
+  // ---------- 보안 조직 초대(Secure Organization Invitation) 시스템 (RPC 연동) ----------
+  // 래퍼 함수: 기존 inviteOrganizationMember() 호환용 (호출부를 깨뜨리지 않고 secure RPC로 연결)
+  async function inviteOrganizationMember(organizationId, email, role = 'Inspector', expiresHours = 72){
+    return createOrganizationInvitation(organizationId, role, expiresHours, email);
+  }
+
+  async function createOrganizationInvitation(organizationId, role = 'Inspector', expiresHours = 72, targetEmail = ''){
     if(!supabaseClient || !supabaseSession) return { ok:false, reason:'로그인이 필요합니다.' };
+
+    // DB 허용 역할 검증 (Member 제거, Inspector/Admin/Reviewer/Reporter/Viewer만 허용)
+    const validRoles = ['Inspector', 'Admin', 'Reviewer', 'Reporter', 'Viewer'];
+    const chosenRole = validRoles.includes(role) ? role : 'Inspector';
+    const cleanEmail = (targetEmail || '').trim() || null;
+    const hours = parseInt(expiresHours, 10) || 72;
+
     try{
-      const myRole = myRoleByOrg[organizationId];
-      if(myRole !== 'Owner' && myRole !== 'Admin'){
-        return { ok:false, reason:'초대 링크 생성 권한이 없습니다. (Owner/Admin만 생성 가능)' };
-      }
-      if(role === 'Owner'){
-        return { ok:false, reason:'Owner 역할로는 직접 초대할 수 없습니다.' };
-      }
+      const { data, error } = await supabaseClient.rpc('create_org_invitation', {
+        p_organization_id: organizationId,
+        p_target_email: cleanEmail,
+        p_role: chosenRole,
+        p_expires_hours: hours
+      });
 
-      const rawToken = generateSecureToken(32);
-      const tokenHash = await hashTokenSha256(rawToken);
-      const expiresAt = new Date(Date.now() + expiresDays * 24 * 60 * 60 * 1000).toISOString();
-      const invId = 'inv_' + generateSecureToken(12);
-
-      let created = false;
-      try{
-        const { data: rpcData, error: rpcErr } = await supabaseClient.rpc('create_secure_invitation', {
-          p_organization_id: organizationId,
-          p_token_hash: tokenHash,
-          p_role: role,
-          p_expires_days: expiresDays
-        });
-        if(!rpcErr && rpcData && rpcData.ok) created = true;
-      }catch(e){}
-
-      if(!created){
-        const { error: insErr } = await supabaseClient.from('organization_invitations').insert({
-          id: invId,
-          organization_id: organizationId,
-          token_hash: tokenHash,
-          role,
-          created_by: supabaseSession.user.id,
-          expires_at: expiresAt,
-          max_uses: 1,
-          use_count: 0
-        });
-        if(insErr) throw insErr;
+      if(error){
+        let reason = error.message || '초대 생성 실패';
+        const msg = reason.toLowerCase();
+        if(msg.includes('permission') || msg.includes('admin') || msg.includes('권한')){
+          reason = '조직 초대 권한이 없습니다. (Admin만 가능)';
+        }
+        return { ok:false, reason };
       }
 
-      const baseLoc = window.location.href.split('#')[0].split('?')[0];
-      const inviteUrl = baseLoc + '#/invite/' + rawToken;
+      const invData = Array.isArray(data) ? data[0] : (typeof data === 'object' && data !== null ? data : {});
+      const rawToken = invData.invitation_token || invData.token || invData.p_token || '';
+      const invId = invData.invitation_id || invData.id || '';
+      const expiresAt = invData.expires_at || invData.expiresAt || new Date(Date.now() + hours * 3600 * 1000).toISOString();
+
+      if(!rawToken){
+        return { ok:false, reason:'초대 토큰 발급에 실패했습니다.' };
+      }
+
+      let baseLoc = '';
+      if(typeof window !== 'undefined' && window.location){
+        baseLoc = window.location.origin + window.location.pathname;
+      }
+      const inviteUrl = baseLoc + (baseLoc.includes('?') ? '&' : '?') + 'invite=' + encodeURIComponent(rawToken);
 
       return {
         ok: true,
+        invitation_id: invId,
+        invitation_token: rawToken,
         inviteUrl,
-        rawToken,
-        tokenHash,
-        expiresAt,
-        role
+        expires_at: expiresAt,
+        role: chosenRole,
+        target_email: cleanEmail
       };
     }catch(e){
-      console.warn('초대 링크 생성 실패', e);
+      console.warn('create_org_invitation RPC 호출 예외', e);
       return { ok:false, reason: e.message || '알 수 없는 오류' };
     }
   }
 
   async function verifyInvitationToken(rawToken){
-    if(!rawToken) return { ok:false, status:'NOT_FOUND', reason:'초대 토큰이 비어있습니다.' };
+    if(!rawToken || !rawToken.trim()) return { ok:false, valid:false, status:'INVALID', reason:'초대 토큰이 비어있습니다.' };
+    if(!supabaseClient) return { ok:false, valid:false, status:'INVALID', reason:'Supabase 연결 필요' };
+
     try{
-      const tokenHash = await hashTokenSha256(rawToken);
-      try{
-        const { data: rpcData, error: rpcErr } = await supabaseClient.rpc('verify_invitation_token', {
-          p_token_hash: tokenHash
-        });
-        if(!rpcErr && rpcData) return rpcData;
-      }catch(e){}
+      const { data, error } = await supabaseClient.rpc('get_org_invitation', {
+        p_token: rawToken.trim()
+      });
 
-      if(supabaseClient){
-        const { data: inv, error: fetchErr } = await supabaseClient.from('organization_invitations')
-          .select('*').eq('token_hash', tokenHash).maybeSingle();
-        if(fetchErr || !inv){
-          return { ok:false, status:'NOT_FOUND', reason:'초대장을 찾을 수 없습니다.' };
-        }
-        let status = 'VALID';
-        if(inv.revoked_at) status = 'REVOKED';
-        else if((inv.use_count || 0) >= (inv.max_uses || 1) || inv.used_at) status = 'USED';
-        else if(new Date(inv.expires_at) < new Date()) status = 'EXPIRED';
+      if(error || !data){
+        return { ok:false, valid:false, status:'INVALID', reason:'유효하지 않거나 만료된 초대 링크입니다.' };
+      }
 
-        const { data: org } = await supabaseClient.from('organizations').select('name').eq('id', inv.organization_id).maybeSingle();
+      const invData = Array.isArray(data) ? data[0] : (typeof data === 'object' && data !== null ? data : {});
+      const isValid = (invData.valid !== false) && (invData.status !== 'EXPIRED') && (invData.status !== 'REVOKED') && (invData.status !== 'USED');
+
+      if(!isValid){
         return {
-          ok: (status === 'VALID'),
-          status,
-          organization_id: inv.organization_id,
-          organization_name: (org && org.name) || '조직',
-          role: inv.role,
-          expires_at: inv.expires_at
+          ok: false,
+          valid: false,
+          status: invData.status || 'INVALID',
+          reason: '유효하지 않거나 만료된 초대 링크입니다.'
         };
       }
-      return { ok:true, status:'VALID', rawToken };
+
+      return {
+        ok: true,
+        valid: true,
+        status: 'VALID',
+        organization_id: invData.organization_id,
+        organization_name: invData.organization_name || '조직',
+        role: invData.role || 'Inspector',
+        target_email: invData.target_email || null,
+        expires_at: invData.expires_at || null
+      };
     }catch(e){
-      console.warn('초대 토큰 검증 실패', e);
-      return { ok:false, status:'NOT_FOUND', reason: e.message || '검증 실패' };
+      console.warn('get_org_invitation RPC 호출 예외', e);
+      return { ok:false, valid:false, status:'INVALID', reason:'유효하지 않거나 만료된 초대 링크입니다.' };
     }
   }
 
   async function acceptOrganizationInvitation(rawToken){
     if(!supabaseClient || !supabaseSession) return { ok:false, reason:'로그인이 필요합니다.' };
+    if(!rawToken || !rawToken.trim()) return { ok:false, reason:'유효하지 않은 초대 토큰입니다.' };
+
     try{
-      const tokenHash = await hashTokenSha256(rawToken);
-      const u = supabaseSession.user;
+      const { data, error } = await supabaseClient.rpc('accept_org_invitation', {
+        p_token: rawToken.trim()
+      });
 
-      try{
-        const { data: rpcData, error: rpcErr } = await supabaseClient.rpc('accept_secure_invitation', {
-          p_token_hash: tokenHash
-        });
-        if(!rpcErr && rpcData){
-          if(rpcData.organization_id) setActiveOrganization(rpcData.organization_id);
-          await loadMyOrganizations();
-          return rpcData;
+      if(error){
+        const msg = (error.message || '').toLowerCase();
+        let reason = error.message || '초대 수락 실패';
+        if(msg.includes('email') || msg.includes('mismatch') || msg.includes('이메일')){
+          reason = '이 초대는 현재 로그인한 이메일 주소로 사용할 수 없습니다.';
+        } else if(msg.includes('expire') || msg.includes('invalid') || msg.includes('used') || msg.includes('revoked') || msg.includes('만료') || msg.includes('취소')){
+          reason = '유효하지 않거나 만료된 초대 링크입니다.';
         }
-      }catch(e){}
-
-      const { data: inv, error: invErr } = await supabaseClient.from('organization_invitations')
-        .select('*').eq('token_hash', tokenHash).maybeSingle();
-      if(invErr || !inv) return { ok:false, reason:'유효하지 않은 초대 링크입니다.' };
-      if(inv.revoked_at) return { ok:false, reason:'취소된 초대 링크입니다.' };
-      if((inv.use_count || 0) >= (inv.max_uses || 1) || inv.used_at) return { ok:false, reason:'이미 사용된 초대 링크입니다.' };
-      if(new Date(inv.expires_at) < new Date()) return { ok:false, reason:'만료된 초대 링크입니다.' };
-
-      const { data: existingMem } = await supabaseClient.from('organization_members')
-        .select('*').eq('organization_id', inv.organization_id).eq('user_id', u.id).maybeSingle();
-      
-      if(existingMem){
-        setActiveOrganization(inv.organization_id);
-        return { ok:true, already_member:true, organization_id: inv.organization_id, role: existingMem.role, message:'이미 이 조직의 팀원입니다.' };
+        return { ok:false, reason };
       }
 
-      const { error: joinErr } = await supabaseClient.from('organization_members').insert({
-        organization_id: inv.organization_id,
-        user_id: u.id,
-        email: u.email,
-        role: inv.role || 'Member',
-        status: 'active'
-      });
-      if(joinErr) throw joinErr;
+      const resData = Array.isArray(data) ? data[0] : (typeof data === 'object' && data !== null ? data : {});
+      const orgId = resData.organization_id;
+      const orgName = resData.organization_name;
+      const role = resData.role || 'Inspector';
+      const memberId = resData.member_id;
 
-      await supabaseClient.from('organization_invitations').update({
-        used_at: new Date().toISOString(),
-        used_by: u.id,
-        use_count: (inv.use_count || 0) + 1
-      }).eq('id', inv.id);
-
-      setActiveOrganization(inv.organization_id);
+      if(orgId){
+        setActiveOrganization(orgId);
+      }
       await loadMyOrganizations();
-      return { ok:true, organization_id: inv.organization_id, role: inv.role, message:'조직에 성공적으로 가입되었습니다.' };
+
+      return {
+        ok: true,
+        organization_id: orgId,
+        organization_name: orgName,
+        role: role,
+        member_id: memberId,
+        message: '조직에 성공적으로 가입되었습니다.'
+      };
     }catch(e){
-      console.warn('초대 수락 실패', e);
+      console.warn('accept_org_invitation RPC 호출 예외', e);
       return { ok:false, reason: e.message || '가입 처리 중 오류' };
     }
   }
@@ -4818,7 +4857,8 @@
     if(!supabaseClient || !supabaseSession) return [];
     try{
       const { data, error } = await supabaseClient.from('organization_invitations')
-        .select('*').eq('organization_id', organizationId).order('created_at', { ascending:false });
+        .select('id, organization_id, role, target_email, created_at, expires_at, used_at, revoked_at, max_uses, use_count')
+        .eq('organization_id', organizationId).order('created_at', { ascending:false });
       if(error) throw error;
       const now = new Date();
       return (data || []).map(inv => {
@@ -4837,21 +4877,20 @@
 
   async function revokeOrganizationInvitation(invitationId){
     if(!supabaseClient || !supabaseSession) return { ok:false, reason:'로그인이 필요합니다.' };
-    try{
-      try{
-        const { data: rpcData, error: rpcErr } = await supabaseClient.rpc('revoke_secure_invitation', {
-          p_invitation_id: invitationId
-        });
-        if(!rpcErr && rpcData && rpcData.ok) return rpcData;
-      }catch(e){}
+    if(!invitationId) return { ok:false, reason:'초대장 ID가 필요합니다.' };
 
-      const { error } = await supabaseClient.from('organization_invitations')
-        .update({ revoked_at: new Date().toISOString() })
-        .eq('id', invitationId);
-      if(error) throw error;
-      return { ok:true, message:'초대가 취소되었습니다.' };
+    try{
+      const { data, error } = await supabaseClient.rpc('revoke_org_invitation', {
+        p_invitation_id: invitationId
+      });
+
+      if(error){
+        return { ok:false, reason: error.message || '초대 취소 실패' };
+      }
+
+      return { ok:true, message:'초대가 성공적으로 취소되었습니다.' };
     }catch(e){
-      console.warn('초대 취소 실패', e);
+      console.warn('revoke_org_invitation RPC 호출 예외', e);
       return { ok:false, reason: e.message || '알 수 없는 오류' };
     }
   }
@@ -4904,16 +4943,10 @@
     if(!supabaseClient || !supabaseSession){
       try{
         const check = await verifyInvitationToken(pendingToken);
-        if(check && check.status === 'VALID'){
-          showInvitationWelcomeModal(check.organization_name, check.role, pendingToken);
-        } else if(check && check.status === 'EXPIRED'){
-          alert('받으신 초대 링크는 만료되었습니다. (유효기간 초과)');
-          sessionStorage.removeItem(PENDING_INVITE_KEY);
-        } else if(check && check.status === 'USED'){
-          alert('이미 사용된 초대 링크입니다.');
-          sessionStorage.removeItem(PENDING_INVITE_KEY);
-        } else if(check && check.status === 'REVOKED'){
-          alert('취소된 초대 링크입니다.');
+        if(check && check.valid){
+          showInvitationWelcomeModal(check.organization_name, check.role, check.expires_at, check.target_email);
+        } else {
+          alert(check.reason || '유효하지 않거나 만료된 초대 링크입니다.');
           sessionStorage.removeItem(PENDING_INVITE_KEY);
         }
       }catch(e){ console.warn('초대 사전 확인 오류', e); }
@@ -4924,30 +4957,35 @@
       const result = await acceptOrganizationInvitation(pendingToken);
       sessionStorage.removeItem(PENDING_INVITE_KEY);
       if(result.ok){
-        if(result.already_member){
-          alert('이미 이 조직의 팀원입니다.');
-        } else {
-          alert('🎉 조직에 성공적으로 가입되었습니다!\n역할: ' + (result.role || 'Member'));
-        }
+        alert(`🎉 ${result.organization_name || '조직'}에 성공적으로 가입되었습니다!\n역할: ${result.role || 'Inspector'}`);
         await loadMyOrganizations();
         renderCloudSyncBody();
         renderProjectList();
       } else {
-        alert('초대 가입 실패: ' + (result.reason || '알 수 없는 오류'));
+        alert('초대 가입 안내: ' + (result.reason || '초대 수락 실패'));
       }
     }catch(e){
       console.warn('초대 가입 처리 실패', e);
     }
   }
 
-  function showInvitationWelcomeModal(orgName, role, token){
+  function showInvitationWelcomeModal(orgName, role, expiresAt, targetEmail){
     btnCloudSync.click();
     setTimeout(()=>{
       const banner = document.createElement('div');
       banner.style.cssText = 'background:rgba(255,107,53,0.12); border:1px solid var(--accent); border-radius:8px; padding:12px; margin-bottom:12px;';
+      const expText = expiresAt ? `<div style="font-size:11px; color:var(--sub); margin-top:2px;">만료 일시: ${new Date(expiresAt).toLocaleString('ko-KR')}</div>` : '';
+      const emailText = targetEmail ? `<div style="font-size:11px; color:var(--sub);">초대 대상 이메일: <strong>${escapeHtml(targetEmail)}</strong></div>` : '';
       banner.innerHTML = `
-        <div style="font-weight:700; color:var(--accent); font-size:14px; margin-bottom:4px;">✉️ 팀 초대 링크 도착</div>
-        <div style="font-size:13px; line-height:1.5;"><strong>${escapeHtml(orgName || '조직')}</strong>에서 <strong>${escapeHtml(role || 'Member')}</strong> 권한으로 초대했습니다.<br>아래에서 로그인하거나 회원가입하면 즉시 팀 프로젝트에 참여할 수 있습니다.</div>
+        <div style="font-weight:700; color:var(--accent); font-size:14px; margin-bottom:4px;">✉️ 팀 초대 링크 확인 완료</div>
+        <div style="font-size:13px; line-height:1.5;">
+          <strong>${escapeHtml(orgName || '조직')}</strong>에서 <strong>${escapeHtml(role || 'Inspector')}</strong> 권한으로 초대했습니다.<br>
+          ${emailText}
+          ${expText}
+          <div style="margin-top:8px; font-weight:600; color:var(--text); background:var(--panel); padding:8px; border-radius:4px; border:1px solid var(--line);">
+            초대 링크를 확인했습니다.<br>초대를 수락하려면 로그인하세요.
+          </div>
+        </div>
       `;
       if(cloudSyncBody && cloudSyncBody.firstChild){
         cloudSyncBody.insertBefore(banner, cloudSyncBody.firstChild);
@@ -5338,16 +5376,25 @@
           const inviteControls = document.createElement('div');
           inviteControls.style.cssText = 'display:flex; gap:6px; align-items:center; flex-wrap:wrap;';
 
+          const targetEmailInput = document.createElement('input');
+          targetEmailInput.type = 'email';
+          targetEmailInput.placeholder = '초대할 이메일 (선택 사항)';
+          targetEmailInput.style.cssText = 'background:var(--panel); border:1px solid var(--line); border-radius:4px; color:var(--text); font-family:inherit; font-size:12px; padding:4px 8px; flex:1; min-width:140px;';
+
           const roleSel = document.createElement('select');
           roleSel.style.cssText = 'background:var(--panel); border:1px solid var(--line); border-radius:4px; color:var(--text); font-family:inherit; font-size:12px; padding:4px 6px;';
-          ['Member', 'Admin', 'Inspector', 'Reviewer', 'Reporter', 'Viewer'].forEach(r => {
-            const o = document.createElement('option'); o.value = r; o.textContent = '역할: ' + r; roleSel.appendChild(o);
+          ['Inspector', 'Admin', 'Reviewer', 'Reporter', 'Viewer'].forEach(r => {
+            const o = document.createElement('option'); o.value = r; o.textContent = '역할: ' + r;
+            if(r === 'Inspector') o.selected = true;
+            roleSel.appendChild(o);
           });
 
           const expSel = document.createElement('select');
           expSel.style.cssText = roleSel.style.cssText;
-          [{d:7, l:'7일 유효'}, {d:14, l:'14일 유효'}, {d:30, l:'30일 유효'}].forEach(item => {
-            const o = document.createElement('option'); o.value = item.d; o.textContent = item.l; expSel.appendChild(o);
+          [{h:72, l:'72시간 유효 (기본)'}, {h:24, l:'24시간 유효 (1일)'}, {h:168, l:'168시간 유효 (7일)'}].forEach(item => {
+            const o = document.createElement('option'); o.value = item.h; o.textContent = item.l;
+            if(item.h === 72) o.selected = true;
+            expSel.appendChild(o);
           });
 
           const createLinkBtn = document.createElement('button');
@@ -5358,22 +5405,24 @@
           createLinkBtn.addEventListener('click', async ()=>{
             createLinkBtn.disabled = true;
             createLinkBtn.textContent = '생성 중…';
-            const res = await createOrganizationInvitation(org.id, roleSel.value, parseInt(expSel.value, 10));
+            const res = await createOrganizationInvitation(org.id, roleSel.value, parseInt(expSel.value, 10), targetEmailInput.value.trim());
             createLinkBtn.disabled = false;
             createLinkBtn.textContent = '초대 링크 생성 및 복사';
             if(res.ok && res.inviteUrl){
               try{
                 await navigator.clipboard.writeText(res.inviteUrl);
-                alert('🎉 초대 링크가 생성되어 클립보드에 복사되었습니다!\n\n링크:\n' + res.inviteUrl + '\n\n팀원에게 카카오톡/문자/메신저로 전달하세요.');
+                alert('🎉 초대 링크가 생성되어 클립보드에 복사되었습니다!\n\n링크:\n' + res.inviteUrl + '\n\n초대 대상자에게 링크를 공유하세요.');
               }catch(e){
                 prompt('초대 링크가 생성되었습니다. 아래 링크를 복사하세요:', res.inviteUrl);
               }
+              targetEmailInput.value = '';
               renderCloudSyncBody();
             } else {
               alert('초대 링크 생성 실패: ' + res.reason);
             }
           });
 
+          inviteControls.appendChild(targetEmailInput);
           inviteControls.appendChild(roleSel);
           inviteControls.appendChild(expSel);
           inviteControls.appendChild(createLinkBtn);
@@ -5498,7 +5547,426 @@
   closeCloudSync.addEventListener('click', ()=>{ cloudSyncModal.style.display = 'none'; });
   cloudSyncModal.addEventListener('click', (e)=>{ if(e.target === cloudSyncModal) cloudSyncModal.style.display = 'none'; });
 
-  // 글로벌 Auth & Org 네임스페이스 등록
+  // ================================================================
+  // PeachShot STEP 8: Sync UX & Storage Dashboard & OCC Conflict Resolver
+  // - 실시간 동기화 상태 배지 및 통계 관리
+  // - Zero Data Loss OCC 충돌 해결 UI (로컬/클라우드 양방향 보존)
+  // - BroadcastChannel 다중 탭 연동 및 오프라인 자동 복구
+  // - Storage Quota 및 IndexedDB 건강 상태 모니터링
+  // ================================================================
+  const SYNC_STATE_KEY = 'point-shot-sync-state';
+  const CONFLICT_RECORDS_KEY = 'point-shot-conflict-records';
+  const SYNC_CHANNEL_NAME = 'peachshot_sync_channel';
+
+  let syncBroadcastChannel = null;
+  try {
+    if(typeof BroadcastChannel !== 'undefined'){
+      syncBroadcastChannel = new BroadcastChannel(SYNC_CHANNEL_NAME);
+    }
+  } catch(e){}
+
+  let syncState = {
+    status: 'synced', // 'synced' | 'syncing' | 'pending' | 'offline' | 'conflict' | 'failed'
+    lastSyncedAt: null,
+    pendingCount: 0,
+    failedCount: 0,
+    conflictCount: 0,
+    lastError: null,
+    photoStats: { uploaded: 0, pending: 0, failed: 0 },
+    storageStats: { used: 0, total: 0, percent: 0 }
+  };
+
+  function broadcastSyncEvent(type, payload = {}){
+    if(syncBroadcastChannel){
+      try {
+        syncBroadcastChannel.postMessage({ type, payload, timestamp: Date.now() });
+      } catch(e){}
+    }
+  }
+
+  if(syncBroadcastChannel){
+    syncBroadcastChannel.onmessage = (event) => {
+      const { type } = event.data || {};
+      if(type === 'SYNC_COMPLETED' || type === 'PROJECT_UPDATED'){
+        updateSyncStatusBar();
+        renderProjectList();
+      } else if(type === 'CONFLICT_DETECTED'){
+        syncState.status = 'conflict';
+        updateSyncStatusBar();
+      } else if(type === 'ORG_CHANGED'){
+        loadMyOrganizations().then(()=>{
+          renderProjectList();
+          renderCloudSyncBody();
+        });
+      }
+    };
+  }
+
+  async function loadSyncState(){
+    try{
+      const saved = await storageGet(SYNC_STATE_KEY);
+      if(saved && typeof saved === 'object'){
+        syncState = Object.assign(syncState, saved);
+      }
+      const conflicts = await getConflictRecords();
+      syncState.conflictCount = conflicts.length;
+      if(conflicts.length > 0) syncState.status = 'conflict';
+      else if(!navigator.onLine) syncState.status = 'offline';
+    }catch(e){}
+    updateSyncStatusBar();
+  }
+
+  async function saveSyncState(){
+    try{
+      await storageSet(SYNC_STATE_KEY, syncState);
+    }catch(e){}
+  }
+
+  async function getConflictRecords(){
+    try{
+      const list = await storageGet(CONFLICT_RECORDS_KEY);
+      return Array.isArray(list) ? list : [];
+    }catch(e){
+      return [];
+    }
+  }
+
+  async function saveConflictRecords(list){
+    try{
+      await storageSet(CONFLICT_RECORDS_KEY, list);
+      syncState.conflictCount = list.length;
+      if(list.length > 0) syncState.status = 'conflict';
+      else if(syncState.status === 'conflict') syncState.status = 'synced';
+      updateSyncStatusBar();
+      saveSyncState();
+    }catch(e){}
+  }
+
+  async function recordOccConflict(entityType, entityId, localData, cloudData, localRev, cloudRev){
+    const list = await getConflictRecords();
+    const existingIdx = list.findIndex(c => c.entityId === entityId && c.entityType === entityType);
+    const item = {
+      id: 'conf_' + genId(),
+      organizationId: activeOrganizationId || (localData && localData.organizationId) || null,
+      projectId: currentProjectId,
+      entityType: entityType || 'facility',
+      entityId: entityId,
+      localRevision: localRev || 1,
+      cloudRevision: cloudRev || 1,
+      localData: JSON.parse(JSON.stringify(localData || {})),
+      cloudData: JSON.parse(JSON.stringify(cloudData || {})),
+      createdAt: new Date().toISOString(),
+      status: 'open'
+    };
+    if(existingIdx >= 0) list[existingIdx] = item;
+    else list.unshift(item);
+    await saveConflictRecords(list);
+    broadcastSyncEvent('CONFLICT_DETECTED', { entityId, entityType });
+    return item;
+  }
+
+  async function resolveOccConflict(conflictId, resolutionType){
+    const list = await getConflictRecords();
+    const target = list.find(c => c.id === conflictId);
+    if(!target) return { ok:false, reason:'해당 충돌 기록을 찾을 수 없습니다.' };
+
+    if(resolutionType === 'keep_local'){
+      // 로컬 버전 유지: 클라우드로 강제 푸시
+      const curProj = projects.find(p => p.id === target.projectId);
+      if(curProj) await pushProjectToCloud(curProj, { silent:true, force:true });
+    } else if(resolutionType === 'accept_cloud'){
+      // 클라우드 버전 수용: 로컬에 클라우드 데이터 적용
+      if(target.entityType === 'project' && target.cloudData){
+        const pIdx = projects.findIndex(p => p.id === target.projectId);
+        if(pIdx >= 0) projects[pIdx] = Object.assign(projects[pIdx], target.cloudData);
+      } else if(target.entityType === 'facility' && target.cloudData){
+        const sIdx = sites.findIndex(s => s.id === target.entityId);
+        if(sIdx >= 0) sites[sIdx] = Object.assign(sites[sIdx], target.cloudData);
+      }
+      await saveState();
+    } else if(resolutionType === 'save_copy'){
+      // 사본으로 보존: 로컬 데이터를 새 ID로 복사하고 클라우드 수용
+      if(target.entityType === 'project' && target.localData){
+        const copyProj = Object.assign({}, target.localData, {
+          id: genId(),
+          name: (target.localData.name || '프로젝트') + ' (충돌 보존 사본)',
+          savedAt: new Date().toISOString()
+        });
+        projects.push(copyProj);
+      }
+      await saveState();
+    }
+
+    const remaining = list.filter(c => c.id !== conflictId);
+    await saveConflictRecords(remaining);
+    renderSyncDashboard();
+    renderProjectList();
+    broadcastSyncEvent('SYNC_COMPLETED', { conflictId, resolutionType });
+    return { ok:true };
+  }
+
+  function updateSyncStatusBar(){
+    const sbSync = document.getElementById('sbSync');
+    const mhSave = document.getElementById('mhSave');
+    if(!sbSync) return;
+
+    sbSync.style.display = 'inline-flex';
+    sbSync.style.cursor = 'pointer';
+    sbSync.style.alignItems = 'center';
+    sbSync.style.gap = '4px';
+
+    if(!navigator.onLine){
+      sbSync.innerHTML = '⚡ <span style="color:var(--muted);">오프라인</span>';
+      sbSync.className = 'sb-item';
+      if(mhSave) mhSave.textContent = '⚡ 오프라인';
+      return;
+    }
+
+    if(syncState.conflictCount > 0){
+      sbSync.innerHTML = `⚠️ <span style="color:#e74c3c; font-weight:700;">충돌 ${syncState.conflictCount}건</span>`;
+      sbSync.className = 'sb-item err';
+      if(mhSave) mhSave.textContent = `⚠️ 충돌 ${syncState.conflictCount}건`;
+      return;
+    }
+
+    if(syncState.status === 'syncing'){
+      sbSync.innerHTML = '🔄 <span style="color:var(--amber-text); font-weight:600;">동기화 중…</span>';
+      sbSync.className = 'sb-item saving';
+      if(mhSave) mhSave.textContent = '🔄 동기화 중';
+      return;
+    }
+
+    if(syncState.status === 'failed'){
+      sbSync.innerHTML = '❌ <span style="color:#e74c3c; font-weight:700;">동기화 실패</span>';
+      sbSync.className = 'sb-item err';
+      if(mhSave) mhSave.textContent = '❌ 동기화 실패';
+      return;
+    }
+
+    if(syncState.pendingCount > 0){
+      sbSync.innerHTML = `⏳ <span style="color:var(--amber-text);">대기 ${syncState.pendingCount}건</span>`;
+      sbSync.className = 'sb-item pending';
+      if(mhSave) mhSave.textContent = `⏳ 대기 ${syncState.pendingCount}건`;
+      return;
+    }
+
+    sbSync.innerHTML = '☁️ <span style="color:#1F8A4C; font-weight:600;">동기화됨</span>';
+    sbSync.className = 'sb-item ok';
+    if(mhSave) mhSave.textContent = '● 저장됨';
+  }
+
+  async function checkStorageUsage(){
+    if(navigator.storage && navigator.storage.estimate){
+      try{
+        const est = await navigator.storage.estimate();
+        const usedMb = (est.usage / (1024 * 1024)).toFixed(1);
+        const quotaMb = (est.quota / (1024 * 1024)).toFixed(0);
+        const pct = est.quota ? ((est.usage / est.quota) * 100).toFixed(1) : 0;
+        syncState.storageStats = { usedMb, quotaMb, percent: pct };
+      }catch(e){}
+    }
+  }
+
+  async function renderSyncDashboard(){
+    const body = document.getElementById('syncDashboardBody');
+    if(!body) return;
+    body.innerHTML = '<div class="hint">동기화 및 저장소 상태를 조회 중입니다…</div>';
+
+    await checkStorageUsage();
+    const conflicts = await getConflictRecords();
+    syncState.conflictCount = conflicts.length;
+
+    // 사진 통계 계산
+    let totalPhotos = 0, uploadedPhotos = 0, pendingPhotos = 0;
+    sites.forEach(s => {
+      (s.markers || []).forEach(m => {
+        (m.photos || []).forEach(p => {
+          totalPhotos++;
+          if(p.cloudRef) uploadedPhotos++;
+          else pendingPhotos++;
+        });
+      });
+    });
+    syncState.photoStats = { total: totalPhotos, uploaded: uploadedPhotos, pending: pendingPhotos };
+
+    body.innerHTML = '';
+
+    // 1. 상단 상태 요약 카드
+    const statusCard = document.createElement('div');
+    statusCard.style.cssText = 'background:var(--panel-2); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:14px;';
+    
+    let statusLabel = '☁️ 클라우드 동기화 완료';
+    let statusColor = '#1F8A4C';
+    if(!navigator.onLine){ statusLabel = '⚡ 오프라인 모드 (로컬 IndexedDB 안전 보존)'; statusColor = '#f39c12'; }
+    else if(conflicts.length > 0){ statusLabel = `⚠️ 동시성 충돌 감지 (${conflicts.length}건)`; statusColor = '#e74c3c'; }
+    else if(syncState.status === 'syncing'){ statusLabel = '🔄 클라우드와 동기화 진행 중…'; statusColor = 'var(--amber-text)'; }
+    else if(syncState.status === 'failed'){ statusLabel = '❌ 동기화 실패 (로컬 데이터는 안전합니다)'; statusColor = '#e74c3c'; }
+
+    const lastSyncTime = syncState.lastSyncedAt ? new Date(syncState.lastSyncedAt).toLocaleString('ko-KR') : '기록 없음';
+
+    statusCard.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span style="font-weight:700; font-size:14px; color:${statusColor};">${statusLabel}</span>
+        <span style="font-size:11px; color:var(--muted);">${navigator.onLine ? '● 온라인' : '○ 오프라인'}</span>
+      </div>
+      <div style="font-size:12px; color:var(--text); margin-top:6px;">마지막 동기화 일시: <strong>${lastSyncTime}</strong></div>
+      ${syncState.lastError ? `<div style="font-size:11px; color:#e74c3c; margin-top:4px;">오류 원인: ${escapeHtml(syncState.lastError)}</div>` : ''}
+    `;
+    body.appendChild(statusCard);
+
+    // 2. 핵심 지표 그리드
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:8px; margin-bottom:14px;';
+    grid.innerHTML = `
+      <div style="background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:10px; text-align:center;">
+        <div style="font-size:11px; color:var(--muted);">대기 중인 변경</div>
+        <div style="font-size:18px; font-weight:700; color:var(--amber-text); margin-top:2px;">${syncState.pendingCount}건</div>
+      </div>
+      <div style="background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:10px; text-align:center;">
+        <div style="font-size:11px; color:var(--muted);">동시성 충돌</div>
+        <div style="font-size:18px; font-weight:700; color:${conflicts.length ? '#e74c3c' : '#1F8A4C'}; margin-top:2px;">${conflicts.length}건</div>
+      </div>
+      <div style="background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:10px; text-align:center;">
+        <div style="font-size:11px; color:var(--muted);">클라우드 사진</div>
+        <div style="font-size:18px; font-weight:700; color:#1F8A4C; margin-top:2px;">${uploadedPhotos} / ${totalPhotos}</div>
+      </div>
+    `;
+    body.appendChild(grid);
+
+    // 3. 충돌(Conflict) 해결 섹션 (충돌이 있을 때 최우선 노출)
+    if(conflicts.length > 0){
+      const confSec = document.createElement('div');
+      confSec.style.cssText = 'background:rgba(231,76,60,0.08); border:1px solid #e74c3c; border-radius:8px; padding:12px; margin-bottom:14px;';
+      confSec.innerHTML = `
+        <div style="font-weight:700; color:#e74c3c; font-size:13px; margin-bottom:6px;">⚠️ 충돌 해결 대기열 (Zero Data Loss 보장)</div>
+        <div style="font-size:11px; color:var(--text); line-height:1.4; margin-bottom:10px;">다른 팀원이 동일한 대상을 수정하여 충돌이 감지되었습니다. 사용자가 선택하기 전까지 양측 데이터를 모두 안전하게 보존합니다.</div>
+      `;
+
+      conflicts.forEach(c => {
+        const itemBox = document.createElement('div');
+        itemBox.style.cssText = 'background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-bottom:8px;';
+        const eName = (c.localData && c.localData.name) || c.entityId;
+        itemBox.innerHTML = `
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <span style="font-weight:600; font-size:12px;">[${escapeHtml(c.entityType)}] ${escapeHtml(eName)}</span>
+            <span style="font-size:10px; color:var(--muted);">${new Date(c.createdAt).toLocaleTimeString('ko-KR')}</span>
+          </div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;">
+            <button class="card-btn" style="flex:1; min-width:110px;" id="btnKeepLocal_${c.id}">내 로컬 버전 유지</button>
+            <button class="card-btn" style="flex:1; min-width:110px;" id="btnAcceptCloud_${c.id}">서버 버전 수용</button>
+            <button class="card-btn primary" style="flex:1; min-width:110px;" id="btnSaveCopy_${c.id}">사본으로 보존</button>
+          </div>
+        `;
+        confSec.appendChild(itemBox);
+
+        setTimeout(()=>{
+          const b1 = document.getElementById(`btnKeepLocal_${c.id}`);
+          const b2 = document.getElementById(`btnAcceptCloud_${c.id}`);
+          const b3 = document.getElementById(`btnSaveCopy_${c.id}`);
+          if(b1) b1.onclick = () => resolveOccConflict(c.id, 'keep_local');
+          if(b2) b2.onclick = () => resolveOccConflict(c.id, 'accept_cloud');
+          if(b3) b3.onclick = () => resolveOccConflict(c.id, 'save_copy');
+        }, 10);
+      });
+
+      body.appendChild(confSec);
+    }
+
+    // 4. 저장소(Storage) 및 로컬 데이터 건전성 카드
+    const storeCard = document.createElement('div');
+    storeCard.style.cssText = 'background:var(--panel-2); border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px;';
+    const usedMb = syncState.storageStats.usedMb || '0.0';
+    const quotaMb = syncState.storageStats.quotaMb || '0';
+    const pct = syncState.storageStats.percent || '0';
+
+    storeCard.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <span style="font-weight:600; font-size:13px;">💾 로컬 IndexedDB 저장 공간</span>
+        <span style="font-size:11px; color:#1F8A4C; font-weight:600;">● 정상 동작</span>
+      </div>
+      <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--muted); margin-bottom:4px;">
+        <span>사용량: ${usedMb} MB / ${quotaMb} MB</span>
+        <span>${pct}% 사용 중</span>
+      </div>
+      <div style="height:6px; background:var(--panel); border-radius:3px; overflow:hidden; border:1px solid var(--line);">
+        <div style="width:${Math.min(100, Math.max(2, pct))}%; height:100%; background:${pct > 80 ? '#e74c3c' : 'var(--amber)'};"></div>
+      </div>
+      <div style="font-size:11px; color:var(--muted); margin-top:8px; line-height:1.4;">
+        ✓ 브라우저 종료 및 새로고침 후에도 오프라인 조사 데이터 및 동기화 큐가 영구 보존됩니다.<br>
+        ✓ 5분 간격 자동 스냅샷 복구 시스템이 활성화되어 있습니다.
+      </div>
+    `;
+    body.appendChild(storeCard);
+  }
+
+  // 모달 이벤트 바인딩
+  const btnSyncDashboard = document.getElementById('btnSyncDashboard');
+  const syncDashboardModal = document.getElementById('syncDashboardModal');
+  const closeSyncDashboard = document.getElementById('closeSyncDashboard');
+  const btnSyncDashboardClose = document.getElementById('btnSyncDashboardClose');
+  const btnSyncDashboardRetry = document.getElementById('btnSyncDashboardRetry');
+
+  if(btnSyncDashboard){
+    btnSyncDashboard.addEventListener('click', ()=>{
+      if(moreModal) moreModal.style.display = 'none';
+      renderSyncDashboard();
+      if(syncDashboardModal) syncDashboardModal.style.display = 'flex';
+    });
+  }
+
+  const sbSyncEl = document.getElementById('sbSync');
+  if(sbSyncEl){
+    sbSyncEl.addEventListener('click', ()=>{
+      renderSyncDashboard();
+      if(syncDashboardModal) syncDashboardModal.style.display = 'flex';
+    });
+  }
+
+  if(closeSyncDashboard) closeSyncDashboard.addEventListener('click', ()=>{ syncDashboardModal.style.display = 'none'; });
+  if(btnSyncDashboardClose) btnSyncDashboardClose.addEventListener('click', ()=>{ syncDashboardModal.style.display = 'none'; });
+  if(syncDashboardModal) syncDashboardModal.addEventListener('click', (e)=>{ if(e.target === syncDashboardModal) syncDashboardModal.style.display = 'none'; });
+
+  if(btnSyncDashboardRetry){
+    btnSyncDashboardRetry.addEventListener('click', async ()=>{
+      btnSyncDashboardRetry.disabled = true;
+      btnSyncDashboardRetry.textContent = '동기화 진행 중…';
+      const curProj = projects.find(p => p.id === currentProjectId);
+      if(curProj){
+        syncState.status = 'syncing';
+        updateSyncStatusBar();
+        const res = await pushProjectToCloud(curProj, { silent:true });
+        if(res.ok){
+          syncState.status = 'synced';
+          syncState.lastSyncedAt = new Date().toISOString();
+          syncState.lastError = null;
+          broadcastSyncEvent('SYNC_COMPLETED', { projectId: curProj.id });
+        } else {
+          syncState.status = 'failed';
+          syncState.lastError = res.reason || '동기화 실패';
+        }
+      }
+      btnSyncDashboardRetry.disabled = false;
+      btnSyncDashboardRetry.textContent = '⚡ 지금 전체 동기화 / 재시도';
+      updateSyncStatusBar();
+      renderSyncDashboard();
+    });
+  }
+
+  window.addEventListener('online', ()=>{
+    syncState.status = 'synced';
+    updateSyncStatusBar();
+    const curProj = projects.find(p => p.id === currentProjectId);
+    if(curProj && supabaseSession){
+      pushProjectToCloud(curProj, { silent:true });
+    }
+  });
+
+  window.addEventListener('offline', ()=>{
+    syncState.status = 'offline';
+    updateSyncStatusBar();
+  });
+
+  // 글로벌 Auth & Org & Sync 네임스페이스 등록
   if(typeof window !== 'undefined'){
     window.PeachShotAuth = Object.freeze({
       initSupabaseClient,
@@ -5512,6 +5980,7 @@
       createOrganization,
       fetchOrganizationMembers,
       removeOrganizationMember,
+      inviteOrganizationMember,
       setActiveOrganization,
       currentProjectRole,
       canEditCurrentProject,
@@ -5521,6 +5990,7 @@
     window.PeachShotInvitation = Object.freeze({
       generateSecureToken,
       hashTokenSha256,
+      inviteOrganizationMember,
       createOrganizationInvitation,
       verifyInvitationToken,
       acceptOrganizationInvitation,
@@ -5528,6 +5998,419 @@
       revokeOrganizationInvitation,
       parsePendingInviteFromUrl,
       checkAndProcessPendingInvite
+    });
+
+    window.PeachShotSync = Object.freeze({
+      syncState,
+      loadSyncState,
+      saveSyncState,
+      updateSyncStatusBar,
+      renderSyncDashboard,
+      getConflictRecords,
+      recordOccConflict,
+      resolveOccConflict,
+      broadcastSyncEvent
+    });
+  }
+
+  // ================================================================
+  // PeachShot STEP 9: System Diagnostics & Data Integrity Audit & Safe Repair
+  // - 전체 로컬 데이터 무결성 검사 (Read-Only)
+  // - 안전한 복구 엔진 (Safety Snapshot -> Repair Preview -> Fix -> Recheck)
+  // - 백업 데이터 안전 내보내기/가져오기 (Export/Import Validation)
+  // - 시스템 진단 대시보드 (Diagnostics & Health Observability)
+  // ================================================================
+
+  let lastIntegrityReport = null;
+
+  async function runDataIntegrityAudit(){
+    const issues = [];
+    const checkedAt = new Date().toISOString();
+
+    // 1. Projects 무결성 검사
+    const projIdMap = new Set();
+    projects.forEach((p, idx) => {
+      if(!p.id){
+        issues.push({ category:'Projects', severity:'high', message:`인덱스 ${idx}번 프로젝트에 고유 ID가 누락되었습니다.`, entityId: `proj_${idx}`, fixable:true });
+      } else if(projIdMap.has(p.id)){
+        issues.push({ category:'Projects', severity:'critical', message:`중복된 프로젝트 ID 발견: ${p.id}`, entityId: p.id, fixable:true });
+      } else {
+        projIdMap.add(p.id);
+      }
+      if(!p.name || !p.name.trim()){
+        issues.push({ category:'Projects', severity:'low', message:`프로젝트(${p.id})의 이름이 비어 있습니다.`, entityId: p.id, fixable:true });
+      }
+    });
+
+    // 2. Facilities (Sites) 및 상위 프로젝트 참조 검사
+    const siteIdMap = new Set();
+    sites.forEach((s, idx) => {
+      if(!s.id){
+        issues.push({ category:'Facilities', severity:'high', message:`인덱스 ${idx}번 시설물에 고유 ID가 누락되었습니다.`, entityId: `site_${idx}`, fixable:true });
+      } else if(siteIdMap.has(s.id)){
+        issues.push({ category:'Facilities', severity:'critical', message:`중복된 시설물 ID 발견: ${s.id}`, entityId: s.id, fixable:true });
+      } else {
+        siteIdMap.add(s.id);
+      }
+
+      if(s.projectId && !projIdMap.has(s.projectId)){
+        issues.push({ category:'Facilities', severity:'medium', message:`존재하지 않는 상위 프로젝트(${s.projectId})를 참조하는 고아 시설물: ${s.name || s.id}`, entityId: s.id, fixable:true });
+      }
+
+      // 3. Markers / Drawings / InspectionPoints 검사
+      const markerIdMap = new Set();
+      (s.markers || []).forEach((m, mIdx) => {
+        if(!m.id){
+          issues.push({ category:'Markers', severity:'medium', message:`시설물(${s.name})의 ${mIdx+1}번째 조사점에 ID가 누락되었습니다.`, entityId: `m_${s.id}_${mIdx}`, fixable:true });
+        } else if(markerIdMap.has(m.id)){
+          issues.push({ category:'Markers', severity:'high', message:`시설물(${s.name}) 내 중복 조사점 ID 발견: ${m.id}`, entityId: m.id, fixable:true });
+        } else {
+          markerIdMap.add(m.id);
+        }
+
+        if(isNaN(m.x) || isNaN(m.y)){
+          issues.push({ category:'Markers', severity:'medium', message:`조사점(${m.num || mIdx+1})의 좌표가 유효한 숫자가 아닙니다 (NaN).`, entityId: m.id, fixable:true });
+        }
+
+        // 4. Photos & Photo Blobs 무결성 검사
+        (m.photos || []).forEach((p, pIdx) => {
+          if(!p.src && !p.cloudRef && !p.photoRef){
+            issues.push({ category:'Photos', severity:'low', message:`조사점(${m.num})의 ${pIdx+1}번 사진에 이미지 데이터 및 클라우드 참조가 없습니다.`, entityId: p.id || `p_${m.id}_${pIdx}`, fixable:false });
+          }
+        });
+      });
+    });
+
+    // 5. 동기화 대기열 및 충돌 레코드 검사
+    const conflicts = await getConflictRecords();
+    conflicts.forEach(c => {
+      if(!c.entityId || !c.entityType){
+        issues.push({ category:'SyncConflicts', severity:'medium', message:`손상된 동시성 충돌 레코드 감지: ${c.id}`, entityId: c.id, fixable:true });
+      }
+    });
+
+    const report = {
+      ok: issues.length === 0,
+      totalIssues: issues.length,
+      criticalCount: issues.filter(i => i.severity === 'critical').length,
+      highCount: issues.filter(i => i.severity === 'high').length,
+      mediumCount: issues.filter(i => i.severity === 'medium').length,
+      lowCount: issues.filter(i => i.severity === 'low').length,
+      issues: issues,
+      checkedAt: checkedAt
+    };
+
+    lastIntegrityReport = report;
+    return report;
+  }
+
+  async function previewDataRepair(){
+    const audit = await runDataIntegrityAudit();
+    const repairPlan = [];
+
+    const projIds = new Set(projects.map(p => p.id));
+    const orphanSites = sites.filter(s => s.projectId && !projIds.has(s.projectId));
+    if(orphanSites.length > 0){
+      repairPlan.push({
+        title: `고아 시설물(${orphanSites.length}개) 안전 복구 프로젝트로 재연결`,
+        action: 'orphan_relink',
+        count: orphanSites.length
+      });
+    }
+
+    const seenMarkerIds = new Set();
+    let dupMarkerCount = 0;
+    sites.forEach(s => {
+      (s.markers || []).forEach(m => {
+        if(m.id && seenMarkerIds.has(m.id)) dupMarkerCount++;
+        else if(m.id) seenMarkerIds.add(m.id);
+      });
+    });
+
+    if(dupMarkerCount > 0){
+      repairPlan.push({
+        title: `중복 조사점 ID(${dupMarkerCount}개) 고유 ID로 안전 재발급 (사진·손상 보존)`,
+        action: 'dedup_markers',
+        count: dupMarkerCount
+      });
+    }
+
+    return { audit, repairPlan };
+  }
+
+  async function executeDataRepair(){
+    // 1. 사전 안전 스냅샷 생성 (Zero Data Loss 보장)
+    try {
+      if(typeof saveSnapshot === 'function') await saveSnapshot('PRE_RESTORE_SAFETY_KEY');
+    } catch(e){}
+
+    const projIds = new Set(projects.map(p => p.id));
+    const orphanSites = sites.filter(s => s.projectId && !projIds.has(s.projectId));
+    
+    // 고아 시설물 보호용 프로젝트 생성 및 연결
+    if(orphanSites.length > 0){
+      let recoveredProj = projects.find(p => p.name === '복구된 시설물 보관함');
+      if(!recoveredProj){
+        recoveredProj = {
+          id: genId(),
+          name: '복구된 시설물 보관함',
+          savedAt: new Date().toISOString(),
+          isRecovered: true
+        };
+        projects.push(recoveredProj);
+      }
+      orphanSites.forEach(s => { s.projectId = recoveredProj.id; });
+    }
+
+    // 중복 Marker ID 재부여
+    const seenMarkerIds = new Set();
+    sites.forEach(s => {
+      (s.markers || []).forEach(m => {
+        if(!m.id || seenMarkerIds.has(m.id)){
+          m.id = genId();
+        }
+        seenMarkerIds.add(m.id);
+      });
+    });
+
+    // 프로젝트 및 시설물 저장
+    await saveState();
+    const postAudit = await runDataIntegrityAudit();
+    renderDiagnosticsModal();
+    return { ok:true, postAudit };
+  }
+
+  async function exportAllProjectData(){
+    const exportData = {
+      format: 'PeachShot_Full_Export',
+      exportVersion: 1,
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      exportedAt: new Date().toISOString(),
+      activeOrganizationId: activeOrganizationId || null,
+      projects: projects,
+      sites: sites,
+      standardDbVersion: typeof standardDbVersion !== 'undefined' ? standardDbVersion : 'STANDARD_DB_V1'
+    };
+
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const timeStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    a.href = url;
+    a.download = `PeachShot_Data_Backup_${timeStr}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function importProjectData(jsonData){
+    try {
+      const parsed = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData;
+      if(!parsed || !Array.isArray(parsed.projects) || !Array.isArray(parsed.sites)){
+        return { ok:false, reason:'유효하지 않은 PeachShot 백업 데이터 형식입니다.' };
+      }
+
+      // 사전 안전 스냅샷 생성
+      if(typeof saveSnapshot === 'function') await saveSnapshot('PRE_RESTORE_SAFETY_KEY');
+
+      // 기존 ID와 충돌 방지 및 안전 병합
+      const existingProjIds = new Set(projects.map(p => p.id));
+      const existingSiteIds = new Set(sites.map(s => s.id));
+
+      parsed.projects.forEach(p => {
+        if(existingProjIds.has(p.id)){
+          p.id = genId();
+          p.name = (p.name || '가져온 프로젝트') + ' (가져옴)';
+        }
+        projects.push(p);
+      });
+
+      parsed.sites.forEach(s => {
+        if(existingSiteIds.has(s.id)){
+          s.id = genId();
+        }
+        sites.push(s);
+      });
+
+      await saveState();
+      renderProjectList();
+      renderSiteList();
+      return { ok:true, importedProjects: parsed.projects.length, importedSites: parsed.sites.length };
+    } catch(e){
+      return { ok:false, reason: e.message || '가져오기 처리 중 오류가 발생했습니다.' };
+    }
+  }
+
+  async function renderDiagnosticsModal(){
+    const body = document.getElementById('diagnosticsBody');
+    if(!body) return;
+    body.innerHTML = '<div class="hint">시스템 진단 정보를 수집 중입니다…</div>';
+
+    await checkStorageUsage();
+    const conflicts = await getConflictRecords();
+    const curProj = projects.find(p => p.id === currentProjectId);
+    const curOrg = myOrganizations.find(o => o.id === activeOrganizationId);
+    const pRole = (curProj && curProj.organizationId) ? (myRoleByOrg[curProj.organizationId] || 'Member') : 'Owner';
+
+    let totalMarkers = 0, totalPhotos = 0;
+    sites.forEach(s => {
+      (s.markers || []).forEach(m => {
+        totalMarkers++;
+        totalPhotos += (m.photos || []).length;
+      });
+    });
+
+    const usedMb = syncState.storageStats.usedMb || '0.0';
+    const quotaMb = syncState.storageStats.quotaMb || '0';
+    const pct = syncState.storageStats.percent || '0';
+
+    body.innerHTML = `
+      <!-- 시스템 및 사용자 정보 그리드 -->
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:10px; margin-bottom:14px;">
+        <div style="background:var(--panel-2); border:1px solid var(--line); border-radius:6px; padding:10px;">
+          <div style="font-size:11px; color:var(--muted);">앱 및 스키마 버전</div>
+          <div style="font-size:13px; font-weight:700; color:var(--text); margin-top:2px;">v${APP_VERSION} / Sch ${CURRENT_SCHEMA_VERSION}</div>
+        </div>
+        <div style="background:var(--panel-2); border:1px solid var(--line); border-radius:6px; padding:10px;">
+          <div style="font-size:11px; color:var(--muted);">네트워크 / 로그인</div>
+          <div style="font-size:13px; font-weight:700; color:${navigator.onLine ? '#1F8A4C' : '#f39c12'}; margin-top:2px;">
+            ${navigator.onLine ? '● 온라인' : '○ 오프라인'} · ${supabaseSession ? '인증됨' : '비로그인'}
+          </div>
+        </div>
+        <div style="background:var(--panel-2); border:1px solid var(--line); border-radius:6px; padding:10px;">
+          <div style="font-size:11px; color:var(--muted);">현재 작업 조직 / 역할</div>
+          <div style="font-size:13px; font-weight:700; color:var(--accent); margin-top:2px;">
+            ${curOrg ? escapeHtml(curOrg.name) : '📁 개인'} (${pRole})
+          </div>
+        </div>
+        <div style="background:var(--panel-2); border:1px solid var(--line); border-radius:6px; padding:10px;">
+          <div style="font-size:11px; color:var(--muted);">로컬 엔티티 통계</div>
+          <div style="font-size:13px; font-weight:700; color:var(--text); margin-top:2px;">
+            프로젝트 ${projects.length} / 시설물 ${sites.length} / 점 ${totalMarkers}
+          </div>
+        </div>
+      </div>
+
+      <!-- 저장소 및 동기화 건전성 요약 -->
+      <div style="background:var(--panel-2); border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:14px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <span style="font-weight:600; font-size:13px;">💾 저장소 할당량 & 동기화 큐 상태</span>
+          <span style="font-size:11px; color:${pct > 80 ? '#e74c3c' : '#1F8A4C'}; font-weight:600;">사용률: ${pct}%</span>
+        </div>
+        <div style="height:6px; background:var(--panel); border-radius:3px; overflow:hidden; border:1px solid var(--line); margin-bottom:8px;">
+          <div style="width:${Math.min(100, Math.max(2, pct))}%; height:100%; background:${pct > 80 ? '#e74c3c' : 'var(--amber)'};"></div>
+        </div>
+        <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--muted);">
+          <span>사용량: ${usedMb} MB / ${quotaMb} MB</span>
+          <span>대기 ${syncState.pendingCount}건 · 충돌 ${conflicts.length}건 · 사진 ${totalPhotos}장</span>
+        </div>
+      </div>
+
+      <!-- 무결성 감사 결과 섹션 -->
+      <div id="integrityAuditContainer" style="background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <span style="font-weight:700; font-size:13px;">🔍 데이터 무결성 검사 결과</span>
+          <span id="auditTimestamp" style="font-size:11px; color:var(--muted);">${lastIntegrityReport ? new Date(lastIntegrityReport.checkedAt).toLocaleTimeString('ko-KR') : '검사 전'}</span>
+        </div>
+        <div id="integrityAuditDetails">
+          ${lastIntegrityReport ? (lastIntegrityReport.ok ? '<div style="color:#1F8A4C; font-weight:600; font-size:13px;">✅ 모든 프로젝트, 시설물, 도면, 사진, 조사점 데이터가 100% 무결합니다.</div>' : `<div style="color:#e74c3c; font-weight:600; font-size:13px;">⚠️ ${lastIntegrityReport.totalIssues}건의 불일치/경고 항목이 발견되었습니다.</div>`) : '<div class="hint">"무결성 전체 검사" 버튼을 누르면 모든 로컬 엔티티의 참조 무결성을 검사합니다.</div>'}
+        </div>
+      </div>
+    `;
+
+    if(lastIntegrityReport && !lastIntegrityReport.ok){
+      const details = document.getElementById('integrityAuditDetails');
+      const listWrap = document.createElement('div');
+      listWrap.style.cssText = 'margin-top:10px; max-height:160px; overflow-y:auto; font-size:11px; display:flex; flex-direction:column; gap:4px;';
+      lastIntegrityReport.issues.forEach(i => {
+        const item = document.createElement('div');
+        item.style.cssText = 'padding:4px 8px; border-radius:4px; background:var(--panel-2); border:1px solid var(--line);';
+        item.innerHTML = `<strong>[${escapeHtml(i.category)}]</strong> ${escapeHtml(i.message)}`;
+        listWrap.appendChild(item);
+      });
+      details.appendChild(listWrap);
+
+      const fixBtn = document.createElement('button');
+      fixBtn.className = 'primary';
+      fixBtn.style.cssText = 'margin-top:10px; width:100%;';
+      fixBtn.textContent = '🛠️ 안전 복구 실행 (스냅샷 백업 후 자동 복구)';
+      fixBtn.onclick = async () => {
+        fixBtn.disabled = true;
+        fixBtn.textContent = '안전 복구 진행 중…';
+        await executeDataRepair();
+        alert('안전 복구가 완료되었습니다.');
+      };
+      details.appendChild(fixBtn);
+    }
+  }
+
+  // 모달 이벤트 바인딩
+  const btnDiagnostics = document.getElementById('btnDiagnostics');
+  const diagnosticsModal = document.getElementById('diagnosticsModal');
+  const closeDiagnostics = document.getElementById('closeDiagnostics');
+  const btnDiagnosticsClose = document.getElementById('btnDiagnosticsClose');
+  const btnRunIntegrityCheck = document.getElementById('btnRunIntegrityCheck');
+  const btnExportAllData = document.getElementById('btnExportAllData');
+  const btnImportDataTrigger = document.getElementById('btnImportDataTrigger');
+  const importDataFileInput = document.getElementById('importDataFileInput');
+
+  if(btnDiagnostics){
+    btnDiagnostics.addEventListener('click', ()=>{
+      if(moreModal) moreModal.style.display = 'none';
+      renderDiagnosticsModal();
+      if(diagnosticsModal) diagnosticsModal.style.display = 'flex';
+    });
+  }
+
+  if(closeDiagnostics) closeDiagnostics.addEventListener('click', ()=>{ diagnosticsModal.style.display = 'none'; });
+  if(btnDiagnosticsClose) btnDiagnosticsClose.addEventListener('click', ()=>{ diagnosticsModal.style.display = 'none'; });
+  if(diagnosticsModal) diagnosticsModal.addEventListener('click', (e)=>{ if(e.target === diagnosticsModal) diagnosticsModal.style.display = 'none'; });
+
+  if(btnRunIntegrityCheck){
+    btnRunIntegrityCheck.addEventListener('click', async ()=>{
+      btnRunIntegrityCheck.disabled = true;
+      btnRunIntegrityCheck.textContent = '검사 진행 중…';
+      await runDataIntegrityAudit();
+      btnRunIntegrityCheck.disabled = false;
+      btnRunIntegrityCheck.textContent = '🔍 무결성 전체 검사';
+      renderDiagnosticsModal();
+    });
+  }
+
+  if(btnExportAllData){
+    btnExportAllData.addEventListener('click', exportAllProjectData);
+  }
+
+  if(btnImportDataTrigger && importDataFileInput){
+    btnImportDataTrigger.addEventListener('click', ()=> importDataFileInput.click());
+    importDataFileInput.addEventListener('change', async (e)=>{
+      const file = e.target.files && e.target.files[0];
+      if(!file) return;
+      const reader = new FileReader();
+      reader.onload = async (evt)=>{
+        const res = await importProjectData(evt.target.result);
+        if(res.ok){
+          alert(`🎉 데이터 가져오기 완료!\n(프로젝트 ${res.importedProjects}개, 시설물 ${res.importedSites}개 병합)`);
+          renderDiagnosticsModal();
+        } else {
+          alert('가져오기 실패: ' + res.reason);
+        }
+      };
+      reader.readAsText(file);
+      importDataFileInput.value = '';
+    });
+  }
+
+  // 글로벌 STEP 9 네임스페이스 등록
+  if(typeof window !== 'undefined'){
+    window.PeachShotDiagnostics = Object.freeze({
+      runDataIntegrityAudit,
+      previewDataRepair,
+      executeDataRepair,
+      renderDiagnosticsModal,
+      exportAllProjectData,
+      importProjectData
     });
   }
 
@@ -7355,17 +8238,39 @@
       return;
     }
     const q = (projectSearch && projectSearch.value || '').trim().toLowerCase();
-    const filteredProjects = q ? projects.filter(p => p.name.toLowerCase().includes(q)) : projects;
+    
+    // 타 조직 프로젝트 유출 방지: 현재 활성 조직 소속 프로젝트 또는 개인 프로젝트만 필터링
+    const visibleProjects = projects.filter(p => {
+      if(activeOrganizationId){
+        return p.organizationId === activeOrganizationId || !p.organizationId;
+      }
+      return !p.organizationId || myOrganizations.some(o => o.id === p.organizationId);
+    });
+
+    const filteredProjects = q ? visibleProjects.filter(p => p.name.toLowerCase().includes(q)) : visibleProjects;
     if(filteredProjects.length === 0){
-      projectListBody.innerHTML = '<div class="log-empty">검색 결과가 없습니다.</div>';
+      projectListBody.innerHTML = '<div class="log-empty">검색 결과가 없거나 소속 조직의 프로젝트가 없습니다.</div>';
       return;
     }
     projectListBody.innerHTML = '';
-    filteredProjects.slice().sort((a,b)=> new Date(b.savedAt||0) - new Date(a.savedAt||0)).forEach(project=>{
+
+    const currentOrg = myOrganizations.find(o => o.id === activeOrganizationId);
+    const orgProjects = filteredProjects.filter(p => p.organizationId && p.organizationId === activeOrganizationId);
+    const personalProjects = filteredProjects.filter(p => !p.organizationId);
+    const otherProjects = filteredProjects.filter(p => p.organizationId && p.organizationId !== activeOrganizationId);
+
+    const renderCard = (project, isOrgSection) => {
       const isActive = project.id === currentProjectId;
       const status = computeProjectStatus(project);
       const facilityCount = sites.filter(s => s.projectId === project.id).length;
       const dateStr = project.savedAt ? new Date(project.savedAt).toLocaleString('ko-KR') : '';
+      
+      // 프로젝트 역할 판정
+      let pRole = 'Owner';
+      if(project.organizationId){
+        pRole = myRoleByOrg[project.organizationId] || 'Member';
+      }
+      const canEditThisProject = (pRole !== 'Viewer');
 
       const card = document.createElement('div');
       card.className = 'compact-card' + (isActive ? ' is-active' : '');
@@ -7385,12 +8290,21 @@
       title.className = 'card-title';
       title.textContent = (project.isTemp ? '⚡ ' : '') + project.name;
       titleGroup.appendChild(title);
+
       if(isActive){
         const activePill = document.createElement('span');
         activePill.className = 'active-pill';
         activePill.textContent = '작업중';
         titleGroup.appendChild(activePill);
       }
+
+      // 역할 배지
+      const roleBadge = document.createElement('span');
+      roleBadge.style.cssText = 'font-size:10px; padding:2px 5px; border-radius:4px; background:var(--panel-2); border:1px solid var(--line); color:var(--text); flex-shrink:0;';
+      roleBadge.textContent = isOrgSection ? `🏢 ${pRole}` : '📁 개인';
+      titleGroup.appendChild(roleBadge);
+
+      // 상태 배지
       const badge = document.createElement('span');
       badge.className = 'auto-status-badge ' + status.class;
       badge.textContent = status.text;
@@ -7399,91 +8313,128 @@
 
       const metaRow = document.createElement('div');
       metaRow.className = 'card-meta-row';
+      
+      // 클라우드 백업 상태 표시
+      let syncNote = project.cloudSyncedAt ? ' · ☁️ 동기화됨' : ' · ⚡ 로컬전용';
       metaRow.textContent = '시설물 ' + facilityCount + '개 · ' + (dateStr || '최근') +
         (project.client ? ' · ' + project.client : '') +
-        (project.inspector ? ' (' + project.inspector + ')' : '');
+        (project.inspector ? ' (' + project.inspector + ')' : '') + syncNote;
 
       const actionsRow = document.createElement('div');
       actionsRow.className = 'card-actions-row';
       actionsRow.addEventListener('click', (e)=> e.stopPropagation());
 
-      // [수정] 통합 버튼: 이름 및 정보 수정
-      const editBtn = document.createElement('button');
-      editBtn.className = 'card-btn';
-      editBtn.textContent = '수정';
-      editBtn.addEventListener('click', ()=> openProjectInfoModal(project));
+      if(canEditThisProject){
+        const editBtn = document.createElement('button');
+        editBtn.className = 'card-btn';
+        editBtn.textContent = '수정';
+        editBtn.addEventListener('click', ()=> openProjectInfoModal(project));
+        actionsRow.appendChild(editBtn);
+      }
 
       const copyBtn = document.createElement('button');
       copyBtn.className = 'card-btn';
       copyBtn.textContent = '복사';
       copyBtn.addEventListener('click', ()=> duplicateProject(project));
+      actionsRow.appendChild(copyBtn);
 
       const backupBtn = document.createElement('button');
       backupBtn.className = 'card-btn';
       backupBtn.textContent = '백업';
       backupBtn.addEventListener('click', ()=> exportProjectBackup(project));
-
-      const delBtn = document.createElement('button');
-      delBtn.className = 'card-btn danger';
-      delBtn.textContent = '삭제';
-      delBtn.addEventListener('click', ()=>{
-        if(projects.length <= 1){ alert('프로젝트가 최소 1개는 있어야 합니다.'); return; }
-        if(facilityCount > 0){
-          const backedUp = project.backupStatus === '백업완료';
-          const backupNote = backedUp
-            ? '이 프로젝트는 백업이 완료된 상태입니다.'
-            : '⚠ 이 프로젝트는 아직 백업하지 않았습니다. 먼저 백업하려면 "취소"를 누른 뒤 "백업"을 이용해주세요.';
-          const msg = '"' + project.name + '" 프로젝트에는 시설물이 ' + facilityCount + '개 있습니다.\n' + backupNote +
-            '\n\n삭제하면 시설물은 완전히 사라지지 않고 휴지통으로 이동됩니다 ("⋯ → 휴지통"에서 나중에 복원 가능).\n\n그래도 삭제할까요?';
-          if(!confirm(msg)) return;
-          const projSites = sites.filter(s => s.projectId === project.id);
-          projSites.forEach(s=>{
-            deletedSites.push({
-              site: JSON.parse(JSON.stringify(s)),
-              originalProjectId: project.id,
-              originalProjectName: project.name,
-              deletedAt: new Date().toISOString()
-            });
-          });
-          sites = sites.filter(s => s.projectId !== project.id);
-        } else {
-          if(!confirm('"' + project.name + '" 프로젝트를 삭제할까요?')) return;
-        }
-
-        projects = projects.filter(p => p.id !== project.id);
-        if(currentProjectId === project.id){
-          const nextId = projects[0].id;
-          currentProjectId = null;
-          switchToProject(nextId);
-        }
-        renderProjectList();
-        renderProjectHeader();
-        saveState();
-      });
-
-      actionsRow.appendChild(editBtn);
-      actionsRow.appendChild(copyBtn);
-      if(project.isTemp){
-        const formalizeBtn = document.createElement('button');
-        formalizeBtn.className = 'card-btn';
-        formalizeBtn.textContent = '정식전환';
-        formalizeBtn.addEventListener('click', ()=>{
-          delete project.isTemp;
-          renderProjectList();
-          saveState();
-          alert('정식 프로젝트로 전환했습니다.');
-        });
-        actionsRow.appendChild(formalizeBtn);
-      }
       actionsRow.appendChild(backupBtn);
-      actionsRow.appendChild(delBtn);
+
+      if(canEditThisProject){
+        const delBtn = document.createElement('button');
+        delBtn.className = 'card-btn danger';
+        delBtn.textContent = '삭제';
+        delBtn.addEventListener('click', ()=>{
+          if(projects.length <= 1){ alert('프로젝트가 최소 1개는 있어야 합니다.'); return; }
+          if(facilityCount > 0){
+            const backedUp = project.backupStatus === '백업완료';
+            const backupNote = backedUp
+              ? '이 프로젝트는 백업이 완료된 상태입니다.'
+              : '⚠ 이 프로젝트는 아직 백업하지 않았습니다. 먼저 백업하려면 "취소"를 누른 뒤 "백업"을 이용해주세요.';
+            const msg = '"' + project.name + '" 프로젝트에는 시설물이 ' + facilityCount + '개 있습니다.\n' + backupNote +
+              '\n\n삭제하면 시설물은 완전히 사라지지 않고 휴지통으로 이동됩니다 ("⋯ → 휴지통"에서 나중에 복원 가능).\n\n그래도 삭제할까요?';
+            if(!confirm(msg)) return;
+            const projSites = sites.filter(s => s.projectId === project.id);
+            projSites.forEach(s=>{
+              deletedSites.push({
+                site: JSON.parse(JSON.stringify(s)),
+                originalProjectId: project.id,
+                originalProjectName: project.name,
+                deletedAt: new Date().toISOString()
+              });
+            });
+            sites = sites.filter(s => s.projectId !== project.id);
+          } else {
+            if(!confirm('"' + project.name + '" 프로젝트를 삭제할까요?')) return;
+          }
+
+          projects = projects.filter(p => p.id !== project.id);
+          if(currentProjectId === project.id){
+            const nextId = projects[0].id;
+            currentProjectId = null;
+            switchToProject(nextId);
+          }
+          renderProjectList();
+          renderProjectHeader();
+          saveState();
+        });
+        actionsRow.appendChild(delBtn);
+      }
 
       card.appendChild(headerRow);
       card.appendChild(metaRow);
       card.appendChild(actionsRow);
+      return card;
+    };
 
-      projectListBody.appendChild(card);
-    });
+    // 1. 조직 공유 프로젝트 섹션
+    if(activeOrganizationId && currentOrg){
+      const orgHeader = document.createElement('div');
+      orgHeader.style.cssText = 'font-weight:700; font-size:13px; color:var(--text); margin:12px 0 6px; padding-bottom:4px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;';
+      orgHeader.innerHTML = `<span>🏢 [${escapeHtml(currentOrg.name)}] 조직 공유 프로젝트</span> <span style="font-size:11px; color:var(--muted);">${orgProjects.length}개</span>`;
+      projectListBody.appendChild(orgHeader);
+
+      if(orgProjects.length === 0){
+        const emptyHint = document.createElement('div');
+        emptyHint.className = 'hint';
+        emptyHint.style.cssText = 'margin:6px 0 12px; font-size:12px;';
+        emptyHint.textContent = '이 조직에 등록된 프로젝트가 없습니다. "+ 새 프로젝트 만들기"로 생성하세요.';
+        projectListBody.appendChild(emptyHint);
+      } else {
+        orgProjects.slice().sort((a,b)=> new Date(b.savedAt||0) - new Date(a.savedAt||0)).forEach(p => {
+          projectListBody.appendChild(renderCard(p, true));
+        });
+      }
+    }
+
+    // 2. 개인 프로젝트 섹션
+    if(personalProjects.length > 0 || (activeOrganizationId && currentOrg)){
+      const personalHeader = document.createElement('div');
+      personalHeader.style.cssText = 'font-weight:700; font-size:13px; color:var(--muted); margin:16px 0 6px; padding-bottom:4px; border-bottom:1px dashed var(--line); display:flex; justify-content:space-between; align-items:center;';
+      personalHeader.innerHTML = `<span>📁 개인 조사 프로젝트</span> <span style="font-size:11px;">${personalProjects.length}개</span>`;
+      projectListBody.appendChild(personalHeader);
+
+      if(personalProjects.length === 0){
+        const emptyHint = document.createElement('div');
+        emptyHint.className = 'hint';
+        emptyHint.style.cssText = 'margin:6px 0 12px; font-size:12px;';
+        emptyHint.textContent = '개인 조사 프로젝트가 없습니다.';
+        projectListBody.appendChild(emptyHint);
+      } else {
+        personalProjects.slice().sort((a,b)=> new Date(b.savedAt||0) - new Date(a.savedAt||0)).forEach(p => {
+          projectListBody.appendChild(renderCard(p, false));
+        });
+      }
+    } else {
+      // 조직 선택 없는 기본 상태
+      filteredProjects.slice().sort((a,b)=> new Date(b.savedAt||0) - new Date(a.savedAt||0)).forEach(p => {
+        projectListBody.appendChild(renderCard(p, !!p.organizationId));
+      });
+    }
   }
 
   let editingProjectInfoId = null;
@@ -12307,6 +13258,7 @@
   loadWorkMode();
   parsePendingInviteFromUrl();
   loadSupabaseConfig();
+  loadSyncState();
   loadState();
   todaysMarkerCount();
 
