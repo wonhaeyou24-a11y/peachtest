@@ -3470,17 +3470,23 @@
   // 실패했었습니다. IndexedDB는 표준 브라우저 API라 실제로 동작합니다.
   // ================================================================
   // ================================================================
-  // 저장 계층 — IndexedDB 이중화 구조 (kv metadata + photoBlobs 전용 스토어)
-  // - kv 스토어: 프로젝트/시설물/도면/조사점/손상 메타데이터 저장
+  // 저장 계층 — IndexedDB 삼중화 구조 (kv metadata + photoBlobs + inspectionPoints 전용 스토어)
+  // - kv 스토어: 프로젝트/시설물/도면/조사점/손상 메타데이터 전체 스냅샷 저장
   // - photoBlobs 스토어: 사진 원본을 Base64가 아닌 순수 Blob/File로 직접 영구 저장
+  // - inspectionPoints 스토어: 개별 지점(마커)의 오프라인 Durable 영구 저장
   // ================================================================
   const IDB_NAME = 'point-shot-db';
-  const IDB_VERSION = 2;
+  const IDB_VERSION = 3;
   const IDB_STORE = 'kv';
   const IDB_PHOTO_STORE = 'photoBlobs';
+  const IDB_INSPECTION_STORE = 'inspectionPoints';
   let idbConn = null;
   let storageBackend = 'unknown';
   const memoryFallback = {};
+
+  function currentSiteObj(){
+    return (sites && sites.find(s => s.id === currentSiteId)) || { id: currentSiteId || null, projectId: currentProjectId || null };
+  }
 
   function openIDB(){
     if(idbConn) return idbConn;
@@ -3495,6 +3501,9 @@
         if(!db.objectStoreNames.contains(IDB_PHOTO_STORE)){
           db.createObjectStore(IDB_PHOTO_STORE, { keyPath: 'photoId' });
         }
+        if(!db.objectStoreNames.contains(IDB_INSPECTION_STORE)){
+          db.createObjectStore(IDB_INSPECTION_STORE, { keyPath: 'id' });
+        }
       };
       req.onsuccess = ()=>{
         const db = req.result;
@@ -3505,6 +3514,98 @@
       req.onblocked = ()=>{ idbConn = null; reject(new Error('IndexedDB 차단됨')); };
     });
     return idbConn;
+  }
+
+  // --- inspectionPoints 개별 지점 Durable Store I/O ---
+  async function idbPutInspectionPoint(point, site){
+    const db = await openIDB();
+    return new Promise((resolve, reject)=>{
+      try{
+        const tx = db.transaction(IDB_INSPECTION_STORE, 'readwrite');
+        const siteObj = site || currentSiteObj();
+        const record = {
+          id: point.id,
+          projectId: (siteObj && siteObj.projectId) || currentProjectId || null,
+          facilityId: (siteObj && siteObj.id) || currentSiteId || null,
+          num: point.num,
+          xPct: point.xPct ?? null,
+          yPct: point.yPct ?? null,
+          drawingId: point.drawingId || null,
+          lat: point.lat ?? null,
+          lng: point.lng ?? null,
+          gps: point.gps || null,
+          locationSource: point.locationSource || 'manual',
+          locationHistory: point.locationHistory || [],
+          photos: (point.photos || []).map(p => ({
+            id: p.id || null,
+            photoRef: p.photoRef || null,
+            note: p.note || '',
+            damages: p.damages || [],
+            exif: p.exif || null,
+            createdAt: p.createdAt || null
+          })),
+          createdAt: point.createdAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          deletedAt: point.deletedAt || null
+        };
+        tx.objectStore(IDB_INSPECTION_STORE).put(record);
+        tx.oncomplete = ()=> resolve(true);
+        tx.onerror = ()=> reject(tx.error || new Error('inspectionPoints 저장 실패'));
+        tx.onabort = ()=> reject(tx.error || new Error('inspectionPoints transaction 중단'));
+      }catch(e){
+        reject(e);
+      }
+    });
+  }
+
+  async function idbDeleteInspectionPoint(pointId, permanent = false){
+    const db = await openIDB();
+    return new Promise((resolve, reject)=>{
+      try{
+        const tx = db.transaction(IDB_INSPECTION_STORE, 'readwrite');
+        const store = tx.objectStore(IDB_INSPECTION_STORE);
+        if(permanent){
+          store.delete(pointId);
+        } else {
+          const getReq = store.get(pointId);
+          getReq.onsuccess = ()=>{
+            const item = getReq.result;
+            if(item){
+              item.deletedAt = new Date().toISOString();
+              item.updatedAt = new Date().toISOString();
+              store.put(item);
+            }
+          };
+        }
+        tx.oncomplete = ()=> resolve(true);
+        tx.onerror = ()=> reject(tx.error || new Error('inspectionPoints 삭제 실패'));
+        tx.onabort = ()=> reject(tx.error || new Error('inspectionPoints 삭제 트랜잭션 중단'));
+      }catch(e){
+        reject(e);
+      }
+    });
+  }
+
+  async function idbGetAllInspectionPoints(facilityId = null){
+    const db = await openIDB();
+    return new Promise((resolve, reject)=>{
+      try{
+        const tx = db.transaction(IDB_INSPECTION_STORE, 'readonly');
+        const store = tx.objectStore(IDB_INSPECTION_STORE);
+        const req = store.getAll();
+        req.onsuccess = ()=>{
+          const list = req.result || [];
+          if(facilityId){
+            resolve(list.filter(p => p.facilityId === facilityId && !p.deletedAt));
+          } else {
+            resolve(list.filter(p => !p.deletedAt));
+          }
+        };
+        req.onerror = ()=> reject(req.error || new Error('inspectionPoints 조회 실패'));
+      }catch(e){
+        reject(e);
+      }
+    });
   }
 
   // --- KV 메타데이터 Store I/O ---
@@ -3920,6 +4021,9 @@
       idbGetPhotoBlob,
       idbDeletePhotoBlob,
       idbAllPhotoBlobKeys,
+      idbPutInspectionPoint,
+      idbDeleteInspectionPoint,
+      idbGetAllInspectionPoints,
       storageSet,
       storageGet,
       storageDelete,
@@ -5480,29 +5584,39 @@
       }
 
       const { error: projErr } = await supabaseClient.from('ps_projects').upsert({
-        id: project.id, user_id: userId, name: project.name,
-        data: project, updated_at: new Date().toISOString(),
-        schema_version: CURRENT_SCHEMA_VERSION,
-        organization_id: project.organizationId || null // STEP8부터 실제 값 사용, 개인 프로젝트는 계속 null
-      });
+        id: project.id,
+        user_id: userId,
+        name: project.name,
+        data: project,
+        updated_at: new Date().toISOString(),
+        schema_version: String(project.schemaVersion || CURRENT_SCHEMA_VERSION),
+        organization_id: project.organizationId || null
+      }, { onConflict: 'id' });
       if(projErr) throw projErr;
 
       for(const s of psites){
         const lightSite = JSON.parse(JSON.stringify(s));
         (lightSite.markers || []).forEach(m=>{
-          (m.photos || []).forEach(p=>{ if(p.cloudRef) delete p.src; }); // 클라우드에 이미 있으면 테이블에는 안 담아 용량을 줄인다
+          (m.photos || []).forEach(p=>{ if(p.cloudRef) delete p.src; });
         });
         const { error: facErr } = await supabaseClient.from('ps_facilities').upsert({
-          id: s.id, project_id: project.id, user_id: userId, name: s.name,
-          data: lightSite, updated_at: new Date().toISOString(),
-          schema_version: CURRENT_SCHEMA_VERSION,
+          id: s.id,
+          project_id: project.id,
+          user_id: userId,
+          name: s.name,
+          data: lightSite,
+          updated_at: new Date().toISOString(),
+          schema_version: String(s.schemaVersion || CURRENT_SCHEMA_VERSION),
           organization_id: project.organizationId || null
-        });
+        }, { onConflict: 'id' });
         if(facErr) throw facErr;
       }
 
       project.cloudSyncedAt = new Date().toISOString();
-      await saveState();
+      // saveState()를 다시 호출하여 무한 동기화 큐 루프가 발생하는 것을 방지하고 경량 메타데이터만 직접 기록
+      try{
+        await storageSet(STORAGE_KEY, { schemaVersion: CURRENT_SCHEMA_VERSION, sites, currentSiteId, projects, currentProjectId, deletedSites });
+      }catch(e){}
       if(!opts.silent) renderCloudSyncBody();
       return { ok:true };
     }catch(e){
@@ -7374,6 +7488,74 @@
     btnResetImage.textContent = baseImageSrc ? '이미지 교체' : '이미지 불러오기';
   }
 
+  async function restoreInspectionPointsFromDurableStore(targetFacilityId = null){
+    const fId = targetFacilityId || currentSiteId;
+    if(!fId) return;
+
+    try{
+      const points = await idbGetAllInspectionPoints(fId);
+      if(!points || !points.length) return;
+
+      const targetSite = sites.find(s => s.id === fId);
+      let targetMarkers = (fId === currentSiteId) ? markers : ((targetSite && targetSite.markers) || []);
+
+      const existingById = new Map(targetMarkers.map(m => [m.id, m]));
+
+      for(const p of points){
+        const existing = existingById.get(p.id);
+        if(!existing){
+          targetMarkers.push({
+            id: p.id,
+            num: p.num,
+            xPct: p.xPct,
+            yPct: p.yPct,
+            drawingId: p.drawingId,
+            lat: p.lat,
+            lng: p.lng,
+            gps: p.gps,
+            locationSource: p.locationSource || 'manual',
+            locationHistory: p.locationHistory || [],
+            photos: p.photos || [],
+            createdAt: p.createdAt || new Date().toISOString()
+          });
+        } else {
+          // durable store가 더 최신 데이터인 경우 안전하게 병합
+          if(p.xPct != null && existing.xPct !== p.xPct) existing.xPct = p.xPct;
+          if(p.yPct != null && existing.yPct !== p.yPct) existing.yPct = p.yPct;
+          if(p.drawingId && existing.drawingId !== p.drawingId) existing.drawingId = p.drawingId;
+          if(p.lat != null && existing.lat !== p.lat) existing.lat = p.lat;
+          if(p.lng != null && existing.lng !== p.lng) existing.lng = p.lng;
+          if(p.gps && !existing.gps) existing.gps = p.gps;
+          if(p.locationSource && existing.locationSource !== p.locationSource) existing.locationSource = p.locationSource;
+          if(p.locationHistory && (!existing.locationHistory || existing.locationHistory.length < p.locationHistory.length)){
+            existing.locationHistory = p.locationHistory;
+          }
+          if(p.photos && p.photos.length > 0 && (!existing.photos || existing.photos.length < p.photos.length)){
+            existing.photos = p.photos;
+          }
+        }
+      }
+
+      targetMarkers.sort((a,b)=>(a.num || 0) - (b.num || 0));
+
+      if(fId === currentSiteId){
+        markers = targetMarkers;
+        if(markers.length){
+          nextNum = Math.max(nextNum || 1, ...markers.map(m => (m.num || 0) + 1));
+        }
+      }
+
+      if(targetSite){
+        targetSite.markers = targetMarkers;
+        if(targetMarkers.length){
+          targetSite.nextNum = Math.max(targetSite.nextNum || 1, ...targetMarkers.map(m => (m.num || 0) + 1));
+        }
+      }
+    }catch(e){
+      console.warn('restoreInspectionPointsFromDurableStore 실패', e);
+    }
+  }
+
   async function loadSite(site){
     ensureDrawingsIntegrity(site);
     ensureExistingDamagesIntegrity(site);
@@ -7389,6 +7571,10 @@
     activityLog = site.activityLog || [];
     trackLog = site.trackLog || [];
     markers.forEach(normalizePhotos);
+
+    // [Durable Store 복구] IndexedDB inspectionPoints에서 최신/누락 마커 안전 복구
+    await restoreInspectionPointsFromDurableStore(site.id);
+
     if(baseImageSrc){ renderBaseImage(); } else { resetStageToEmpty(); }
     renderMarkers();
     renderDrawingTabs();
@@ -7434,7 +7620,19 @@
       }
     }
 
-    // 2. 저장 시작 시점의 state를 snapshot으로 확정 (사진 원본 Base64가 제외된 경량 메타데이터)
+    // 2. inspectionPoints Durable 스토어에 현재 마커들 일괄 보존
+    let durablePointsOk = true;
+    try{
+      const currentSite = currentSiteObj();
+      for(const m of (markers || [])){
+        await idbPutInspectionPoint(m, currentSite);
+      }
+    }catch(e){
+      console.warn('performSaveState: inspectionPoints durable write 경고', e);
+      durablePointsOk = false;
+    }
+
+    // 3. 저장 시작 시점의 state를 snapshot으로 확정 (사진 원본 Base64가 제외된 경량 메타데이터)
     const snapshot = {
       schemaVersion: CURRENT_SCHEMA_VERSION,
       sites,
@@ -7444,7 +7642,7 @@
       deletedSites
     };
 
-    // 3. 메타데이터를 IndexedDB kv 스토어에 기록
+    // 4. 메타데이터를 IndexedDB kv 스토어에 기록
     let metadataOk = false;
     try{
       metadataOk = await storageSet(STORAGE_KEY, snapshot);
@@ -7453,7 +7651,7 @@
       metadataOk = false;
     }
 
-    const totalOk = currentSitePhotosOk && otherSitesPhotosOk && metadataOk;
+    const totalOk = currentSitePhotosOk && otherSitesPhotosOk && durablePointsOk && metadataOk;
     setSaveIndicator(totalOk ? 'saved' : 'failed');
     if(totalOk){
       maybeTakeSnapshot();
@@ -7493,132 +7691,27 @@
     saveInProgress = false;
   }
 
-  // 저장이 로컬에 성공적으로 끝난 뒤에만 호출된다. 클라우드로 즉시 올리지 않고
-  // 대기열에 넣기만 한다 — 실제 업로드는 processSyncQueue()가 온라인+로그인
-  // 상태일 때 처리한다. 이렇게 하면 오프라인 중에 쌓인 변경사항도 나중에
-  // 온라인이 되면 자동으로 재시도된다(예전엔 그 순간 온라인이 아니면 그냥
-  // 넘어가고 끝이었음).
-  function queueCloudSync(){
-    if(!currentProjectId) return;
-    enqueueProjectSync(currentProjectId).then(()=> processSyncQueue())
-      .catch(e => console.warn('동기화 큐 등록 중 오류(무시하고 계속, 로컬 저장에는 영향 없음)', e));
-  }
-
-  async function loadSyncQueue(){
-    try{ const q = await storageGet(SYNC_QUEUE_KEY); return Array.isArray(q) ? q : []; }
-    catch(e){ return []; }
-  }
-
-  async function saveSyncQueue(queue){
-    try{ await storageSet(SYNC_QUEUE_KEY, queue); }
-    catch(e){ console.warn('동기화 대기열 저장 실패(무시하고 계속)', e); }
-  }
-
-  // 같은 프로젝트를 여러 번 저장해도 대기열에는 "이 프로젝트를 올려야 함" 항목이
-  // 하나만 남는다 — 어차피 최신 상태를 올리면 되므로 중복으로 쌓을 필요가 없다.
-  async function enqueueProjectSync(projectId){
-    const queue = await loadSyncQueue();
-    const existing = queue.find(q => q.entityType === 'project' && q.entityId === projectId && q.status === 'pending');
-    if(existing){
-      existing.createdAt = new Date().toISOString();
-    } else {
-      queue.push({
-        operationId: genId(),
-        entityType: 'project',
-        entityId: projectId,
-        operation: 'PUSH',
-        payload: { projectId },
-        createdAt: new Date().toISOString(),
-        retryCount: 0,
-        status: 'pending',
-        lastError: null
-      });
-    }
-    await saveSyncQueue(queue);
-  }
-
-  let syncQueueProcessing = false;
-
-  // 온라인 + 로그인 상태일 때만 대기열을 순서대로 처리한다. 같은 프로젝트는
-  // 기존과 동일하게 최소 1분 간격으로만 올린다(스로틀 유지). 실패한 항목은
-  // 대기열에 그대로 남아 다음 기회(다음 저장, 혹은 온라인 복귀)에 재시도된다.
-  // 절대 예외를 던지지 않는다 — 이 처리가 조사·로컬저장을 막아서는 안 된다.
-  async function processSyncQueue(){
-    if(syncQueueProcessing) return;
-    if(!navigator.onLine || !supabaseClient || !supabaseSession){ updateSyncStatusIndicator(); return; }
-    syncQueueProcessing = true;
-    updateSyncStatusIndicator();
-    try{
-      let queue = await loadSyncQueue();
-      let changed = false;
-      for(const item of queue){
-        if(item.status !== 'pending') continue;
-        if(item.entityType !== 'project') continue; // 지금은 프로젝트 단위만 지원
-        const now = Date.now();
-        if(lastCloudPushAt[item.entityId] && (now - lastCloudPushAt[item.entityId]) < CLOUD_PUSH_MIN_INTERVAL_MS) continue; // 스로틀 중 — 다음 기회에
-        const proj = projects.find(p => p.id === item.entityId);
-        if(!proj){ item.status = 'done'; changed = true; continue; } // 로컬에서 이미 사라진 프로젝트는 큐에서 제거
-        lastCloudPushAt[item.entityId] = now;
-        const result = await pushProjectToCloud(proj, { silent:true });
-        changed = true;
-        if(result && result.ok){
-          item.status = 'done';
-        } else {
-          item.retryCount = (item.retryCount || 0) + 1;
-          item.lastError = (result && result.reason) || '알 수 없는 오류';
-        }
-      }
-      if(changed){
-        queue = queue.filter(q => q.status !== 'done');
-        await saveSyncQueue(queue);
-      }
-    }catch(e){
-      console.warn('동기화 대기열 처리 중 오류(무시하고 계속)', e);
-    } finally {
-      syncQueueProcessing = false;
-      updateSyncStatusIndicator();
-    }
-  }
-
-  // 상태줄에 동기화 대기/오류 건수를 보여준다. 대기열이 비어있으면 아예 숨긴다
-  // (평소엔 안 보이다가, 오프라인이거나 실패가 쌓였을 때만 눈에 띄게 하려는 의도).
-  async function updateSyncStatusIndicator(){
-    try{
-      const queue = await loadSyncQueue();
-      const pending = queue.filter(q => q.status === 'pending');
-      if(pending.length === 0){ sbSync.style.display = 'none'; return; }
-      const failing = pending.filter(q => (q.retryCount || 0) > 0);
-      sbSync.style.display = '';
-      if(!navigator.onLine){
-        sbSync.textContent = '☁️ 오프라인 · 대기 ' + pending.length + '건';
-        sbSync.className = 'sb-item pending';
-      } else if(failing.length > 0){
-        sbSync.textContent = '⚠️ 동기화 오류 ' + failing.length + '건(재시도 중)';
-        sbSync.className = 'sb-item err';
-      } else if(syncQueueProcessing){
-        sbSync.textContent = '☁️ 동기화 중… (' + pending.length + '건)';
-        sbSync.className = 'sb-item pending';
-      } else {
-        sbSync.textContent = '☁️ 동기화 대기 ' + pending.length + '건';
-        sbSync.className = 'sb-item pending';
-      }
-    }catch(e){ sbSync.style.display = 'none'; }
-  }
-
-  // 오프라인 중 쌓인 대기열은 온라인으로 돌아오는 순간 자동으로 재시도된다.
-  window.addEventListener('online', ()=> processSyncQueue());
-  window.addEventListener('offline', ()=> updateSyncStatusIndicator());
-
   // ================================================================
-  // STEP 5: Entity Sync Engine & Conflict Management
-  // 로컬 데이터를 최우선으로 보호하며 Entity 단위 동기화 및 충돌 감지 지원
+  // STEP 5 / Phase 4-2: Offline-First Unified Sync Engine & DB Schema Alignment
+  // IndexedDB를 현장조사의 원본(Source of Truth)으로 유지하고,
+  // 인터넷 연결이 있을 때만 Supabase와 안전하게 백그라운드 동기화합니다.
   // ================================================================
+  // SYNC_QUEUE_KEY 및 CONFLICT_RECORDS_KEY는 상단에서 이미 선언됨
   const ENTITY_SYNC_QUEUE_KEY = 'point-shot-entity-sync-queue';
-  // CONFLICT_RECORDS_KEY는 상단에서 이미 선언됨
   const SYNC_CURSOR_KEY = 'point-shot-sync-cursor';
   const PEACHSHOT_SYNC_CHANNEL_NAME = 'peachshot_sync_channel';
 
-  // Multi-tab 동기화 알림용 BroadcastChannel (상단 선언 재사용 및 리스너 등록)
+  // 재시도 간격: 1차 5초, 2차 15초, 3차 30초, 4차 60초, 5차 이후 최대 5분(300초)
+  const RETRY_DELAYS = [5000, 15000, 30000, 60000, 300000];
+  function getRetryDelay(retryCount){
+    const idx = Math.min(Math.max(0, (retryCount || 1) - 1), RETRY_DELAYS.length - 1);
+    return RETRY_DELAYS[idx];
+  }
+
+  let syncProcessing = false;
+  let lastSyncTimestamp = null;
+
+  // Multi-tab 동기화 알림용 BroadcastChannel
   if(!syncBroadcastChannel && typeof window !== 'undefined' && window.BroadcastChannel){
     try{
       syncBroadcastChannel = new BroadcastChannel(PEACHSHOT_SYNC_CHANNEL_NAME);
@@ -7634,24 +7727,57 @@
     }catch(e){}
   }
 
+  function queueCloudSync(){
+    if(!currentProjectId) return;
+    enqueueEntitySync({
+      entityType: 'project',
+      entityId: currentProjectId,
+      operation: 'upsert',
+      projectId: currentProjectId,
+      payload: { id: currentProjectId }
+    });
+  }
+
+  async function loadSyncQueue(){
+    return await loadEntitySyncQueue();
+  }
+
+  async function saveSyncQueue(queue){
+    return await saveEntitySyncQueue(queue);
+  }
+
   async function loadEntitySyncQueue(){
-    try{ const q = await storageGet(ENTITY_SYNC_QUEUE_KEY); return Array.isArray(q) ? q : []; }
-    catch(e){ return []; }
+    try{
+      const q = await storageGet(ENTITY_SYNC_QUEUE_KEY);
+      return Array.isArray(q) ? q : [];
+    }catch(e){
+      return [];
+    }
   }
 
   async function saveEntitySyncQueue(queue){
-    try{ await storageSet(ENTITY_SYNC_QUEUE_KEY, queue); }
-    catch(e){ console.warn('엔티티 동기화 큐 저장 실패(로컬 유지)', e); }
+    try{
+      await storageSet(ENTITY_SYNC_QUEUE_KEY, queue);
+    }catch(e){
+      console.warn('[Sync] 큐 저장 실패(로컬 데이터는 안전합니다)', e);
+    }
   }
 
   async function loadConflictRecords(){
-    try{ const r = await storageGet(CONFLICT_RECORDS_KEY); return Array.isArray(r) ? r : []; }
-    catch(e){ return []; }
+    try{
+      const r = await storageGet(CONFLICT_RECORDS_KEY);
+      return Array.isArray(r) ? r : [];
+    }catch(e){
+      return [];
+    }
   }
 
   async function saveConflictRecords(records){
-    try{ await storageSet(CONFLICT_RECORDS_KEY, records); }
-    catch(e){ console.warn('충돌 기록 저장 실패', e); }
+    try{
+      await storageSet(CONFLICT_RECORDS_KEY, records);
+    }catch(e){
+      console.warn('[Sync] 충돌 기록 저장 실패', e);
+    }
   }
 
   async function getSyncCursor(projectId){
@@ -7669,289 +7795,510 @@
     }catch(e){}
   }
 
-  // 지수 백오프 지연 시간 계산 (2초 -> 5초 -> 10초 -> 30초 -> 60초)
-  function getBackoffDelay(retryCount){
-    const delays = [2000, 5000, 10000, 30000, 60000];
-    return delays[Math.min(retryCount || 0, delays.length - 1)];
-  }
-
-  // 엔티티 큐 추가 (동일 엔티티 중복 큐 압축: Queue Compression)
+  // 표준화된 Sync Queue 항목 인큐 (Queue Compression & Soft Delete)
   async function enqueueEntitySync({ entityType, entityId, operation, projectId, facilityId, revision, payload }){
     if(!entityType || !entityId) return;
     const queue = await loadEntitySyncQueue();
     const now = new Date().toISOString();
-    const op = operation || 'update';
-    const userId = (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null;
-    const devId = getOrCreateDeviceId();
+    const op = operation === 'delete' ? 'delete' : 'upsert';
+    const normType = String(entityType).toLowerCase();
+    const targetProjId = projectId || currentProjectId || null;
+    const targetFacId = facilityId || currentSiteId || null;
+    const rev = typeof revision === 'number' ? revision : 1;
 
-    // 큐 압축: 동일 Entity의 pending 항목이 있으면 최신 상태로 병합
-    const existingIdx = queue.findIndex(q => q.entityType === entityType && q.entityId === entityId && (q.status === 'pending' || q.status === 'failed'));
+    const existingIdx = queue.findIndex(q => String(q.entityType).toLowerCase() === normType && q.entityId === entityId && (q.status === 'pending' || q.status === 'failed'));
     if(existingIdx >= 0){
       const existing = queue[existingIdx];
+      existing.operation = op;
+      existing.projectId = targetProjId || existing.projectId;
+      existing.facilityId = targetFacId || existing.facilityId;
+      existing.revision = Math.max(existing.revision || 1, rev);
       if(op === 'delete'){
-        existing.operation = 'delete';
         existing.payload = null;
-      } else {
-        existing.payload = payload ? Object.assign({}, existing.payload || {}, payload) : existing.payload;
+      } else if(payload){
+        existing.payload = Object.assign({}, existing.payload || {}, payload);
       }
-      existing.revision = (typeof revision === 'number') ? revision : ((existing.revision || 1) + 1);
-      existing.updatedAt = now;
-      existing.updatedBy = userId;
+      existing.enqueuedAt = now;
       existing.status = 'pending';
-      existing.queuedAt = now;
     } else {
       queue.push({
-        id: genId(), // 독립 Queue ID
-        entityType,
-        entityId,   // localEntity.id === cloudEntity.id
+        queueId: genId(),
+        entityType: normType,
+        entityId: entityId,
+        projectId: targetProjId,
+        facilityId: targetFacId,
         operation: op,
-        projectId: projectId || currentProjectId || null,
-        facilityId: facilityId || currentSiteId || null,
-        revision: typeof revision === 'number' ? revision : 1,
+        revision: rev,
         payload: payload ? JSON.parse(JSON.stringify(payload)) : null,
-        updatedAt: now,
-        createdBy: userId,
-        updatedBy: userId,
-        deviceId: devId,
+        enqueuedAt: now,
         retryCount: 0,
-        status: 'pending',
-        lastError: null,
-        lastAttemptAt: null,
         nextRetryAt: 0,
-        queuedAt: now
+        lastError: null,
+        status: 'pending'
       });
     }
     await saveEntitySyncQueue(queue);
-    // 온라인 상태이면 비동기 동기화 트리거
-    if(navigator.onLine && supabaseClient && supabaseSession){
-      processEntitySyncQueue().catch(()=>{});
+    console.log(`[Sync] enqueue: ${normType} (${entityId}) op=${op} rev=${rev}`);
+
+    if(navigator.onLine && supabaseClient && supabaseSession && !syncProcessing){
+      processSyncQueue().catch(()=>{});
     }
   }
 
-  // 충돌 감지 및 Conflict Record 안전 저장 (양쪽 데이터 100% 보존)
-  async function detectAndRecordConflict({ entityType, entityId, localRevision, cloudRevision, localData, cloudData }){
-    console.warn(`[Sync Conflict] ${entityType} (${entityId}) 충돌 감지됨: Local Rev ${localRevision} vs Cloud Rev ${cloudRevision}`);
+  // 충돌 감지 및 ps_sync_conflicts 안전 기록
+  async function detectAndRecordConflict({ organization_id, project_id, entity_type, entity_id, user_id, local_revision, cloud_revision, local_data, cloud_data }){
+    console.warn(`[Sync] conflict: ${entity_type} (${entity_id}) Local Rev ${local_revision} vs Cloud Rev ${cloud_revision}`);
     const records = await loadConflictRecords();
+    const conflictId = genId();
     const conflictItem = {
-      id: genId(),
-      entityType,
-      entityId,
-      localRevision: localRevision || 1,
-      cloudRevision: cloudRevision || 1,
-      localData: localData ? JSON.parse(JSON.stringify(localData)) : null,
-      cloudData: cloudData ? JSON.parse(JSON.stringify(cloudData)) : null,
+      id: conflictId,
+      organization_id: organization_id || null,
+      project_id: project_id || currentProjectId || '',
+      entity_type: entity_type,
+      entity_id: entity_id,
+      user_id: user_id || (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null,
+      local_revision: local_revision || 1,
+      cloud_revision: cloud_revision || 1,
+      local_data: local_data ? JSON.parse(JSON.stringify(local_data)) : null,
+      cloud_data: cloud_data ? JSON.parse(JSON.stringify(cloud_data)) : null,
+      status: 'open',
       detectedAt: new Date().toISOString(),
       resolved: false
     };
     records.push(conflictItem);
     await saveConflictRecords(records);
 
-    // 큐 항목 상태를 conflict로 전환하여 자동 덮어쓰기 방지
-    const queue = await loadEntitySyncQueue();
-    const item = queue.find(q => q.entityType === entityType && q.entityId === entityId);
-    if(item){
-      item.status = 'conflict';
-      item.lastError = '충돌 감지: 로컬과 클라우드 데이터가 모두 수정되었습니다.';
-      await saveEntitySyncQueue(queue);
+    // 원격 ps_sync_conflicts 테이블에도 백업 기록 (실패해도 로컬 조사는 안전 유지)
+    if(supabaseClient && supabaseSession && navigator.onLine){
+      try{
+        await supabaseClient.from('ps_sync_conflicts').upsert({
+          id: conflictId,
+          organization_id: organization_id || null,
+          project_id: project_id || currentProjectId || '',
+          entity_type: entity_type,
+          entity_id: entity_id,
+          user_id: user_id || supabaseSession.user.id,
+          local_revision: local_revision || 1,
+          cloud_revision: cloud_revision || 1,
+          local_data: local_data || {},
+          cloud_data: cloud_data || {},
+          status: 'open',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+      }catch(e){
+        console.warn('[Sync] ps_sync_conflicts 원격 저장 예외(로컬 안전 유지)', e);
+      }
     }
+
     return conflictItem;
   }
 
-  let entitySyncLock = false;
-
-  // Push Engine: 로컬 엔티티 큐를 클라우드로 안전하게 업서트
-  async function processEntitySyncQueue(){
-    if(entitySyncLock) return { ok: false, reason: 'Sync already in progress' };
+  // Push Engine: Sync Queue를 순서대로 백그라운드 처리
+  async function processSyncQueue(){
+    if(syncProcessing) return { ok: false, reason: 'Sync already in progress' };
     if(!navigator.onLine || !supabaseClient || !supabaseSession){
+      updateSyncStatusIndicator();
       return { ok: false, reason: 'Offline or unauthenticated' };
     }
-    entitySyncLock = true;
+    syncProcessing = true;
+    updateSyncStatusIndicator();
+    console.log('[Sync] processing started...');
+
     try{
       let queue = await loadEntitySyncQueue();
-      if(queue.length === 0) return { ok: true, syncedCount: 0 };
+      if(queue.length === 0){
+        updateSyncStatusIndicator();
+        return { ok: true, syncedCount: 0 };
+      }
 
-      // 부모 -> 자식 순서 정렬 (Project -> Facility -> Drawing -> InspectionPoint -> Photo -> Damage -> ExistingDamage)
       const typePriority = {
-        'Project': 1,
-        'Facility': 2,
-        'Drawing': 3,
-        'InspectionPoint': 4,
-        'Photo': 5,
-        'Damage': 6,
-        'ExistingDamage': 7,
-        'DamageMaster': 8
+        'project': 1,
+        'facility': 2,
+        'drawing': 3,
+        'inspection_point': 4,
+        'photo': 5,
+        'damage': 6,
+        'existing_damage': 7
       };
-      queue.sort((a,b)=> (typePriority[a.entityType] || 99) - (typePriority[b.entityType] || 99));
+      queue.sort((a,b)=> (typePriority[String(a.entityType).toLowerCase()] || 99) - (typePriority[String(b.entityType).toLowerCase()] || 99));
 
       const now = Date.now();
       let changed = false;
       let syncedCount = 0;
 
-      // 50개 배치 제한
-      const batch = queue.filter(q => q.status === 'pending' && (q.nextRetryAt || 0) <= now).slice(0, 50);
+      const batch = queue.filter(q => (q.status === 'pending' || q.status === 'failed') && (q.nextRetryAt || 0) <= now).slice(0, 50);
 
       for(const item of batch){
         item.status = 'syncing';
-        item.lastAttemptAt = new Date().toISOString();
         const result = await syncSingleEntity(item);
 
-        if(result.ok){
+        if(result && result.ok){
           item.status = 'synced';
+          item.syncedAt = new Date().toISOString();
           syncedCount++;
           changed = true;
-        } else if(result.conflict){
+          console.log(`[Sync] success: ${item.entityType} (${item.entityId})`);
+        } else if(result && result.conflict){
           item.status = 'conflict';
           item.lastError = result.reason;
           changed = true;
-        } else if(result.authError || result.validationError){
-          // 인증/검증 오류는 무한 재시도하지 않고 failed로 표시 (로컬 데이터는 절대 삭제 안 함)
-          item.status = 'failed';
-          item.lastError = result.reason;
-          changed = true;
         } else {
-          // 네트워크/일시적 서버 오류는 지수 백오프 적용하여 재시도 예약
           item.retryCount = (item.retryCount || 0) + 1;
-          item.status = 'pending';
-          item.lastError = result.reason;
-          item.nextRetryAt = Date.now() + getBackoffDelay(item.retryCount);
+          item.status = 'failed';
+          item.lastError = (result && result.reason) || '알 수 없는 동기화 오류';
+          const delay = getRetryDelay(item.retryCount);
+          item.nextRetryAt = Date.now() + delay;
           changed = true;
+          console.warn(`[Sync] retry (#${item.retryCount} in ${delay}ms): ${item.entityType} (${item.entityId}) - ${item.lastError}`);
         }
       }
 
       if(changed){
-        // 성공한 항목만 큐에서 제거, 실패/보류/충돌 항목은 큐에 안전하게 보존
-        const remainingQueue = queue.filter(q => q.status !== 'synced');
-        await saveEntitySyncQueue(remainingQueue);
+        const remaining = queue.filter(q => q.status !== 'synced');
+        await saveEntitySyncQueue(remaining);
       }
 
+      lastSyncTimestamp = new Date().toISOString();
       if(syncedCount > 0 && syncBroadcastChannel){
         try{ syncBroadcastChannel.postMessage({ type: 'SYNC_COMPLETED', count: syncedCount }); }catch(e){}
       }
       return { ok: true, syncedCount };
     }catch(err){
-      console.warn('Entity sync processing failed (local preserved)', err);
+      console.warn('[Sync] 큐 처리 중 예외 (로컬 데이터 안전 보존)', err);
       return { ok: false, reason: err.message };
     }finally{
-      entitySyncLock = false;
+      syncProcessing = false;
+      updateSyncStatusIndicator();
     }
   }
 
-  // 개별 Entity Push 수행기 (OCC 기반 조건부 Update & Conflict Guard)
+  async function processEntitySyncQueue(){
+    return await processSyncQueue();
+  }
+
+  // 개별 Entity 단위 동기화 (실제 Supabase 7개 테이블 스키마 100% 일치)
   async function syncSingleEntity(item){
     if(!supabaseClient || !supabaseSession) return { ok: false, reason: 'AUTH_FAILED', authError: true };
-    const { entityType, entityId, operation, payload, revision } = item;
-    const expectedRevision = typeof revision === 'number' ? revision : 1;
+    const entityType = String(item.entityType).toLowerCase();
+    const entityId = item.entityId;
+    const op = item.operation || 'upsert';
+    const payload = item.payload;
+    const expectedRevision = typeof item.revision === 'number' ? item.revision : 1;
+    const userId = supabaseSession.user.id;
+    const devId = getOrCreateDeviceId();
 
     try{
-      if(entityType === 'Project'){
+      // 1. ps_projects Sync
+      if(entityType === 'project'){
         const proj = projects.find(p => p.id === entityId) || payload;
         if(!proj) return { ok: true };
-        const { data: existing, error: fetchErr } = await supabaseClient.from('ps_projects').select('data').eq('id', entityId).maybeSingle();
-        if(!fetchErr && existing && existing.data && existing.data.revision && existing.data.revision !== expectedRevision){
-          // Conflict 감지
+        const orgId = proj.organizationId || null;
+
+        const { data: existing, error: fetchErr } = await supabaseClient.from('ps_projects').select('data, updated_at').eq('id', entityId).maybeSingle();
+        if(!fetchErr && existing && existing.data && existing.data.revision && existing.data.revision > expectedRevision){
           await detectAndRecordConflict({
-            entityType: 'Project',
-            entityId,
-            localRevision: expectedRevision,
-            cloudRevision: existing.data.revision,
-            localData: proj,
-            cloudData: existing.data
+            organization_id: orgId,
+            project_id: entityId,
+            entity_type: 'project',
+            entity_id: entityId,
+            user_id: userId,
+            local_revision: expectedRevision,
+            cloud_revision: existing.data.revision,
+            local_data: proj,
+            cloud_data: existing.data
           });
           return { ok: false, conflict: true, reason: `Revision mismatch: Local ${expectedRevision} vs Cloud ${existing.data.revision}` };
         }
+
         proj.revision = expectedRevision + 1;
         const { error } = await supabaseClient.from('ps_projects').upsert({
           id: proj.id,
+          user_id: userId,
           name: proj.name,
-          user_id: supabaseSession.user.id,
           data: proj,
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
+          schema_version: String(proj.schemaVersion || CURRENT_SCHEMA_VERSION),
+          organization_id: orgId
         }, { onConflict: 'id' });
         if(error) return { ok: false, reason: error.message };
         return { ok: true };
       }
-      else if(entityType === 'Facility'){
+
+      // 2. ps_facilities Sync
+      else if(entityType === 'facility'){
         const site = sites.find(s => s.id === entityId) || payload;
         if(!site) return { ok: true };
-        const { data: existing, error: fetchErr } = await supabaseClient.from('ps_facilities').select('data').eq('id', entityId).maybeSingle();
-        if(!fetchErr && existing && existing.data && existing.data.revision && existing.data.revision !== expectedRevision){
+        const projId = site.projectId || item.projectId || currentProjectId;
+        const pObj = projects.find(p => p.id === projId);
+        const orgId = site.organizationId || (pObj && pObj.organizationId) || null;
+
+        const { data: existing, error: fetchErr } = await supabaseClient.from('ps_facilities').select('data, updated_at').eq('id', entityId).maybeSingle();
+        if(!fetchErr && existing && existing.data && existing.data.revision && existing.data.revision > expectedRevision){
           await detectAndRecordConflict({
-            entityType: 'Facility',
-            entityId,
-            localRevision: expectedRevision,
-            cloudRevision: existing.data.revision,
-            localData: site,
-            cloudData: existing.data
+            organization_id: orgId,
+            project_id: projId,
+            entity_type: 'facility',
+            entity_id: entityId,
+            user_id: userId,
+            local_revision: expectedRevision,
+            cloud_revision: existing.data.revision,
+            local_data: site,
+            cloud_data: existing.data
           });
           return { ok: false, conflict: true, reason: `Revision mismatch: Local ${expectedRevision} vs Cloud ${existing.data.revision}` };
         }
+
         site.revision = expectedRevision + 1;
+        const lightSite = JSON.parse(JSON.stringify(site));
+        (lightSite.markers || []).forEach(m => (m.photos || []).forEach(p => { if(p.cloudRef) delete p.src; }));
+
         const { error } = await supabaseClient.from('ps_facilities').upsert({
           id: site.id,
-          project_id: site.projectId || currentProjectId,
+          project_id: projId,
+          user_id: userId,
           name: site.name,
-          data: site,
-          updated_at: new Date().toISOString()
+          data: lightSite,
+          updated_at: new Date().toISOString(),
+          schema_version: String(site.schemaVersion || CURRENT_SCHEMA_VERSION),
+          organization_id: orgId
         }, { onConflict: 'id' });
         if(error) return { ok: false, reason: error.message };
         return { ok: true };
       }
-      else if(entityType === 'Photo'){
-        // 사진 메타데이터와 Blob 분리 동기화
-        if(payload && payload.photoRef && payload.pendingBlob){
-          const { error: upErr } = await supabaseClient.storage.from('ps-photos').upload(payload.photoRef, payload.pendingBlob, { upsert: true });
+
+      // 3. ps_inspection_points Sync
+      else if(entityType === 'inspection_point' || entityType === 'inspectionpoint'){
+        let point = payload;
+        if(!point){
+          for(const s of sites){
+            const found = (s.markers || []).find(m => m.id === entityId);
+            if(found){ point = found; if(!item.facilityId) item.facilityId = s.id; if(!item.projectId) item.projectId = s.projectId; break; }
+          }
+        }
+        if(!point && op !== 'delete') return { ok: true };
+        const projId = item.projectId || currentProjectId;
+        const facId = item.facilityId || currentSiteId;
+        const pObj = projects.find(p => p.id === projId);
+        const orgId = (pObj && pObj.organizationId) || null;
+
+        const { data: existing, error: checkErr } = await supabaseClient.from('ps_inspection_points').select('revision, data').eq('id', entityId).maybeSingle();
+        if(!checkErr && existing && existing.revision && existing.revision > expectedRevision){
+          await detectAndRecordConflict({
+            organization_id: orgId,
+            project_id: projId,
+            entity_type: 'inspection_point',
+            entity_id: entityId,
+            user_id: userId,
+            local_revision: expectedRevision,
+            cloud_revision: existing.revision,
+            local_data: point,
+            cloud_data: existing.data || existing
+          });
+          return { ok: false, conflict: true, reason: `Revision mismatch: Local ${expectedRevision} vs Cloud ${existing.revision}` };
+        }
+
+        const pointRevision = expectedRevision + 1;
+        if(point) point.revision = pointRevision;
+
+        const { error: upErr } = await supabaseClient.from('ps_inspection_points').upsert({
+          id: entityId,
+          drawing_id: (point && point.drawingId) || null,
+          facility_id: facId,
+          project_id: projId,
+          user_id: userId,
+          organization_id: orgId,
+          num: (point && point.num) || 1,
+          x: point ? (point.xPct != null ? point.xPct : (point.x != null ? point.x : null)) : null,
+          y: point ? (point.yPct != null ? point.yPct : (point.y != null ? point.y : null)) : null,
+          data: point || {},
+          revision: pointRevision,
+          schema_version: 8,
+          device_id: (point && point.deviceId) || devId,
+          deleted_at: op === 'delete' ? new Date().toISOString() : ((point && point.deletedAt) || null),
+          created_at: (point && point.createdAt) || new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          updated_by: userId
+        }, { onConflict: 'id' });
+        if(upErr) return { ok: false, reason: upErr.message };
+        return { ok: true };
+      }
+
+      // 4. ps_damages Sync
+      else if(entityType === 'damage'){
+        const dmg = payload || {};
+        const projId = item.projectId || currentProjectId;
+        const facId = item.facilityId || currentSiteId;
+        const pObj = projects.find(p => p.id === projId);
+        const orgId = (pObj && pObj.organizationId) || null;
+
+        const { data: existing, error: checkErr } = await supabaseClient.from('ps_damages').select('revision, data').eq('id', entityId).maybeSingle();
+        if(!checkErr && existing && existing.revision && existing.revision > expectedRevision){
+          await detectAndRecordConflict({
+            organization_id: orgId,
+            project_id: projId,
+            entity_type: 'damage',
+            entity_id: entityId,
+            user_id: userId,
+            local_revision: expectedRevision,
+            cloud_revision: existing.revision,
+            local_data: dmg,
+            cloud_data: existing.data || existing
+          });
+          return { ok: false, conflict: true, reason: `Revision mismatch: Local ${expectedRevision} vs Cloud ${existing.revision}` };
+        }
+
+        const dmgRevision = expectedRevision + 1;
+        const { error: upErr } = await supabaseClient.from('ps_damages').upsert({
+          id: entityId,
+          point_id: dmg.pointId || dmg.point_id || null,
+          facility_id: facId,
+          project_id: projId,
+          user_id: userId,
+          organization_id: orgId,
+          damage_type: dmg.damageType || dmg.damage_type || dmg.type || null,
+          component: dmg.component || null,
+          data: dmg,
+          revision: dmgRevision,
+          schema_version: 8,
+          device_id: dmg.deviceId || devId,
+          deleted_at: op === 'delete' ? new Date().toISOString() : (dmg.deletedAt || null),
+          created_at: dmg.createdAt || new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          updated_by: userId
+        }, { onConflict: 'id' });
+        if(upErr) return { ok: false, reason: upErr.message };
+        return { ok: true };
+      }
+
+      // 5. ps_existing_damages Sync
+      else if(entityType === 'existing_damage' || entityType === 'existingdamage'){
+        const exDmg = payload || {};
+        const projId = item.projectId || currentProjectId;
+        const facId = item.facilityId || currentSiteId;
+        const pObj = projects.find(p => p.id === projId);
+        const orgId = (pObj && pObj.organizationId) || null;
+
+        const { data: existing, error: checkErr } = await supabaseClient.from('ps_existing_damages').select('revision, data').eq('id', entityId).maybeSingle();
+        if(!checkErr && existing && existing.revision && existing.revision > expectedRevision){
+          await detectAndRecordConflict({
+            organization_id: orgId,
+            project_id: projId,
+            entity_type: 'existing_damage',
+            entity_id: entityId,
+            user_id: userId,
+            local_revision: expectedRevision,
+            cloud_revision: existing.revision,
+            local_data: exDmg,
+            cloud_data: existing.data || existing
+          });
+          return { ok: false, conflict: true, reason: `Revision mismatch: Local ${expectedRevision} vs Cloud ${existing.revision}` };
+        }
+
+        const exRevision = expectedRevision + 1;
+        const { error: upErr } = await supabaseClient.from('ps_existing_damages').upsert({
+          id: entityId,
+          facility_id: facId,
+          project_id: projId,
+          user_id: userId,
+          organization_id: orgId,
+          data: exDmg,
+          revision: exRevision,
+          schema_version: 8,
+          device_id: exDmg.deviceId || devId,
+          deleted_at: op === 'delete' ? new Date().toISOString() : (exDmg.deletedAt || null),
+          created_at: exDmg.createdAt || new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          updated_by: userId
+        }, { onConflict: 'id' });
+        if(upErr) return { ok: false, reason: upErr.message };
+        return { ok: true };
+      }
+
+      // 6. ps_drawings Sync
+      else if(entityType === 'drawing'){
+        const drawing = payload || {};
+        const projId = item.projectId || currentProjectId;
+        const facId = item.facilityId || currentSiteId;
+        const pObj = projects.find(p => p.id === projId);
+        const orgId = (pObj && pObj.organizationId) || null;
+
+        const { data: existing, error: checkErr } = await supabaseClient.from('ps_drawings').select('revision, data').eq('id', entityId).maybeSingle();
+        if(!checkErr && existing && existing.revision && existing.revision > expectedRevision){
+          await detectAndRecordConflict({
+            organization_id: orgId,
+            project_id: projId,
+            entity_type: 'drawing',
+            entity_id: entityId,
+            user_id: userId,
+            local_revision: expectedRevision,
+            cloud_revision: existing.revision,
+            local_data: drawing,
+            cloud_data: existing.data || existing
+          });
+          return { ok: false, conflict: true, reason: `Revision mismatch: Local ${expectedRevision} vs Cloud ${existing.revision}` };
+        }
+
+        const drawingRevision = expectedRevision + 1;
+        const { error: upErr } = await supabaseClient.from('ps_drawings').upsert({
+          id: entityId,
+          facility_id: facId,
+          project_id: projId,
+          user_id: userId,
+          organization_id: orgId,
+          name: drawing.name || '도면',
+          svg_data: drawing.svgData || drawing.svg || null,
+          data: drawing,
+          revision: drawingRevision,
+          schema_version: 8,
+          device_id: drawing.deviceId || devId,
+          deleted_at: op === 'delete' ? new Date().toISOString() : (drawing.deletedAt || null),
+          created_at: drawing.createdAt || new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          updated_by: userId
+        }, { onConflict: 'id' });
+        if(upErr) return { ok: false, reason: upErr.message };
+        return { ok: true };
+      }
+
+      // 7. ps_photo_index & Storage ps-photos Sync
+      else if(entityType === 'photo'){
+        const projId = item.projectId || currentProjectId;
+        const pObj = projects.find(p => p.id === projId);
+        const orgId = (pObj && pObj.organizationId) || null;
+        let blob = payload && payload.blob;
+        let mimeType = payload && payload.mimeType;
+
+        if(!blob){
+          const record = await idbGetPhotoBlob(entityId);
+          if(record && record.blob){
+            blob = record.blob;
+            mimeType = record.mimeType;
+          }
+        }
+
+        if(blob && blob instanceof Blob){
+          const path = userId + '/' + entityId;
+          const { error: upErr } = await supabaseClient.storage.from('ps-photos').upload(path, blob, {
+            upsert: true,
+            contentType: mimeType || blob.type || 'image/jpeg'
+          });
           if(upErr){
-            return { ok: false, reason: 'BLOB_UPLOAD_FAILED: ' + upErr.message };
+            return { ok: false, reason: 'STORAGE_UPLOAD_ERROR: ' + upErr.message };
           }
+          console.log(`[Sync] photo-upload: ${entityId} -> ps-photos/${path}`);
         }
-        if(payload){
-          const { error } = await supabaseClient.from('ps_photo_index').upsert({
-            id: entityId,
-            user_id: supabaseSession.user.id,
-            facility_id: item.facilityId,
-            photo_ref: payload.photoRef || entityId,
-            exif: payload.exif || null,
-            updated_at: new Date().toISOString()
-          }, { onConflict: 'id' });
-          if(error) return { ok: false, reason: error.message };
-        }
+
+        const { error: idxErr } = await supabaseClient.from('ps_photo_index').upsert({
+          photo_id: entityId,
+          owner_user_id: userId,
+          project_id: projId,
+          organization_id: orgId
+        }, { onConflict: 'photo_id' });
+        if(idxErr) return { ok: false, reason: idxErr.message };
         return { ok: true };
       }
-      else if(entityType === 'InspectionPoint' || entityType === 'Drawing' || entityType === 'Damage' || entityType === 'ExistingDamage'){
-        // 개별 Entity 단위 동기화 (해당 테이블이 Supabase에 생성되어 있을 시 독립 upsert 수행, 없을 시 상위 구조와 정합성 유지)
-        const tblName = entityType === 'InspectionPoint' ? 'ps_inspection_points' :
-                        entityType === 'Drawing' ? 'ps_drawings' :
-                        entityType === 'Damage' ? 'ps_damages' : 'ps_existing_damages';
-        try{
-          const { data: existing, error: checkErr } = await supabaseClient.from(tblName).select('revision').eq('id', entityId).maybeSingle();
-          if(!checkErr && existing && existing.revision && existing.revision !== expectedRevision){
-            await detectAndRecordConflict({
-              entityType,
-              entityId,
-              localRevision: expectedRevision,
-              cloudRevision: existing.revision,
-              localData: payload,
-              cloudData: existing
-            });
-            return { ok: false, conflict: true, reason: `Revision mismatch: Local ${expectedRevision} vs Cloud ${existing.revision}` };
-          }
-          if(payload){
-            payload.revision = expectedRevision + 1;
-            const { error: upErr } = await supabaseClient.from(tblName).upsert(Object.assign({}, payload, {
-              id: entityId,
-              facility_id: item.facilityId,
-              project_id: item.projectId,
-              updated_at: new Date().toISOString()
-            }), { onConflict: 'id' });
-            if(upErr && !upErr.message.includes('relation') && !upErr.message.includes('does not exist')){
-              return { ok: false, reason: upErr.message };
-            }
-          }
-        }catch(e){
-          // 테이블 미존재 시에도 로컬 데이터 보호 및 정상 처리
-        }
-        return { ok: true };
-      }
+
       return { ok: true };
     }catch(err){
       return { ok: false, reason: err.message || 'NETWORK_ERROR' };
@@ -7959,63 +8306,142 @@
   }
 
   // Pull Engine: 클라우드 변경분 조회 및 로컬 보호 병합
-  async function pullEntityChanges({ projectId, since }){
+  async function pullCloudChanges(projectId){
     if(!supabaseClient || !supabaseSession || !navigator.onLine) return { ok: false, reason: 'Offline' };
     const targetProjId = projectId || currentProjectId;
     if(!targetProjId) return { ok: false, reason: 'No project selected' };
 
+    console.log(`[Sync] pull starting for project: ${targetProjId}`);
     try{
-      let query = supabaseClient.from('ps_facilities').select('*').eq('project_id', targetProjId);
-      if(since) query = query.gt('updated_at', since);
-      const { data: remoteFacilities, error } = await query;
-      if(error) return { ok: false, reason: error.message };
-
       const queue = await loadEntitySyncQueue();
-      const pendingFacilityIds = new Set(queue.filter(q => q.entityType === 'Facility' && q.status === 'pending').map(q => q.entityId));
+      const pendingKeys = new Set(queue.filter(q => q.status === 'pending' || q.status === 'failed').map(q => `${String(q.entityType).toLowerCase()}:${q.entityId}`));
 
       let mergedCount = 0;
-      (remoteFacilities || []).forEach(rf => {
-        // 로컬 큐에 Pending 상태인 시설물은 절대 덮어쓰지 않고 보호
-        if(pendingFacilityIds.has(rf.id)){
-          console.log(`[Pull Protection] 로컬 미전송 수정본이 있는 시설물(${rf.id})은 클라우드 데이터로 덮어쓰지 않습니다.`);
-          return;
+
+      // 1. Facilities Pull
+      const { data: remoteFacs, error: facErr } = await supabaseClient.from('ps_facilities').select('*').eq('project_id', targetProjId);
+      if(!facErr && Array.isArray(remoteFacs)){
+        remoteFacs.forEach(rf => {
+          if(pendingKeys.has(`facility:${rf.id}`)){
+            console.log(`[Sync] pull protection: Facility(${rf.id}) 로컬 수정본 보호`);
+            return;
+          }
+          const idx = sites.findIndex(s => s.id === rf.id);
+          if(idx >= 0 && rf.data){
+            sites[idx] = Object.assign({}, sites[idx], rf.data);
+            mergedCount++;
+          } else if(rf.data){
+            sites.push(rf.data);
+            mergedCount++;
+          }
+        });
+      }
+
+      // 2. Inspection Points Pull
+      try{
+        const { data: remotePts } = await supabaseClient.from('ps_inspection_points').select('*').eq('project_id', targetProjId);
+        if(Array.isArray(remotePts)){
+          remotePts.forEach(rp => {
+            if(pendingKeys.has(`inspection_point:${rp.id}`)) return;
+            const site = sites.find(s => s.id === rp.facility_id);
+            if(site){
+              if(!site.markers) site.markers = [];
+              const mIdx = site.markers.findIndex(m => m.id === rp.id);
+              const markerData = rp.data || { id: rp.id, num: rp.num, xPct: rp.x, yPct: rp.y };
+              if(mIdx >= 0){
+                site.markers[mIdx] = Object.assign({}, site.markers[mIdx], markerData);
+              } else {
+                site.markers.push(markerData);
+              }
+              mergedCount++;
+            }
+          });
         }
-        const existingIdx = sites.findIndex(s => s.id === rf.id);
-        if(existingIdx >= 0 && rf.data){
-          sites[existingIdx] = rf.data;
-          mergedCount++;
-        } else if(rf.data){
-          sites.push(rf.data);
-          mergedCount++;
-        }
-      });
+      }catch(e){}
 
       if(mergedCount > 0){
-        await saveState();
+        await storageSet(STORAGE_KEY, { schemaVersion: CURRENT_SCHEMA_VERSION, sites, currentSiteId, projects, currentProjectId, deletedSites });
         refreshStageHeader();
         renderMarkers();
       }
 
       await setSyncCursor(targetProjId, new Date().toISOString());
+      console.log(`[Sync] pull completed: ${mergedCount} items merged`);
       return { ok: true, mergedCount };
     }catch(err){
+      console.warn('[Sync] pull failed', err);
       return { ok: false, reason: err.message };
     }
   }
 
-  // 글로벌 동기화 유틸리티 네임스페이스 등록
+  async function pullEntityChanges(opts){
+    return await pullCloudChanges(opts && opts.projectId);
+  }
+
+  // 상태줄 동기화 표시기
+  async function updateSyncStatusIndicator(){
+    try{
+      const queue = await loadEntitySyncQueue();
+      const pending = queue.filter(q => q.status === 'pending' || q.status === 'failed');
+      if(pending.length === 0){ sbSync.style.display = 'none'; return; }
+      const failing = pending.filter(q => (q.retryCount || 0) > 0);
+      sbSync.style.display = '';
+      if(!navigator.onLine){
+        sbSync.textContent = '☁️ 오프라인 · 대기 ' + pending.length + '건';
+        sbSync.className = 'sb-item pending';
+      } else if(failing.length > 0){
+        sbSync.textContent = '⚠️ 동기화 오류 ' + failing.length + '건(재시도 중)';
+        sbSync.className = 'sb-item err';
+      } else if(syncProcessing){
+        sbSync.textContent = '☁️ 동기화 중… (' + pending.length + '건)';
+        sbSync.className = 'sb-item pending';
+      } else {
+        sbSync.textContent = '☁️ 동기화 대기 ' + pending.length + '건';
+        sbSync.className = 'sb-item pending';
+      }
+    }catch(e){ sbSync.style.display = 'none'; }
+  }
+
+  // 오프라인 → 온라인 복귀 시 자동 동기화 리스너
+  window.addEventListener('online', async ()=>{
+    updateNet();
+    try{
+      await processSyncQueue();
+      await pullCloudChanges();
+    }catch(error){
+      console.warn('[Sync] online recovery failed', error);
+    }
+  });
+  window.addEventListener('offline', ()=> updateSyncStatusIndicator());
+
+  // 글로벌 동기화 진단 네임스페이스
   if(typeof window !== 'undefined'){
+    window.PeachShotSyncDiagnostics = Object.freeze({
+      async getQueue(){ return await loadEntitySyncQueue(); },
+      async getPendingCount(){
+        const q = await loadEntitySyncQueue();
+        return q.filter(item => item.status === 'pending' || item.status === 'failed').length;
+      },
+      getDeviceId(){ return getOrCreateDeviceId(); },
+      getLastSync(){ return lastSyncTimestamp; },
+      async getConflicts(){ return await loadConflictRecords(); },
+      async forceSync(){ return await processSyncQueue(); },
+      async forcePull(){ return await pullCloudChanges(); }
+    });
+
     window.PeachShotSync = Object.freeze({
       loadEntitySyncQueue,
       saveEntitySyncQueue,
       enqueueEntitySync,
-      processEntitySyncQueue,
+      processEntitySyncQueue: processSyncQueue,
+      processSyncQueue,
       pullEntityChanges,
+      pullCloudChanges,
       loadConflictRecords,
       detectAndRecordConflict,
       getSyncCursor,
       setSyncCursor,
-      getBackoffDelay
+      getBackoffDelay: getRetryDelay
     });
 
     window.PeachShotMultiUser = Object.freeze({
@@ -10874,22 +11300,55 @@
     return '수동 지정';
   }
 
-  function commitNewMarker(marker){
+  async function commitNewMarker(marker){
     markers.push(marker);
     renderMarkers();
     renderMapMarkers();
     renderLog();
     updateCounts();
-    saveState();
+
+    let idbPointOk = false;
+    try{
+      idbPointOk = await idbPutInspectionPoint(marker, currentSiteObj());
+    }catch(e){
+      console.error('idbPutInspectionPoint 실패:', e);
+      idbPointOk = false;
+    }
+
+    const saved = await saveState();
+
+    if(!idbPointOk || !saved){
+      // 저장 실패 시 마킹을 화면에만 남겨둔 상태로 진행하지 않는다.
+      // 방금 추가한 마커를 메모리에서 제거하여
+      // "저장된 것처럼 보이지만 실제로는 유실되는" 상황을 방지한다.
+      markers = markers.filter(m => m.id !== marker.id);
+      try{ await idbDeleteInspectionPoint(marker.id, true); }catch(e){}
+
+      renderMarkers();
+      renderMapMarkers();
+      renderLog();
+      updateCounts();
+
+      alert(
+        '⚠ 지점 저장에 실패했습니다.\n\n' +
+        '오프라인 저장공간에 기록되지 않아 조사 데이터를 보호할 수 없습니다.\n' +
+        '저장 상태를 확인한 후 다시 시도해주세요.'
+      );
+
+      return;
+    }
+
+    // 여기까지 왔다는 것은 IndexedDB 저장이 실제 완료된 상태다.
     openCapture(marker.id);
   }
 
-  function deleteMarker(markerId){
+  async function deleteMarker(markerId){
     const m = markers.find(x => x.id === markerId);
     if(!m) return;
     if(!confirm('지점 ' + m.num + '을(를) 삭제할까요?\n삭제해도 "휴지통"에서 복원할 수 있습니다.')) return;
     markers = markers.filter(x => x.id !== markerId);
     trash.push({ type:'marker', data: m, deletedAt: new Date().toISOString() });
+    try{ await idbDeleteInspectionPoint(markerId, false); }catch(e){}
     logActivity('지점 삭제', '지점 ' + m.num + ' (휴지통으로 이동)');
     if(movingMarkerId === markerId) cancelMoveMode();
     renderMarkers();
@@ -10945,7 +11404,7 @@
   }
 
   // 도면 위치로만 존재하던 지점에, 현재 기기의 GPS 위치를 그대로 기록해 붙여준다.
-  function assignCurrentGpsToMarker(markerId){
+  async function assignCurrentGpsToMarker(markerId){
     const m = markers.find(x => x.id === markerId);
     if(!m) return;
     if(!lastGps){ alert('아직 GPS 위치를 확인하지 못했습니다. 잠시 후 다시 시도해주세요.'); return; }
@@ -10957,6 +11416,7 @@
     logActivity('GPS 수동 기록', '지점 ' + m.num + ' (도면 위치는 변경되지 않음)');
     renderLog();
     if(currentMode === 'map') renderMapMarkers();
+    try{ await idbPutInspectionPoint(m, currentSiteObj()); }catch(e){}
     saveState();
   }
 
@@ -10992,7 +11452,7 @@
   // ---------- 대기중 사진 위치 배치 (일괄 가져오기에서 GPS 없는 사진 처리) ----------
   let awaitingMapAssign = null;
 
-  function assignPendingPhotoAt(lat, lng){
+  async function assignPendingPhotoAt(lat, lng){
     const item = awaitingMapAssign;
     awaitingMapAssign = null;
     moveBanner.style.display = 'none';
@@ -11003,12 +11463,14 @@
       markers.push(target);
     }
     target.photos.push(item.photo);
-    renderMarkers(); renderMapMarkers(); renderLog(); updateCounts(); saveState();
+    renderMarkers(); renderMapMarkers(); renderLog(); updateCounts();
+    try{ await idbPutInspectionPoint(target, currentSiteObj()); }catch(e){}
+    saveState();
     logActivity('사진 위치 지정', '지점 ' + target.num);
     continueNoGpsResolution();
   }
 
-  function handleTap(target, e){
+  async function handleTap(target, e){
     const markerEl = target && target.closest ? target.closest('.marker') : null;
     if(markerEl && !movingMarkerId){
       const m = markers.find(x => x.id === markerEl.dataset.id);
@@ -11033,12 +11495,13 @@
         m.drawingId = currentDrawingId; // 처음 배치되는 경우(원래 지도 지점) 이 도면에 정확히 연결한다
         renderMarkers();
         renderLog();
+        try{ await idbPutInspectionPoint(m, currentSiteObj()); }catch(err){}
         saveState();
       }
       cancelMoveMode();
       return;
     }
-    commitNewMarker(newMarkerBase({ xPct, yPct, drawingId: currentDrawingId }));
+    await commitNewMarker(newMarkerBase({ xPct, yPct, drawingId: currentDrawingId }));
   }
 
   function renderMarkers(){
@@ -11085,7 +11548,7 @@
     }).addTo(leafletMap);
     mapMarkerLayer = L.layerGroup().addTo(leafletMap);
 
-    leafletMap.on('click', (e)=>{
+    leafletMap.on('click', async (e)=>{
       if(movingMarkerId){
         const m = markers.find(x => x.id === movingMarkerId);
         if(m){
@@ -11093,17 +11556,18 @@
           m.lat = e.latlng.lat; m.lng = e.latlng.lng;
           renderMapMarkers();
           renderLog();
+          try{ await idbPutInspectionPoint(m, currentSiteObj()); }catch(err){}
           saveState();
         }
         cancelMoveMode();
         return;
       }
       if(awaitingMapAssign){
-        assignPendingPhotoAt(e.latlng.lat, e.latlng.lng);
+        await assignPendingPhotoAt(e.latlng.lat, e.latlng.lng);
         return;
       }
       const marker = newMarkerBase({ lat: e.latlng.lat, lng: e.latlng.lng });
-      commitNewMarker(marker);
+      await commitNewMarker(marker);
     });
 
     updateLiveLocationOnMap();
@@ -11276,10 +11740,10 @@
   tabImageMode.addEventListener('click', ()=> switchMode('image'));
   tabMapMode.addEventListener('click', ()=> switchMode('map'));
 
-  btnAddAtGps.addEventListener('click', ()=>{
+  btnAddAtGps.addEventListener('click', async ()=>{
     if(!lastGps){ alert('아직 GPS 위치를 확인하지 못했습니다. 잠시 후 다시 시도해주세요.'); return; }
     const marker = newMarkerBase({ lat: lastGps.lat, lng: lastGps.lng }, 'device-gps');
-    commitNewMarker(marker);
+    await commitNewMarker(marker);
   });
 
   btnRecenterMap.addEventListener('click', ()=>{
@@ -12036,6 +12500,7 @@
     renderLog();
     renderPreviewGridIfOpen(markerId);
     updateCounts();
+    try{ await idbPutInspectionPoint(m, currentSiteObj()); }catch(e){}
     saveState();
   }
 
@@ -13759,12 +14224,68 @@
     mirrorText(projectLabel, mhProject);
   })();
 
-  loadWorkMode();
-  parsePendingInviteFromUrl();
-  loadSupabaseConfig();
-  loadSyncState();
-  loadState();
-  todaysMarkerCount();
+  async function initPeachShotApp(){
+    try{
+      // 1. IndexedDB 연결 및 영구 저장소 활성화
+      await openIDB();
+      initStoragePersistence();
+    }catch(e){
+      console.warn('IndexedDB 초기화 경고:', e);
+    }
+
+    // 2. 기본 로컬 선호 설정 로드
+    try{
+      await loadWorkMode();
+      await loadDamageUsage();
+      await loadGlobalDamageMaster();
+      await loadOrgDamageMasterCache();
+      await loadRoleCache();
+      loadDbMetaAndReferences();
+      loadOtherCandidates();
+    }catch(e){
+      console.warn('기본 설정 로드 경고:', e);
+    }
+
+    // 3. 로컬 상태 로드 및 Durable InspectionPoints 복구 (최우선 확정)
+    try{
+      await loadState();
+      todaysMarkerCount();
+    }catch(e){
+      console.error('로컬 데이터 복구 실패:', e);
+    }
+
+    // 4. 클라우드 및 동기화 초기화 (로컬 복구 완료 후 비동기 진행)
+    try{
+      parsePendingInviteFromUrl();
+      loadSupabaseConfig();
+      loadSyncState();
+    }catch(e){
+      console.warn('클라우드 동기화 초기화 경고:', e);
+    }
+  }
+
+  initPeachShotApp();
+
+  // 앱 종료 대비 보조 안전 저장
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.visibilityState === 'hidden'){
+      try{
+        commitLiveToCurrentSite();
+        saveState();
+      }catch(e){
+        console.warn('visibilitychange 저장 실패', e);
+      }
+    }
+  });
+
+  window.addEventListener('pagehide', ()=>{
+    try{
+      commitLiveToCurrentSite();
+      saveState();
+    }catch(e){
+      console.warn('pagehide 저장 실패', e);
+    }
+  });
 
   if('serviceWorker' in navigator){
     window.addEventListener('load', ()=>{
