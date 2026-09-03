@@ -3469,9 +3469,15 @@
   // 호스팅해서 쓰는 실제 환경에는 존재하지 않아 저장이 항상 조용히
   // 실패했었습니다. IndexedDB는 표준 브라우저 API라 실제로 동작합니다.
   // ================================================================
+  // ================================================================
+  // 저장 계층 — IndexedDB 이중화 구조 (kv metadata + photoBlobs 전용 스토어)
+  // - kv 스토어: 프로젝트/시설물/도면/조사점/손상 메타데이터 저장
+  // - photoBlobs 스토어: 사진 원본을 Base64가 아닌 순수 Blob/File로 직접 영구 저장
+  // ================================================================
   const IDB_NAME = 'point-shot-db';
-  const IDB_VERSION = 1;
+  const IDB_VERSION = 2;
   const IDB_STORE = 'kv';
+  const IDB_PHOTO_STORE = 'photoBlobs';
   let idbConn = null;
   let storageBackend = 'unknown';
   const memoryFallback = {};
@@ -3479,18 +3485,19 @@
   function openIDB(){
     if(idbConn) return idbConn;
     idbConn = new Promise((resolve, reject)=>{
-      if(!window.indexedDB){ reject(new Error('IndexedDB 미지원')); return; }
+      if(!window.indexedDB){ reject(new Error('IndexedDB 미지원 브라우저')); return; }
       const req = indexedDB.open(IDB_NAME, IDB_VERSION);
       req.onupgradeneeded = (e)=>{
         const db = e.target.result;
-        if(!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
+        if(!db.objectStoreNames.contains(IDB_STORE)){
+          db.createObjectStore(IDB_STORE);
+        }
+        if(!db.objectStoreNames.contains(IDB_PHOTO_STORE)){
+          db.createObjectStore(IDB_PHOTO_STORE, { keyPath: 'photoId' });
+        }
       };
       req.onsuccess = ()=>{
         const db = req.result;
-        // 다른 탭에서 이 DB를 나중에 업그레이드하려고 하면(versionchange),
-        // 지금 연결을 닫아 그쪽을 막지 않는다. 동시에 이 연결은 더 이상
-        // 못 쓰게 됐으니 idbConn을 비워 다음 storageSet/Get 호출 때
-        // 자동으로 새로 연결을 맺게 한다.
         db.onversionchange = ()=>{ try{ db.close(); }catch(e){} idbConn = null; };
         resolve(db);
       };
@@ -3500,6 +3507,7 @@
     return idbConn;
   }
 
+  // --- KV 메타데이터 Store I/O ---
   function idbPut(key, value){
     return openIDB().then(db => new Promise((resolve, reject)=>{
       try{
@@ -3560,15 +3568,88 @@
     }));
   }
 
-  // storageSet/Get/Delete: IndexedDB 실패 시 localStorage로, 그것도 실패하면
-  // 메모리(새로고침 시 사라짐)로 자동 강등하며 사용자에게 상태를 표시합니다.
+  // --- photoBlobs 원본 바이너리 Store I/O (Blob/File 직접 저장) ---
+  function idbPutPhotoBlob(photoId, blob, mimeType){
+    return openIDB().then(db => new Promise((resolve, reject)=>{
+      try{
+        if(!blob || !(blob instanceof Blob)){
+          reject(new Error('유효한 Blob/File 객체가 아닙니다.'));
+          return;
+        }
+        const tx = db.transaction(IDB_PHOTO_STORE, 'readwrite');
+        const store = tx.objectStore(IDB_PHOTO_STORE);
+        const record = {
+          photoId: photoId,
+          blob: blob,
+          mimeType: mimeType || blob.type || 'image/jpeg',
+          size: blob.size,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        store.put(record);
+        tx.oncomplete = ()=> resolve(true);
+        tx.onerror = ()=>{ reject(tx.error || new Error('PhotoBlob Put 실패')); };
+        tx.onabort = ()=>{ reject(tx.error || new Error('PhotoBlob Tx 중단')); };
+      }catch(err){
+        reject(err);
+      }
+    }));
+  }
+
+  function idbGetPhotoBlob(photoId){
+    return openIDB().then(db => new Promise((resolve, reject)=>{
+      try{
+        const tx = db.transaction(IDB_PHOTO_STORE, 'readonly');
+        const store = tx.objectStore(IDB_PHOTO_STORE);
+        const req = store.get(photoId);
+        req.onsuccess = ()=> resolve(req.result || null);
+        req.onerror = ()=>{ reject(req.error || new Error('PhotoBlob Get 실패')); };
+        tx.onerror = ()=>{ reject(tx.error || new Error('PhotoBlob Tx 실패')); };
+      }catch(err){
+        reject(err);
+      }
+    }));
+  }
+
+  function idbDeletePhotoBlob(photoId){
+    return openIDB().then(db => new Promise((resolve, reject)=>{
+      try{
+        const tx = db.transaction(IDB_PHOTO_STORE, 'readwrite');
+        const store = tx.objectStore(IDB_PHOTO_STORE);
+        store.delete(photoId);
+        tx.oncomplete = ()=> resolve(true);
+        tx.onerror = ()=>{ reject(tx.error || new Error('PhotoBlob Delete 실패')); };
+        tx.onabort = ()=>{ reject(tx.error || new Error('PhotoBlob Tx 중단')); };
+      }catch(err){
+        reject(err);
+      }
+    }));
+  }
+
+  function idbAllPhotoBlobKeys(){
+    return openIDB().then(db => new Promise((resolve, reject)=>{
+      try{
+        const tx = db.transaction(IDB_PHOTO_STORE, 'readonly');
+        const store = tx.objectStore(IDB_PHOTO_STORE);
+        const req = store.getAllKeys();
+        req.onsuccess = ()=> resolve(req.result || []);
+        req.onerror = ()=>{ reject(req.error || new Error('PhotoBlob Keys 실패')); };
+        tx.onerror = ()=>{ reject(tx.error || new Error('PhotoBlob Tx 실패')); };
+      }catch(err){
+        reject(err);
+      }
+    }));
+  }
+
+  // storageSet/Get/Delete: 메타데이터 전용 저장소
+  // 사진 원본은 절대로 localStorage로 폴백하지 않고 photoBlobs 스토어에 보존합니다.
   async function storageSet(key, value){
     try{
       await idbPut(key, value);
       storageBackend = 'indexeddb';
       return true;
     }catch(e){
-      console.warn('IndexedDB 저장 실패, localStorage로 전환', e);
+      console.warn('IndexedDB 메타데이터 저장 실패, localStorage로 전환', e);
     }
     try{
       localStorage.setItem(key, JSON.stringify(value));
@@ -3614,22 +3695,22 @@
     if(!sbSave) return;
     clearTimeout(saveIndicatorTimer);
     if(state === 'saving'){
-      sbSave.textContent = '⟳ 저장 중';
+      sbSave.textContent = '⟳ 기기 저장 중…';
       sbSave.className = 'sb-item saving';
     } else if(state === 'saved'){
-      permanentFailureWarned = false; // 다시 정상 저장되면, 다음에 또 실패할 때 재경고할 수 있도록 초기화
+      permanentFailureWarned = false;
       lastSavedAt = new Date();
       const photoCount = markers.reduce((s,m)=>s+(m.photos||[]).length, 0);
       const timeStr = String(lastSavedAt.getHours()).padStart(2,'0') + ':' + String(lastSavedAt.getMinutes()).padStart(2,'0') + ':' + String(lastSavedAt.getSeconds()).padStart(2,'0');
-      const detail = currentSiteId ? (' · 사진' + photoCount + '장·지점' + markers.length + '개 · ' + timeStr + ' 저장') : '';
-      sbSave.textContent = '● 저장됨' + (storageBackend === 'memory' ? ' (임시)' : storageBackend === 'localstorage' ? ' (대체저장)' : '') + detail;
+      const detail = currentSiteId ? (' · 사진 ' + photoCount + '장 · 지점 ' + markers.length + '개 · ' + timeStr) : '';
+      sbSave.textContent = '✓ 기기에 안전하게 저장됨' + (storageBackend === 'memory' ? ' (임시)' : storageBackend === 'localstorage' ? ' (대체저장)' : '') + detail;
       sbSave.className = 'sb-item saved';
     } else {
-      sbSave.textContent = '⚠ 영구 저장 실패 - 다시 시도';
+      sbSave.textContent = '⚠ 사진/조사자료 저장 실패 - 다시 시도';
       sbSave.className = 'sb-item failed';
       if(!permanentFailureWarned){
         permanentFailureWarned = true;
-        alert('⚠ 영구 저장에 실패했습니다.\n지금 입력한 내용이 앱을 껐다 켜면 사라질 수 있습니다.\n기기 저장공간을 확인하거나, 가능하면 지금 바로 "⋯ → 사진 전체 ZIP 다운로드" 등으로 자료를 내보내 두세요.');
+        alert('⚠ 기기 영구 저장에 실패했습니다.\n사진 원본 또는 조사자료를 기기에 안전하게 저장하지 못했습니다.\n다시 촬영하거나 저장을 재시도하세요.');
       }
     }
   }
@@ -3690,15 +3771,142 @@
       (s.markers || []).forEach(m => {
         (m.photos || []).forEach(p => {
           if(p.photoRef) usedRefs.add(p.photoRef);
+          if(p.id) usedRefs.add(p.id);
         });
       });
     });
-    let allKeys = [];
-    try{ allKeys = await idbAllKeys(); }catch(e){ return { orphanKeys: [], usedCount: usedRefs.size }; }
-    const photoBlobKeys = allKeys.filter(k => typeof k === 'string' && k.indexOf('photo_blob_') === 0);
-    const orphanKeys = photoBlobKeys.filter(k => !usedRefs.has(k));
-    return { orphanKeys, usedCount: usedRefs.size, totalBlobs: photoBlobKeys.length };
+    let allPhotoKeys = [];
+    try{ allPhotoKeys = await idbAllPhotoBlobKeys(); }catch(e){}
+    const orphanKeys = allPhotoKeys.filter(k => !usedRefs.has(k));
+    return { orphanKeys, usedCount: usedRefs.size, totalBlobs: allPhotoKeys.length };
   }
+
+  // ---------- 앱 재실행 복구 및 저장소 무결성 진단 도구 ----------
+  window.PeachShotStorageDiagnostics = {
+    async verifyPhoto(photoId){
+      try{
+        if(!photoId) return { ok: false, photoId, reason: 'photoId가 비어있습니다.' };
+        const record = await idbGetPhotoBlob(photoId);
+        if(!record){
+          // legacy fallback check
+          const legacy = await storageGet(PHOTO_STORE_PREFIX + photoId);
+          if(legacy){
+            return { ok: true, photoId, isLegacy: true, size: legacy.length, mimeType: 'image/jpeg', reason: 'Legacy KV에서 확인됨' };
+          }
+          return { ok: false, photoId, reason: 'photoBlobs 스토어에 해당 사진이 존재하지 않습니다.' };
+        }
+        if(!record.blob || !(record.blob instanceof Blob)){
+          return { ok: false, photoId, reason: 'Blob 인스턴스가 아닙니다.' };
+        }
+        if(typeof record.size !== 'number' || record.size <= 0 || record.blob.size <= 0){
+          return { ok: false, photoId, reason: '사진 Blob 크기가 0바이트입니다.' };
+        }
+        return {
+          ok: true,
+          photoId,
+          size: record.blob.size,
+          mimeType: record.mimeType || record.blob.type,
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt
+        };
+      }catch(e){
+        return { ok: false, photoId, reason: e.message };
+      }
+    },
+
+    async verifyAllPhotos(allSites){
+      const targetSites = Array.isArray(allSites) ? allSites : (sites || []);
+      const photoRefs = [];
+      targetSites.forEach(s => {
+        (s.markers || []).forEach(m => {
+          (m.photos || []).forEach(p => {
+            const ref = p.photoRef || p.id;
+            if(ref) photoRefs.push({ ref, markerNum: m.num, siteName: s.name });
+          });
+        });
+      });
+
+      const details = [];
+      let verifiedCount = 0;
+      let missingCount = 0;
+      const missingIds = [];
+
+      for(const item of photoRefs){
+        const check = await this.verifyPhoto(item.ref);
+        details.push({ ...item, ...check });
+        if(check.ok){
+          verifiedCount++;
+        } else {
+          missingCount++;
+          missingIds.push(item.ref);
+        }
+      }
+
+      return {
+        totalPhotos: photoRefs.length,
+        verifiedCount,
+        missingCount,
+        missingIds,
+        allVerified: missingCount === 0,
+        details
+      };
+    },
+
+    async getStorageUsage(){
+      let est = null;
+      if(navigator.storage && navigator.storage.estimate){
+        try{ est = await navigator.storage.estimate(); }catch(e){}
+      }
+      let kvKeysCount = 0;
+      let photoBlobKeysCount = 0;
+      try{ kvKeysCount = (await idbAllKeys()).length; }catch(e){}
+      try{ photoBlobKeysCount = (await idbAllPhotoBlobKeys()).length; }catch(e){}
+
+      return {
+        usageBytes: est ? est.usage : 0,
+        quotaBytes: est ? est.quota : 0,
+        usageMb: est && est.usage ? (est.usage / (1024*1024)).toFixed(2) : '0.00',
+        quotaMb: est && est.quota ? (est.quota / (1024*1024)).toFixed(2) : '0.00',
+        usagePercent: est && est.quota && est.usage ? ((est.usage/est.quota)*100).toFixed(2) : '0.00',
+        kvKeysCount,
+        photoBlobKeysCount,
+        backend: storageBackend
+      };
+    },
+
+    async testWriteReadDelete(){
+      const start = Date.now();
+      const testId = '__test_diag_' + Date.now();
+      const testData = new Uint8Array(1024 * 100); // 100KB 테스트 바이너리
+      for(let i=0; i<testData.length; i++) testData[i] = (i % 256);
+      const testBlob = new Blob([testData], { type: 'image/jpeg' });
+
+      let writeOk = false;
+      let readOk = false;
+      let deleteOk = false;
+      let match = false;
+
+      try{
+        writeOk = await idbPutPhotoBlob(testId, testBlob, 'image/jpeg');
+        const readRecord = await idbGetPhotoBlob(testId);
+        if(readRecord && readRecord.blob && readRecord.blob.size === testBlob.size){
+          readOk = true;
+          match = true;
+        }
+        deleteOk = await idbDeletePhotoBlob(testId);
+      }catch(e){
+        console.warn('Storage diagnostics write-read-delete test failed', e);
+      }
+
+      return {
+        writeOk,
+        readOk,
+        deleteOk,
+        match,
+        durationMs: Date.now() - start
+      };
+    }
+  };
 
   // 글로벌 스토리지 유틸리티 네임스페이스 등록
   if(typeof window !== 'undefined'){
@@ -3708,6 +3916,10 @@
       idbGetRaw,
       idbDeleteRaw,
       idbAllKeys,
+      idbPutPhotoBlob,
+      idbGetPhotoBlob,
+      idbDeletePhotoBlob,
+      idbAllPhotoBlobKeys,
       storageSet,
       storageGet,
       storageDelete,
@@ -4108,55 +4320,116 @@
   // ================================================================
   const PHOTO_STORE_PREFIX = 'point-shot-photo:';
 
+  function dataUrlToBlob(dataUrl){
+    if(!dataUrl) return null;
+    if(dataUrl instanceof Blob) return dataUrl;
+    if(typeof dataUrl !== 'string') return null;
+    try{
+      const parts = dataUrl.split(',');
+      if(parts.length < 2) return null;
+      const mimeMatch = parts[0].match(/:(.*?);/);
+      const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+      const bstr = atob(parts[1]);
+      let n = bstr.length;
+      const u8arr = new Uint8Array(n);
+      while(n--){
+        u8arr[n] = bstr.charCodeAt(n);
+      }
+      return new Blob([u8arr], { type: mime });
+    }catch(e){
+      console.warn('dataUrlToBlob 변환 실패', e);
+      return null;
+    }
+  }
+
+  function blobToDataUrl(blob){
+    return new Promise((resolve, reject)=>{
+      if(!blob || !(blob instanceof Blob)){ resolve(null); return; }
+      const reader = new FileReader();
+      reader.onload = ()=> resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
   async function extractPhotoBlobsFromMarkers(markersArr){
+    let allOk = true;
     for(const m of (markersArr || [])){
       for(const p of (m.photos || [])){
-        if(p.src && !p.photoRef){
-          const id = p.id || genId();
+        const photoId = p.id || p.photoRef || genId();
+        p.id = photoId;
+        p.photoRef = photoId;
+
+        // Base64 src가 존재하면 photoBlobs 전용 스토어에 순수 Blob 형태로 저장
+        if(p.src && typeof p.src === 'string' && p.src.startsWith('data:')){
           try{
-            const ok = await storageSet(PHOTO_STORE_PREFIX + id, p.src);
-            if(ok !== false){
-              p.id = id;
-              p.photoRef = id;
-              delete p.src; // 별도 저장소에 안전하게 옮겨졌을 때만 메인 블롭에서 제거한다
+            const blob = dataUrlToBlob(p.src);
+            if(blob && blob.size > 0){
+              const ok = await idbPutPhotoBlob(photoId, blob, blob.type);
+              if(ok){
+                p.blobSize = blob.size;
+                p.mimeType = blob.type;
+                // [원칙] photoBlobs 저장이 확인된 후에만 metadata에서 거대 Base64 src 제거
+                delete p.src;
+              } else {
+                allOk = false;
+              }
+            } else {
+              allOk = false;
             }
           }catch(e){
-            console.warn('사진 분리 저장 실패(인라인으로 유지, 다음 저장 때 재시도)', e);
+            console.warn('사진 Blob 분리 저장 실패(인라인 Base64 보존)', photoId, e);
+            allOk = false;
           }
         }
       }
     }
+    return allOk;
   }
 
   async function hydratePhotoBlobs(markersArr){
     for(const m of (markersArr || [])){
       for(const p of (m.photos || [])){
-        if(p.photoRef && !p.src){
+        const ref = p.photoRef || p.id;
+        if(ref && !p.src){
           try{
-            const data = await storageGet(PHOTO_STORE_PREFIX + p.photoRef);
-            if(data) p.src = data;
+            // 1. photoBlobs 전용 스토어에서 직접 Blob 로드
+            const record = await idbGetPhotoBlob(ref);
+            if(record && record.blob){
+              p.src = await blobToDataUrl(record.blob);
+              p.blobSize = record.size;
+              p.mimeType = record.mimeType;
+            } else {
+              // 2. 레거시 kv 스토어 폴백 조회 (하위 호환 및 점진적 마이그레이션)
+              const legacyData = await storageGet(PHOTO_STORE_PREFIX + ref);
+              if(legacyData){
+                p.src = legacyData;
+                const blob = dataUrlToBlob(legacyData);
+                if(blob){
+                  await idbPutPhotoBlob(ref, blob, blob.type);
+                }
+              }
+            }
           }catch(e){
-            console.warn('사진 불러오기 실패(별도 저장소)', p.photoRef, e);
+            // [절대 원칙] 사진 읽기 일시 실패 시에도 메타데이터/지점을 절대 삭제하지 않음
+            console.warn('사진 복구 실패(메타데이터 보존)', ref, e);
           }
         }
       }
     }
   }
 
-  // 사진을 완전히(휴지통 비우기 등으로 되돌릴 수 없게) 지울 때, 별도 저장소로
-  // 분리되어 있던 원본 blob(photoRef)도 같이 지운다. 이걸 안 하면 화면에서는
-  // 사라져도 IndexedDB에는 원본이 영원히 남아 저장공간만 계속 차지하게 된다.
-  // markersOrPhotos: 마커 배열 또는 사진 객체 배열 중 무엇을 넘겨도 동작한다.
   async function deleteOrphanedPhotoBlobs(markersOrPhotos){
     const photos = [];
     for(const item of (markersOrPhotos || [])){
-      if(item && Array.isArray(item.photos)) photos.push(...item.photos); // 마커
-      else if(item && item.photoRef !== undefined) photos.push(item);     // 사진 자체
+      if(item && Array.isArray(item.photos)) photos.push(...item.photos);
+      else if(item && (item.photoRef !== undefined || item.id !== undefined)) photos.push(item);
     }
     for(const p of photos){
-      if(p && p.photoRef){
-        try{ await storageDelete(PHOTO_STORE_PREFIX + p.photoRef); }
-        catch(e){ console.warn('사진 blob 완전삭제 실패(무시하고 계속)', p.photoRef, e); }
+      const ref = p && (p.photoRef || p.id);
+      if(ref){
+        try{ await idbDeletePhotoBlob(ref); }catch(e){}
+        try{ await storageDelete(PHOTO_STORE_PREFIX + ref); }catch(e){}
       }
     }
   }
@@ -7150,25 +7423,43 @@
   async function performSaveState(){
     commitLiveToCurrentSite();
     setSaveIndicator('saving');
-    await extractPhotoBlobsFromMarkers(markers);
-    // 저장 시작 시점의 state를 snapshot으로 확정한다. 저장이 진행되는 동안 사용자가
-    // 계속 편집하더라도 이번 저장에는 이 시점 데이터가 안정적으로 저장되고,
-    // 그 이후의 변경은 savePending을 통해 별도로 다시 저장된다.
-    const snapshot = { schemaVersion: CURRENT_SCHEMA_VERSION, sites, currentSiteId, projects, currentProjectId, deletedSites };
-    let ok = false;
-    try{
-      ok = await storageSet(STORAGE_KEY, snapshot);
-    } catch(e){
-      // 저장 실패를 조용히 삼키지 않는다 — 기록만 하고 Recovery/Sync Queue 정책은 그대로 둔다.
-      console.error('saveState 저장 실패:', e);
-      ok = false;
+
+    // 1. 현재 활성 시설물 및 전체 시설물의 미저장 사진을 photoBlobs 스토어에 안전하게 영구 저장
+    const currentSitePhotosOk = await extractPhotoBlobsFromMarkers(markers);
+    let otherSitesPhotosOk = true;
+    for(const s of (sites || [])){
+      if(s.id !== currentSiteId){
+        const ok = await extractPhotoBlobsFromMarkers(s.markers || []);
+        if(!ok) otherSitesPhotosOk = false;
+      }
     }
-    setSaveIndicator(ok ? 'saved' : 'failed');
-    if(ok){
+
+    // 2. 저장 시작 시점의 state를 snapshot으로 확정 (사진 원본 Base64가 제외된 경량 메타데이터)
+    const snapshot = {
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      sites,
+      currentSiteId,
+      projects,
+      currentProjectId,
+      deletedSites
+    };
+
+    // 3. 메타데이터를 IndexedDB kv 스토어에 기록
+    let metadataOk = false;
+    try{
+      metadataOk = await storageSet(STORAGE_KEY, snapshot);
+    } catch(e){
+      console.error('saveState 메타데이터 저장 실패:', e);
+      metadataOk = false;
+    }
+
+    const totalOk = currentSitePhotosOk && otherSitesPhotosOk && metadataOk;
+    setSaveIndicator(totalOk ? 'saved' : 'failed');
+    if(totalOk){
       maybeTakeSnapshot();
       queueCloudSync();
     }
-    return ok;
+    return totalOk;
   }
 
   // 기존 호출부(await saveState() / saveState())는 전혀 바꾸지 않아도 되도록
@@ -11704,7 +11995,33 @@
     if(!m) return;
     if(!m.photos) m.photos = [];
     const quality = await computePhotoAnalysis(dataUrl);
-    m.photos.push({ src: dataUrl, note: '', damages: [], quality, exif: exif || undefined });
+    const photoId = genId();
+
+    const photoObj = {
+      id: photoId,
+      photoRef: photoId,
+      src: dataUrl,
+      note: '',
+      damages: [],
+      quality,
+      exif: exif || undefined
+    };
+
+    // 사진 촬영 즉시 1차 Blob 변환 및 photoBlobs 스토어 저장 시도
+    try{
+      const blob = dataUrlToBlob(dataUrl);
+      if(blob && blob.size > 0){
+        const ok = await idbPutPhotoBlob(photoId, blob, blob.type);
+        if(ok){
+          photoObj.blobSize = blob.size;
+          photoObj.mimeType = blob.type;
+        }
+      }
+    }catch(e){
+      console.warn('사진 즉각 Blob 저장 알림 (saveState에서 재시도)', e);
+    }
+
+    m.photos.push(photoObj);
     logActivity('사진 추가', '지점 ' + m.num + ' · 사진 ' + m.photos.length + '장째');
     // 도면 지점에 지도 좌표가 아직 없고, 이 사진에 GPS가 있으면 최초 위치로 자동 연계 (도면↔지도 연계)
     if(m.lat == null && exif && exif.lat != null && exif.lng != null){
