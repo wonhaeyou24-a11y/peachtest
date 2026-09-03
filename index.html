@@ -3765,19 +3765,39 @@
   }
 
   async function storageGet(key){
-    let idbSuccess = false;
+    // 1. IndexedDB에서 key 조회
     try{
       const v = await idbGetRaw(key);
-      idbSuccess = true;
-      if(v !== undefined){ storageBackend = 'indexeddb'; return v; }
-    }catch(e){ /* IndexedDB 접근 실패 시에만 localStorage 폴백으로 진행 */ }
-    if(!idbSuccess){
-      try{
-        const raw = localStorage.getItem(key);
-        if(raw){ storageBackend = 'localstorage'; return JSON.parse(raw); }
-      }catch(e2){ /* 계속 */ }
+      if(v !== undefined && v !== null){
+        storageBackend = 'indexeddb';
+        return v;
+      }
+    }catch(e){
+      console.warn('storageGet: idbGetRaw 접근 실패, localStorage fallback으로 전환', e);
     }
-    if(key in memoryFallback){ storageBackend = 'memory'; return memoryFallback[key]; }
+
+    // 2. IDB에 값이 없거나(undefined/null) 접근 에러 시 반드시 localStorage 조회
+    try{
+      const raw = localStorage.getItem(key);
+      if(raw !== null && raw !== undefined && raw !== ''){
+        const parsed = JSON.parse(raw);
+        storageBackend = 'localstorage';
+        // 3. localStorage에서 기존 데이터를 발견한 경우, 다음 실행부터 IDB에서 바로 복원되도록 즉시 백그라운드 migration
+        try{
+          idbPut(key, parsed).catch(err => console.warn('localStorage -> IDB migration 저장 실패(데이터는 유지됨)', err));
+        }catch(e3){}
+        return parsed;
+      }
+    }catch(e2){
+      console.warn('storageGet: localStorage 파싱 실패', e2);
+    }
+
+    // 4. 두 저장소 모두 없을 때만 memoryFallback 확인
+    if(key in memoryFallback){
+      storageBackend = 'memory';
+      return memoryFallback[key];
+    }
+
     return undefined;
   }
 
@@ -3806,6 +3826,9 @@
       const detail = currentSiteId ? (' · 사진 ' + photoCount + '장 · 지점 ' + markers.length + '개 · ' + timeStr) : '';
       sbSave.textContent = '✓ 기기에 안전하게 저장됨' + (storageBackend === 'memory' ? ' (임시)' : storageBackend === 'localstorage' ? ' (대체저장)' : '') + detail;
       sbSave.className = 'sb-item saved';
+    } else if(state === 'pending_retry'){
+      sbSave.textContent = '⏳ 저장 대기 중 (재시도 진행 중)';
+      sbSave.className = 'sb-item saving';
     } else {
       sbSave.textContent = '⚠ 사진/조사자료 저장 실패 - 다시 시도';
       sbSave.className = 'sb-item failed';
@@ -8490,7 +8513,7 @@
         renderProjectHeader();
         const site = sites.find(s => s.id === currentSiteId);
         if(site){
-          loadSite(site);
+          await loadSite(site);
         } else {
           refreshStageHeader();
           updateResetImageLabel();
@@ -11300,46 +11323,42 @@
     return '수동 지정';
   }
 
-  async function commitNewMarker(marker){
+  function commitNewMarker(marker){
+    // 1. 메모리에 marker 추가
     markers.push(marker);
+
+    // 2. 화면에 marker 즉시 표시
     renderMarkers();
     renderMapMarkers();
     renderLog();
     updateCounts();
 
-    let idbPointOk = false;
-    try{
-      idbPointOk = await idbPutInspectionPoint(marker, currentSiteObj());
-    }catch(e){
-      console.error('idbPutInspectionPoint 실패:', e);
-      idbPointOk = false;
-    }
-
-    const saved = await saveState();
-
-    if(!idbPointOk || !saved){
-      // 저장 실패 시 마킹을 화면에만 남겨둔 상태로 진행하지 않는다.
-      // 방금 추가한 마커를 메모리에서 제거하여
-      // "저장된 것처럼 보이지만 실제로는 유실되는" 상황을 방지한다.
-      markers = markers.filter(m => m.id !== marker.id);
-      try{ await idbDeleteInspectionPoint(marker.id, true); }catch(e){}
-
-      renderMarkers();
-      renderMapMarkers();
-      renderLog();
-      updateCounts();
-
-      alert(
-        '⚠ 지점 저장에 실패했습니다.\n\n' +
-        '오프라인 저장공간에 기록되지 않아 조사 데이터를 보호할 수 없습니다.\n' +
-        '저장 상태를 확인한 후 다시 시도해주세요.'
-      );
-
-      return;
-    }
-
-    // 여기까지 왔다는 것은 IndexedDB 저장이 실제 완료된 상태다.
+    // 3. 사용자 제스처가 살아있는 동일한 동기 실행 흐름에서 openCapture 즉시 시작
     openCapture(marker.id);
+
+    // 4. 그와 별개로 IndexedDB Durable 저장 및 전체 snapshot 저장을 비동기로 진행
+    (async ()=>{
+      let pointSaved = false;
+      try{
+        pointSaved = await idbPutInspectionPoint(marker, currentSiteObj());
+      }catch(e){
+        console.warn('commitNewMarker: idbPutInspectionPoint 경고 (재시도 대기)', e);
+        pointSaved = false;
+      }
+
+      let stateSaved = false;
+      try{
+        stateSaved = await saveState();
+      }catch(e){
+        console.warn('commitNewMarker: saveState 경고 (재시도 대기)', e);
+        stateSaved = false;
+      }
+
+      if(!pointSaved || !stateSaved){
+        // [원칙] 저장 실패 시에도 지점을 절대 자동 삭제하지 않고 재시도/대기 상태로 보존
+        setSaveIndicator('pending_retry');
+      }
+    })();
   }
 
   async function deleteMarker(markerId){
@@ -11470,7 +11489,7 @@
     continueNoGpsResolution();
   }
 
-  async function handleTap(target, e){
+  function handleTap(target, e){
     const markerEl = target && target.closest ? target.closest('.marker') : null;
     if(markerEl && !movingMarkerId){
       const m = markers.find(x => x.id === markerEl.dataset.id);
@@ -11495,13 +11514,13 @@
         m.drawingId = currentDrawingId; // 처음 배치되는 경우(원래 지도 지점) 이 도면에 정확히 연결한다
         renderMarkers();
         renderLog();
-        try{ await idbPutInspectionPoint(m, currentSiteObj()); }catch(err){}
+        idbPutInspectionPoint(m, currentSiteObj()).catch(()=>{});
         saveState();
       }
       cancelMoveMode();
       return;
     }
-    await commitNewMarker(newMarkerBase({ xPct, yPct, drawingId: currentDrawingId }));
+    commitNewMarker(newMarkerBase({ xPct, yPct, drawingId: currentDrawingId }));
   }
 
   function renderMarkers(){
@@ -11548,7 +11567,7 @@
     }).addTo(leafletMap);
     mapMarkerLayer = L.layerGroup().addTo(leafletMap);
 
-    leafletMap.on('click', async (e)=>{
+    leafletMap.on('click', (e)=>{
       if(movingMarkerId){
         const m = markers.find(x => x.id === movingMarkerId);
         if(m){
@@ -11556,18 +11575,18 @@
           m.lat = e.latlng.lat; m.lng = e.latlng.lng;
           renderMapMarkers();
           renderLog();
-          try{ await idbPutInspectionPoint(m, currentSiteObj()); }catch(err){}
+          idbPutInspectionPoint(m, currentSiteObj()).catch(()=>{});
           saveState();
         }
         cancelMoveMode();
         return;
       }
       if(awaitingMapAssign){
-        await assignPendingPhotoAt(e.latlng.lat, e.latlng.lng);
+        assignPendingPhotoAt(e.latlng.lat, e.latlng.lng);
         return;
       }
       const marker = newMarkerBase({ lat: e.latlng.lat, lng: e.latlng.lng });
-      await commitNewMarker(marker);
+      commitNewMarker(marker);
     });
 
     updateLiveLocationOnMap();
@@ -11740,10 +11759,10 @@
   tabImageMode.addEventListener('click', ()=> switchMode('image'));
   tabMapMode.addEventListener('click', ()=> switchMode('map'));
 
-  btnAddAtGps.addEventListener('click', async ()=>{
+  btnAddAtGps.addEventListener('click', ()=>{
     if(!lastGps){ alert('아직 GPS 위치를 확인하지 못했습니다. 잠시 후 다시 시도해주세요.'); return; }
     const marker = newMarkerBase({ lat: lastGps.lat, lng: lastGps.lng }, 'device-gps');
-    await commitNewMarker(marker);
+    commitNewMarker(marker);
   });
 
   btnRecenterMap.addEventListener('click', ()=>{
@@ -12471,22 +12490,26 @@
       exif: exif || undefined
     };
 
-    // 사진 촬영 즉시 1차 Blob 변환 및 photoBlobs 스토어 저장 시도
+    // 1. Blob 생성 및 photoBlobs 전용 스토어에 실제 트랜잭션 완결 저장
+    let blobOk = false;
     try{
       const blob = dataUrlToBlob(dataUrl);
       if(blob && blob.size > 0){
-        const ok = await idbPutPhotoBlob(photoId, blob, blob.type);
-        if(ok){
+        blobOk = await idbPutPhotoBlob(photoId, blob, blob.type);
+        if(blobOk){
           photoObj.blobSize = blob.size;
           photoObj.mimeType = blob.type;
         }
       }
     }catch(e){
-      console.warn('사진 즉각 Blob 저장 알림 (saveState에서 재시도)', e);
+      console.warn('addPhoto: photoBlobs 저장 실패 (Base64 보존 및 재시도 대기)', e);
+      blobOk = false;
     }
 
+    // 2. 사진 객체 추가
     m.photos.push(photoObj);
     logActivity('사진 추가', '지점 ' + m.num + ' · 사진 ' + m.photos.length + '장째');
+
     // 도면 지점에 지도 좌표가 아직 없고, 이 사진에 GPS가 있으면 최초 위치로 자동 연계 (도면↔지도 연계)
     if(m.lat == null && exif && exif.lat != null && exif.lng != null){
       m.lat = exif.lat; m.lng = exif.lng;
@@ -12495,13 +12518,28 @@
       }
       logActivity('GPS 자동 연계', '지점 ' + m.num + ' — 사진 위치정보로 지도 좌표 자동 생성');
     }
+
     renderMarkers();
     renderMapMarkers();
     renderLog();
     renderPreviewGridIfOpen(markerId);
     updateCounts();
-    try{ await idbPutInspectionPoint(m, currentSiteObj()); }catch(e){}
-    saveState();
+
+    // 3. inspectionPoints Durable 스토어에 photo metadata 포함 지점 정보 저장
+    let pointOk = false;
+    try{
+      pointOk = await idbPutInspectionPoint(m, currentSiteObj());
+    }catch(e){
+      console.warn('addPhoto: inspectionPoints 저장 실패 (재시도 대기)', e);
+      pointOk = false;
+    }
+
+    // 4. 전체 snapshot 저장
+    const stateOk = await saveState();
+
+    if(!blobOk || !pointOk || !stateOk){
+      setSaveIndicator('pending_retry');
+    }
   }
 
   // v1.0 Workspace 명령문 섹션16·22: PC/태블릿 사무실모드에서는 지점 상세보기를
