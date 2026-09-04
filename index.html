@@ -2308,8 +2308,8 @@
           <span class="more-item-desc">사진첩에서 여러 장을 골라 GPS 위치로 자동 지점 생성</span>
         </button>
         <button class="more-item" id="btnSafetyDashboard">
-          <span class="more-item-title">📊 데이터 안전 상태</span>
-          <span class="more-item-desc">현재 프로젝트의 저장·백업 상태를 한눈에 확인</span>
+          <span class="more-item-title">📊 상태 & 진단</span>
+          <span class="more-item-desc">저장·백업·동기화·충돌·저장공간·무결성을 탭으로 한 화면에서 확인</span>
         </button>
         <button class="more-item" id="btnTrash">
           <span class="more-item-title">휴지통</span>
@@ -2364,14 +2364,7 @@
             <span class="more-item-title">활동 로그</span>
             <span class="more-item-desc">생성·삭제·이동 등 변경 이력 확인</span>
           </button>
-          <button class="more-item" id="btnSyncDashboard">
-            <span class="more-item-title">🔄 동기화 & 저장소 안전 대시보드</span>
-            <span class="more-item-desc">실시간 동기화 상태 · 대기열 · 충돌(Conflict) 해결 · 저장 공간</span>
-          </button>
-          <button class="more-item" id="btnDiagnostics">
-            <span class="more-item-title">🩺 시스템 진단 & 데이터 무결성 감사</span>
-            <span class="more-item-desc">로컬 데이터 무결성 검사 · 안전 복구 · 시스템 진단 · 데이터 내보내기</span>
-          </button>
+          <!-- 동기화 대시보드 / 시스템 진단은 "📊 상태 & 진단"(위쪽) 안의 탭으로 통합됨 -->
           <button class="more-item" id="btnCloudSync">
             <span class="more-item-title">☁️ 클라우드 동기화</span>
             <span class="more-item-desc">Supabase 로그인 · 온라인일 때 자동 백업 · 조직 관리</span>
@@ -2488,54 +2481,43 @@
 </div>
 
 <!-- Sync & Storage Dashboard Modal (STEP 8) -->
-<div class="modal-backdrop" id="syncDashboardModal" style="display:none; z-index:9999;">
-  <div class="modal" style="max-width:680px; width:95%; max-height:90vh; display:flex; flex-direction:column; background:var(--panel);">
-    <div class="modal-head">
-      <h2>🔄 동기화 & 저장소 안전 대시보드</h2>
-      <button class="close-x" id="closeSyncDashboard" aria-label="닫기">✕</button>
-    </div>
-    <div class="modal-body" id="syncDashboardBody" style="overflow-y:auto; padding:18px;"></div>
-    <div class="modal-foot">
-      <button class="ghost" id="btnSyncDashboardClose">닫기</button>
-      <button class="primary" id="btnSyncDashboardRetry">⚡ 지금 전체 동기화 / 재시도</button>
-    </div>
-  </div>
-</div>
-
-<!-- Diagnostics & Data Integrity Modal (STEP 9) -->
-<div class="modal-backdrop" id="diagnosticsModal" style="display:none; z-index:9999;">
+<!-- 상태 & 진단 (통합, 2026-09) — 예전엔 "데이터 안전 상태"/"동기화 대시보드"/
+     "시스템 진단" 3개 별도 모달·더보기 버튼이었다. 내용이 상당히 겹쳐서(저장상태·
+     로그인상태·저장공간이 여러 화면에 중복 표시) 탭 하나로 합쳤다 — 각 탭 안쪽의
+     렌더 함수(renderSafetyDashboard/renderSyncDashboard/renderDiagnosticsModal)와
+     그 함수들이 쓰는 element id(safetyDashboardBody 등)는 전혀 안 건드렸고,
+     바깥 껍데기(모달 3개 → 1개, 탭 전환)만 바꿨다 — 안전한 최소변경. -->
+<div class="modal-backdrop" id="safetyDashboardModal" style="display:none; z-index:9999;">
   <div class="modal" style="max-width:760px; width:95%; max-height:90vh; display:flex; flex-direction:column; background:var(--panel);">
     <div class="modal-head">
-      <h2>🩺 시스템 진단 & 데이터 무결성 감사</h2>
-      <button class="close-x" id="closeDiagnostics" aria-label="닫기">✕</button>
-    </div>
-    <div class="modal-body" id="diagnosticsBody" style="overflow-y:auto; padding:18px;"></div>
-    <div class="modal-foot" style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;">
-      <div style="display:flex; gap:6px;">
-        <button class="ghost" id="btnExportAllData">📦 데이터 안전 내보내기</button>
-        <button class="ghost" id="btnImportDataTrigger">📥 데이터 안전 가져오기</button>
-        <input type="file" id="importDataFileInput" accept=".json" style="display:none;" />
-      </div>
-      <div style="display:flex; gap:6px;">
-        <button class="ghost" id="btnDiagnosticsClose">닫기</button>
-        <button class="primary" id="btnRunIntegrityCheck">🔍 무결성 전체 검사</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Data Safety Dashboard Modal -->
-<div class="modal-backdrop" id="safetyDashboardModal" style="display:none;">
-  <div class="modal">
-    <div class="modal-head">
-      <h2>데이터 안전 상태</h2>
+      <h2>📊 상태 & 진단</h2>
       <button class="close-x" id="closeSafetyDashboard" aria-label="닫기">✕</button>
     </div>
-    <div class="modal-body">
-      <div id="safetyDashboardBody"></div>
+    <div style="display:flex; gap:8px; padding:12px 18px 0;">
+      <button type="button" class="ghost dm-tab-btn active" id="statusTabSafetyBtn" onclick="switchStatusTab('safety')" style="flex:1;">상태 요약</button>
+      <button type="button" class="ghost dm-tab-btn" id="statusTabSyncBtn" onclick="switchStatusTab('sync')" style="flex:1;">동기화 & 충돌</button>
+      <button type="button" class="ghost dm-tab-btn" id="statusTabDiagBtn" onclick="switchStatusTab('diag')" style="flex:1;">진단 & 데이터관리</button>
+    </div>
+    <div class="modal-body" style="overflow-y:auto; padding:18px;">
+      <div id="statusPaneSafety">
+        <div id="safetyDashboardBody"></div>
+      </div>
+      <div id="statusPaneSync" style="display:none;">
+        <div id="syncDashboardBody"></div>
+      </div>
+      <div id="statusPaneDiag" style="display:none;">
+        <div id="diagnosticsBody"></div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:14px; padding-top:14px; border-top:1px solid var(--line);">
+          <button class="ghost" id="btnExportAllData">📦 데이터 안전 내보내기</button>
+          <button class="ghost" id="btnImportDataTrigger">📥 데이터 안전 가져오기</button>
+          <input type="file" id="importDataFileInput" accept=".json" style="display:none;" />
+          <button class="primary" id="btnRunIntegrityCheck">🔍 무결성 전체 검사</button>
+        </div>
+      </div>
     </div>
     <div class="modal-foot">
-      <button class="primary" id="btnDashboardBackup">📦 지금 백업</button>
+      <button class="primary" id="btnDashboardBackup" style="display:none;">📦 지금 백업</button>
+      <button class="primary" id="btnSyncDashboardRetry" style="display:none;">⚡ 지금 전체 동기화 / 재시도</button>
     </div>
   </div>
 </div>
@@ -2869,6 +2851,13 @@
   const closeSafetyDashboard = document.getElementById('closeSafetyDashboard');
   const safetyDashboardBody = document.getElementById('safetyDashboardBody');
   const btnDashboardBackup = document.getElementById('btnDashboardBackup');
+  // 상태&진단 통합 모달의 탭 3개 (상태요약/동기화&충돌/진단&데이터관리)
+  const statusPaneSafety = document.getElementById('statusPaneSafety');
+  const statusPaneSync = document.getElementById('statusPaneSync');
+  const statusPaneDiag = document.getElementById('statusPaneDiag');
+  const statusTabSafetyBtn = document.getElementById('statusTabSafetyBtn');
+  const statusTabSyncBtn = document.getElementById('statusTabSyncBtn');
+  const statusTabDiagBtn = document.getElementById('statusTabDiagBtn');
   const referenceModal = document.getElementById('referenceModal');
   const closeReferenceModal = document.getElementById('closeReferenceModal');
   const currentDbVersionBox = document.getElementById('currentDbVersionBox');
@@ -6467,31 +6456,18 @@
   }
 
   // 모달 이벤트 바인딩
-  const btnSyncDashboard = document.getElementById('btnSyncDashboard');
-  const syncDashboardModal = document.getElementById('syncDashboardModal');
-  const closeSyncDashboard = document.getElementById('closeSyncDashboard');
-  const btnSyncDashboardClose = document.getElementById('btnSyncDashboardClose');
   const btnSyncDashboardRetry = document.getElementById('btnSyncDashboardRetry');
 
-  if(btnSyncDashboard){
-    btnSyncDashboard.addEventListener('click', ()=>{
-      if(moreModal) moreModal.style.display = 'none';
-      renderSyncDashboard();
-      if(syncDashboardModal) syncDashboardModal.style.display = 'flex';
-    });
-  }
-
+  // "동기화 대시보드"는 이제 별도 모달이 아니라 상태&진단 통합 모달의 한 탭이다.
+  // (상태바 배지를 눌렀을 때만 여기서 열고, 더보기 버튼은 아래 "📊 상태 & 진단"
+  // 하나로 합쳐졌다 — btnSyncDashboard 자체가 더보기 메뉴에서 빠졌다.)
   const sbSyncEl = document.getElementById('sbSync');
   if(sbSyncEl){
     sbSyncEl.addEventListener('click', ()=>{
-      renderSyncDashboard();
-      if(syncDashboardModal) syncDashboardModal.style.display = 'flex';
+      switchStatusTab('sync');
+      safetyDashboardModal.style.display = 'flex';
     });
   }
-
-  if(closeSyncDashboard) closeSyncDashboard.addEventListener('click', ()=>{ syncDashboardModal.style.display = 'none'; });
-  if(btnSyncDashboardClose) btnSyncDashboardClose.addEventListener('click', ()=>{ syncDashboardModal.style.display = 'none'; });
-  if(syncDashboardModal) syncDashboardModal.addEventListener('click', (e)=>{ if(e.target === syncDashboardModal) syncDashboardModal.style.display = 'none'; });
 
   if(btnSyncDashboardRetry){
     btnSyncDashboardRetry.addEventListener('click', async ()=>{
@@ -6911,27 +6887,12 @@
     }
   }
 
-  // 모달 이벤트 바인딩
-  const btnDiagnostics = document.getElementById('btnDiagnostics');
-  const diagnosticsModal = document.getElementById('diagnosticsModal');
-  const closeDiagnostics = document.getElementById('closeDiagnostics');
-  const btnDiagnosticsClose = document.getElementById('btnDiagnosticsClose');
+  // "시스템 진단"도 별도 모달이 아니라 상태&진단 통합 모달의 한 탭이다 —
+  // 더보기의 btnDiagnostics 버튼 자체가 빠졌고, "📊 상태 & 진단" 하나로 합쳐졌다.
   const btnRunIntegrityCheck = document.getElementById('btnRunIntegrityCheck');
   const btnExportAllData = document.getElementById('btnExportAllData');
   const btnImportDataTrigger = document.getElementById('btnImportDataTrigger');
   const importDataFileInput = document.getElementById('importDataFileInput');
-
-  if(btnDiagnostics){
-    btnDiagnostics.addEventListener('click', ()=>{
-      if(moreModal) moreModal.style.display = 'none';
-      renderDiagnosticsModal();
-      if(diagnosticsModal) diagnosticsModal.style.display = 'flex';
-    });
-  }
-
-  if(closeDiagnostics) closeDiagnostics.addEventListener('click', ()=>{ diagnosticsModal.style.display = 'none'; });
-  if(btnDiagnosticsClose) btnDiagnosticsClose.addEventListener('click', ()=>{ diagnosticsModal.style.display = 'none'; });
-  if(diagnosticsModal) diagnosticsModal.addEventListener('click', (e)=>{ if(e.target === diagnosticsModal) diagnosticsModal.style.display = 'none'; });
 
   if(btnRunIntegrityCheck){
     btnRunIntegrityCheck.addEventListener('click', async ()=>{
@@ -7213,14 +7174,31 @@
     safetyDashboardBody.innerHTML = html;
   }
 
+  // 상태&진단 통합 모달의 탭 전환. 예전 "데이터 안전 상태"/"동기화 대시보드"/
+  // "시스템 진단" 3개 모달이 쓰던 렌더 함수를 그대로 호출한다 — 탭을 누를 때마다
+  // 항상 최신 상태로 다시 그린다.
+  window.switchStatusTab = function(tab){
+    const panes = { safety: statusPaneSafety, sync: statusPaneSync, diag: statusPaneDiag };
+    const btns = { safety: statusTabSafetyBtn, sync: statusTabSyncBtn, diag: statusTabDiagBtn };
+    Object.keys(panes).forEach(k=>{
+      if(panes[k]) panes[k].style.display = (k === tab) ? 'block' : 'none';
+      if(btns[k]) btns[k].classList.toggle('active', k === tab);
+    });
+    if(btnDashboardBackup) btnDashboardBackup.style.display = (tab === 'safety') ? '' : 'none';
+    if(btnSyncDashboardRetry) btnSyncDashboardRetry.style.display = (tab === 'sync') ? '' : 'none';
+    if(tab === 'safety') renderSafetyDashboard();
+    else if(tab === 'sync') renderSyncDashboard();
+    else if(tab === 'diag') renderDiagnosticsModal();
+  };
+
   btnSafetyDashboard.addEventListener('click', ()=>{
     moreModal.style.display = 'none';
-    renderSafetyDashboard();
+    switchStatusTab('safety');
     safetyDashboardModal.style.display = 'flex';
   });
   if(btnDashboardQuick){
     btnDashboardQuick.addEventListener('click', ()=>{
-      renderSafetyDashboard();
+      switchStatusTab('safety');
       safetyDashboardModal.style.display = 'flex';
     });
   }
