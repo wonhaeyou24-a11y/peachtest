@@ -2609,6 +2609,7 @@
     <div class="modal-body">
       <div class="field-grid">
         <label>손상명 *<input id="edDamageName" type="text" placeholder="예: 균열, 박리, 침하"></label>
+        <label>구간<input id="edSection" type="text" placeholder="예: 1구간, 2구간"></label>
         <label>위치<input id="edPosition" type="text" placeholder="예: 2층 남측 벽체"></label>
         <label>조사년도<input id="edSurveyYear" type="number" placeholder="예: 2023"></label>
         <label>구성요소<input id="edComponent" type="text" placeholder="예: 교대, 슬래브"></label>
@@ -2868,6 +2869,7 @@
   const closeExistingDamageForm = document.getElementById('closeExistingDamageForm');
   const edFormTitle = document.getElementById('edFormTitle');
   const edDamageName = document.getElementById('edDamageName');
+  const edSection = document.getElementById('edSection');
   const edPosition = document.getElementById('edPosition');
   const edSurveyYear = document.getElementById('edSurveyYear');
   const edComponent = document.getElementById('edComponent');
@@ -3198,6 +3200,7 @@
       damageName: ed.damageName || '',
       surveyYear: ed.surveyYear || '',
       component: ed.component || '',
+      section: ed.section || '',
       drawingPosition: ed.drawingPosition || '',
       measurement: ed.measurement || '',
       status: ed.status || '미확인',
@@ -10501,7 +10504,7 @@
       row.style.cursor = 'pointer';
       row.innerHTML =
         '<div style="font-weight:600;">' +
-        [d.drawingPosition, d.measurement, d.damageName || '(손상명 없음)'].filter(Boolean).map(escapeHtml).join(' - ') +
+        [d.section, d.drawingPosition, d.measurement, d.damageName || '(손상명 없음)'].filter(Boolean).map(escapeHtml).join(' - ') +
         '<span style="font-weight:400; color:#888; font-size:12px;"> · ' + escapeHtml(d.status || '미확인') + '</span></div>' +
         '<div style="font-size:12px; color:#666;">' +
         [d.id, d.surveyYear ? d.surveyYear + '년' : '', d.component].filter(Boolean).map(escapeHtml).join(' · ') +
@@ -10515,6 +10518,7 @@
     editingExistingDamageId = damage ? damage.id : null;
     edFormTitle.textContent = damage ? '기존손상 수정' : '기존손상 추가';
     edDamageName.value = damage ? (damage.damageName || '') : '';
+    edSection.value = damage ? (damage.section || '') : '';
     edPosition.value = damage ? (damage.drawingPosition || '') : '';
     edSurveyYear.value = damage ? (damage.surveyYear || '') : '';
     edComponent.value = damage ? (damage.component || '') : '';
@@ -10548,6 +10552,7 @@
       const d = existingDamages.find(x => x.id === editingExistingDamageId);
       if(d){
         d.damageName = name;
+        d.section = edSection.value.trim();
         d.drawingPosition = edPosition.value.trim();
         d.surveyYear = edSurveyYear.value ? Number(edSurveyYear.value) : null;
         d.component = edComponent.value.trim();
@@ -10565,6 +10570,7 @@
       const d = {
         id: 'EX-DMG-' + String(num).padStart(3,'0'),
         damageName: name,
+        section: edSection.value.trim(),
         drawingPosition: edPosition.value.trim(),
         surveyYear: edSurveyYear.value ? Number(edSurveyYear.value) : null,
         component: edComponent.value.trim(),
@@ -10607,6 +10613,7 @@
   const EXCEL_COLUMNS = [
     { key:'id', label:'ID' },
     { key:'damageName', label:'손상명' },
+    { key:'section', label:'구간' },
     { key:'drawingPosition', label:'위치' },
     { key:'surveyYear', label:'조사년도' },
     { key:'component', label:'구성요소' },
@@ -10709,6 +10716,7 @@
           const changeStatus = d.changeStatus || '미확인';
           detailRows.push({
             '프로젝트': project ? project.name : '', '시설물': site.name, 'ExistingDamage ID': ed.id,
+            '구간': ed.section || '',
             '기존 조사년도': ed.surveyYear || '', '현재 조사년도': new Date().getFullYear(),
             '기존 위치': ed.drawingPosition || '', '현재 위치': '지점 ' + m.num,
             '손상명': ed.damageName || '', '기존 규모': ed.measurement || '', '현재 규모': d.measurement || '',
@@ -10800,6 +10808,7 @@
         const year = (yearRaw !== '' && !isNaN(Number(yearRaw))) ? Number(yearRaw) : null;
         toInsert.push({
           damageName: name,
+          section: String(row['구간'] || '').trim(),
           drawingPosition: String(row['위치'] || '').trim(),
           surveyYear: year,
           component: String(row['구성요소'] || '').trim(),
@@ -12950,7 +12959,7 @@
             visibleExisting.forEach(ed=>{
               const opt = document.createElement('option');
               opt.value = ed.id;
-              opt.textContent = ed.id + ' · ' + (ed.damageName || '(손상명 없음)');
+              opt.textContent = ed.id + ' · ' + (ed.section ? ed.section + ' · ' : '') + (ed.damageName || '(손상명 없음)');
               if(d.existingDamageId === ed.id) opt.selected = true;
               linkSelect.appendChild(opt);
             });
@@ -14212,11 +14221,11 @@
       const visibleExistingForReport = (currentSiteObj() && currentSiteObj().existingDamages || []).filter(ed => !ed.isDeleted);
       if(visibleExistingForReport.length > 0){
         children.push(new Paragraph({ text:'기존손상 현황', heading: HeadingLevel.HEADING_1, spacing:{ before:400, after:150 } }));
-        const headerRow = new TableRow({ children: ['ID','손상명','조사년도','구성요소','손상규모','상태'].map(h =>
-          new TableCell({ width:{size:100/6, type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:h, bold:true, size:16}) ] }) ] })
+        const headerRow = new TableRow({ children: ['ID','구간','손상명','조사년도','구성요소','손상규모','상태'].map(h =>
+          new TableCell({ width:{size:100/7, type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:h, bold:true, size:16}) ] }) ] })
         )});
-        const dataRows = visibleExistingForReport.map(ed => new TableRow({ children: [ed.id, ed.damageName||'', ed.surveyYear||'', ed.component||'', ed.measurement||'', ed.status||'미확인'].map(v =>
-          new TableCell({ width:{size:100/6, type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:String(v), size:16}) ] }) ] })
+        const dataRows = visibleExistingForReport.map(ed => new TableRow({ children: [ed.id, ed.section||'', ed.damageName||'', ed.surveyYear||'', ed.component||'', ed.measurement||'', ed.status||'미확인'].map(v =>
+          new TableCell({ width:{size:100/7, type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:String(v), size:16}) ] }) ] })
         )}));
         children.push(new Table({ width:{size:100, type:WidthType.PERCENTAGE}, rows:[headerRow, ...dataRows] }));
         children.push(new Paragraph({ text:'', spacing:{ after:200 } }));
