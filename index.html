@@ -7364,13 +7364,94 @@
   }
 
   // ================================================================
+  // 항목별(measurementItems) 규모 비교 — compareMeasurements(위)는 문자열 첫 숫자만
+  // 비교해서 "L=2.0m, CW=0.5mm"처럼 여러 값이 섞이면 부정확했다. 손상명별로
+  // getMeasurementFields가 아는 항목 종류(길이/균열폭/깊이/가로/세로/면적/개소/변위)를
+  // 기준으로, 기존손상의 자유텍스트 규모에서 같은 항목을 찾아 각각 비교한다.
+  // CAD 브릿지 표기(L=, CW=, A= 등)와 앱 자체 표기(길이, 균열폭 등) 둘 다 인식한다.
+  // ================================================================
+  const MEASUREMENT_TYPE_ALIASES = {
+    length: ['L', '길이', '연장'],
+    crackWidth: ['CW', '균열폭'],
+    depth: ['D', '깊이'],
+    width: ['W', '가로'],
+    height: ['H', '세로'],
+    area: ['A', '면적', '범위', '발생범위'],
+    count: ['개소', 'EA', '개'],
+    displacement: ['변위·침하량', '변위량', '침하량', '변위'],
+    value: ['규모']
+  };
+
+  function escapeRegExpLiteral(s){ return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+  // 자유텍스트 규모 문자열에서 damageType이 쓰는 항목들(type별로)의 {value, unit}을 뽑는다.
+  // 매칭 못 찾은 항목은 결과에 없다(억지로 0 등을 채우지 않는다).
+  function parseMeasurementText(text, damageType){
+    const out = {};
+    if(!text) return out;
+    const fields = getMeasurementFields(damageType);
+    fields.forEach(fd=>{
+      const aliases = (MEASUREMENT_TYPE_ALIASES[fd.type] || []).concat([fd.label]);
+      for(const alias of aliases){
+        if(!alias) continue;
+        const re = new RegExp(escapeRegExpLiteral(alias) + '\\s*[=:]?\\s*(-?\\d+(?:\\.\\d+)?)\\s*([a-zA-Z가-힣㎡㎥%]*)', 'i');
+        const m = String(text).match(re);
+        if(m){
+          out[fd.type] = { value: parseFloat(m[1]), unit: (m[2] || fd.defaultUnit || '').trim(), label: fd.label };
+          break;
+        }
+      }
+    });
+    return out;
+  }
+
+  // 기존손상 자유텍스트 규모 vs 현재 조사의 measurementItems(구조화된 값)를 항목별로 비교.
+  // 반환: [{ type, label, oldValue, newValue, unit, delta, percent }] — oldValue가 없으면
+  // (기존 텍스트에서 그 항목을 못 찾았으면) delta/percent는 null(=신규 측정값으로만 표시).
+  function compareMeasurementsDetailed(oldStr, newItems, damageType){
+    const oldParsed = parseMeasurementText(oldStr, damageType);
+    const results = [];
+    (newItems || []).forEach(item=>{
+      if(item.value === '' || item.value == null) return;
+      const newVal = parseFloat(item.value);
+      if(isNaN(newVal)) return;
+      const oldEntry = oldParsed[item.type];
+      if(oldEntry && typeof oldEntry.value === 'number' && !isNaN(oldEntry.value) && oldEntry.value !== 0){
+        const delta = newVal - oldEntry.value;
+        results.push({
+          type: item.type, label: item.label || oldEntry.label, unit: item.unit || oldEntry.unit,
+          oldValue: oldEntry.value, newValue: newVal, delta, percent: (delta / oldEntry.value) * 100
+        });
+      } else {
+        results.push({ type: item.type, label: item.label, unit: item.unit, oldValue: null, newValue: newVal, delta: null, percent: null });
+      }
+    });
+    return results;
+  }
+
+  // compareMeasurementsDetailed 결과를 한 줄 문자열로: "길이 +0.50m(+25.0%) · 균열폭 신규측정 0.50mm"
+  function formatMeasurementDetail(results){
+    if(!results || results.length === 0) return '';
+    return results.map(r=>{
+      if(r.delta == null){
+        return r.label + ' ' + r.newValue + r.unit + '(신규측정)';
+      }
+      if(r.delta === 0){
+        return r.label + ' 동일(' + r.newValue + r.unit + ')';
+      }
+      const sign = r.delta > 0 ? '+' : '';
+      return r.label + ' ' + sign + r.delta.toFixed(2) + r.unit + '(' + sign + r.percent.toFixed(1) + '%)';
+    }).join(' · ');
+  }
+
+  // ================================================================
   // 손상현황 통합표 — 기존손상 목록 구성(구간·구성요소·위치·손상명)은 그대로 두고,
   // 이번 조사에서 확인된 현재규모·증감·증감여부와 신규손상을 한 표에 정리한다.
   // 손상비교 Excel과 Word 보고서가 공유한다(물량표 = 이 표).
   // 행 구성: (1) 기존손상 × 이번 조사에서 연결된 지점  (2) 조사 안 된 기존손상
   //          (3) 신규손상.
   // ================================================================
-  const DAMAGE_INVENTORY_COLUMNS = ['구분','구간','구성요소','위치','손상명','조사지점','기존규모','현재규모','증감치수','증감률','증감여부','원인','보수방안','비고'];
+  const DAMAGE_INVENTORY_COLUMNS = ['구분','구간','구성요소','위치','손상명','조사지점','기존규모','현재규모','증감치수','증감률','증감상세','증감여부','원인','보수방안','비고'];
 
   function buildDamageInventory(site){
     if(!site) return [];
@@ -7394,19 +7475,28 @@
           '구분':'기존(미조사)', '구간': ed.section || '', '구성요소': ed.component || '', '위치': ed.drawingPosition || '',
           '손상명': ed.damageName || '', '조사지점':'',
           '기존규모': ed.measurement || '', '현재규모':'',
-          '증감치수':'', '증감률':'', '증감여부': ed.status || '미조사',
+          '증감치수':'', '증감률':'', '증감상세':'', '증감여부': ed.status || '미조사',
           '원인': ed.cause || '', '보수방안': ed.repairMethod || '', '비고': ed.notes || ''
         });
       } else {
         links.forEach(({ m, d })=>{
           const cmp = compareMeasurements(ed.measurement, d.measurement);
-          const auto = cmp.unavailable ? '미확인' : (cmp.delta > 0 ? '증가' : cmp.delta < 0 ? '감소' : '동일');
+          // measurementItems(구조화된 값)가 있으면 항목별(길이/균열폭/깊이 등) 비교를 우선한다 —
+          // "L=2.0m, CW=0.5mm"처럼 값이 섞인 규모를 첫 숫자만 보고 비교하던 것보다 정확하다.
+          const detailedCmp = (d.measurementItems && d.measurementItems.length)
+            ? compareMeasurementsDetailed(ed.measurement, d.measurementItems, d.damageType || ed.damageName)
+            : [];
+          const detailedText = formatMeasurementDetail(detailedCmp);
+          const auto = detailedCmp.length > 0
+            ? (detailedCmp.some(r => r.delta > 0) ? '증가' : detailedCmp.some(r => r.delta < 0) ? '감소' : (detailedCmp.every(r => r.delta === 0) ? '동일' : '미확인'))
+            : (cmp.unavailable ? '미확인' : (cmp.delta > 0 ? '증가' : cmp.delta < 0 ? '감소' : '동일'));
           rows.push({
             '구분':'기존', '구간': ed.section || '', '구성요소': d.component || ed.component || '', '위치': ed.drawingPosition || '',
             '손상명': ed.damageName || d.damageType || '', '조사지점': '지점 ' + m.num,
             '기존규모': ed.measurement || '', '현재규모': d.measurement || '',
             '증감치수': cmp.unavailable ? '' : (cmp.delta > 0 ? '+' : '') + cmp.delta.toFixed(2),
             '증감률': cmp.unavailable ? '' : (cmp.percent > 0 ? '+' : '') + cmp.percent.toFixed(1) + '%',
+            '증감상세': detailedText,
             '증감여부': d.changeStatus || auto,
             '원인': d.cause || ed.cause || '', '보수방안': d.repairMethod || ed.repairMethod || '', '비고': ed.notes || ''
           });
@@ -7422,7 +7512,7 @@
             '구분':'신규', '구간':'', '구성요소': d.component || '', '위치':'',
             '손상명': d.damageType || '', '조사지점': '지점 ' + m.num,
             '기존규모':'', '현재규모': d.measurement || '',
-            '증감치수':'', '증감률':'', '증감여부':'신규',
+            '증감치수':'', '증감률':'', '증감상세':'', '증감여부':'신규',
             '원인': d.cause || '', '보수방안': d.repairMethod || '', '비고': d.investigatorComment || ''
           });
         });
@@ -14347,7 +14437,8 @@
           new TableCell({ width:{size:invW, type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:h, bold:true, size:16}) ] }) ] })
         )});
         const invDataRows = inventoryRows.map(r => {
-          const 증감 = [r['증감치수'], r['증감률'] ? '(' + r['증감률'] + ')' : ''].filter(Boolean).join(' ');
+          // 항목별(길이/균열폭 등) 비교값이 있으면 그걸 우선 표시 — 첫 숫자만 비교한 값보다 정확하다.
+          const 증감 = r['증감상세'] || [r['증감치수'], r['증감률'] ? '(' + r['증감률'] + ')' : ''].filter(Boolean).join(' ');
           const cells = [r['구분'], r['구간'], r['구성요소'], r['위치'], r['손상명'], r['기존규모'], r['현재규모'], 증감, r['증감여부']];
           return new TableRow({ children: cells.map(v =>
             new TableCell({ width:{size:invW, type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:String(v == null ? '' : v), size:15}) ] }) ] })
