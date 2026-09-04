@@ -7846,6 +7846,27 @@
   let savePending = false;
   let pendingSaveResolvers = []; // 대기 중인 saveState() 호출들 — 실제 저장이 끝나면 한꺼번에 resolve된다
 
+  // saveState() 한 번마다 현재 시설물의 마커를 "전부" 순서대로 다시 IndexedDB에 쓰던
+  // 것을, 실제로 바뀐 마커만 쓰도록 걸러낸다. 지점이 많은 시설물에서 사진 한 장
+  // 추가처럼 마커 1개만 바뀌어도 나머지 수십 개 마커까지 매번 다시 트랜잭션을 태워
+  // 저장이 느려졌고(특히 배터리 절전/저사양 기기·iOS WebKit IndexedDB에서 두드러짐),
+  // 이게 길어질수록 그 사이 앱이 종료되면 아직 못 쓴 마커가 사라질 위험도 커졌다.
+  // 사진 원본(src)은 어차피 idbPutInspectionPoint가 담지 않으므로 서명 비교에서도 뺀다.
+  const lastWrittenMarkerSignatures = new Map(); // markerId -> 마지막으로 durable store에 쓴 내용의 서명
+  function markerDurableSignature(m){
+    try{
+      return JSON.stringify({
+        num: m.num, xPct: m.xPct, yPct: m.yPct, drawingId: m.drawingId,
+        lat: m.lat, lng: m.lng, gps: m.gps, locationSource: m.locationSource,
+        locationHistory: m.locationHistory, section: m.section,
+        photos: (m.photos || []).map(p => ({ id: p.id, photoRef: p.photoRef, note: p.note, damages: p.damages, exif: p.exif, createdAt: p.createdAt })),
+        deletedAt: m.deletedAt
+      });
+    }catch(e){
+      return null; // 직렬화 실패시(순환참조 등) 캐시를 못 믿으니 매번 쓰게 null(=항상 불일치) 반환
+    }
+  }
+
   // 실제 저장 1회를 수행한다. 큐를 거치지 않고 이 함수를 직접 호출하지 않는다.
   async function performSaveState(){
     commitLiveToCurrentSite();
@@ -7861,12 +7882,16 @@
       }
     }
 
-    // 2. inspectionPoints Durable 스토어에 현재 마커들 일괄 보존
+    // 2. inspectionPoints Durable 스토어에 현재 마커들 보존 — 실제로 바뀐 마커만 쓴다
+    // (마커가 많은 시설물에서 저장 지연/부분소실 위험을 줄이기 위함, 위 주석 참고)
     let durablePointsOk = true;
     try{
       const currentSite = currentSiteObj();
       for(const m of (markers || [])){
+        const sig = markerDurableSignature(m);
+        if(sig !== null && lastWrittenMarkerSignatures.get(m.id) === sig) continue;
         await idbPutInspectionPoint(m, currentSite);
+        if(sig !== null) lastWrittenMarkerSignatures.set(m.id, sig);
       }
     }catch(e){
       console.warn('performSaveState: inspectionPoints durable write 경고', e);
@@ -7942,6 +7967,12 @@
       } catch(e){
         console.error('saveState 큐 처리 중 오류:', e);
         ok = false;
+        // performSaveState가 끝까지 못 가고 예외로 끊기면(예: IndexedDB 트랜잭션 중
+        // 예상 못한 오류) 그 함수 안의 setSaveIndicator('saved'/'failed') 호출까지
+        // 도달하지 못해, 맨 처음 찍힌 "⟳ 기기 저장 중…" 표시가 실제로는 멈춰있는데도
+        // 화면엔 계속 "저장 중"으로 남아 사용자가 무한정 기다리게 될 수 있었다.
+        // 여기서 확실히 실패로 갱신해 다음 저장(재시도)이 언제 필요한지 알 수 있게 한다.
+        try{ setSaveIndicator('failed'); }catch(e2){}
       }
       resolvers.forEach((resolve)=> resolve(ok));
     } while(savePending); // 저장하는 동안 새 요청이 들어왔다면 최신 상태로 한 번 더
@@ -7957,6 +7988,23 @@
   const ENTITY_SYNC_QUEUE_KEY = 'point-shot-entity-sync-queue';
   const SYNC_CURSOR_KEY = 'point-shot-sync-cursor';
   const PEACHSHOT_SYNC_CHANNEL_NAME = 'peachshot_sync_channel';
+
+  // ---------- 동기화 큐 읽기-수정-쓰기 직렬화 ----------
+  // enqueueEntitySync/enqueueEntitySyncBatch/processSyncQueue가 전부 ENTITY_SYNC_QUEUE_KEY를
+  // "통째로 읽고 → 메모리에서 고치고 → 통째로 다시 쓰는" 방식이다. saveState() 저장이
+  // 끝날 때마다 이 큐에 자동으로 인큐하는데(구간·손상 등 저장할 때마다), 이게
+  // fire-and-forget이라 saveState() 자체의 순서보장(saveInProgress)과는 무관하게
+  // 겹쳐 실행될 수 있었다 — 사진을 연달아 빠르게 찍거나, 온라인 복귀로 동기화가
+  // 돌던 중에 또 저장이 일어나는 경우 등. 두 호출이 겹치면 나중에 끝난 쪽이 먼저
+  // 쓴 쪽의 변경을 통째로 덮어써 큐 항목이 조용히 사라질 수 있었다(그러면 그 항목은
+  // 클라우드에 영영 안 올라가고, pull 때 "아직 로컬 수정 있음" 보호도 못 받는다).
+  // 이 세 함수의 읽기→쓰기 구간을 하나의 체인으로 순서를 강제해 막는다.
+  let entityQueueChain = Promise.resolve();
+  function runEntityQueueOp(fn){
+    const run = entityQueueChain.then(fn, fn);
+    entityQueueChain = run.then(()=>{}, ()=>{}); // 하나가 실패해도 뒤 작업들이 영원히 안 막히게
+    return run;
+  }
 
   // 재시도 간격: 1차 5초, 2차 15초, 3차 30초, 4차 60초, 5차 이후 최대 5분(300초)
   const RETRY_DELAYS = [5000, 15000, 30000, 60000, 300000];
@@ -8145,11 +8193,15 @@
 
   async function enqueueEntitySync({ entityType, entityId, operation, projectId, facilityId, revision, payload }){
     if(!entityType || !entityId) return;
-    const queue = await loadEntitySyncQueue();
-    const now = new Date().toISOString();
-    const normType = mergeEntityIntoQueue(queue, { entityType, entityId, operation, projectId, facilityId, revision, payload }, now);
+    const normType = await runEntityQueueOp(async ()=>{
+      const queue = await loadEntitySyncQueue();
+      const now = new Date().toISOString();
+      const nt = mergeEntityIntoQueue(queue, { entityType, entityId, operation, projectId, facilityId, revision, payload }, now);
+      if(!nt) return null;
+      await saveEntitySyncQueue(queue);
+      return nt;
+    });
     if(!normType) return;
-    await saveEntitySyncQueue(queue);
     console.log(`[Sync] enqueue: ${normType} (${entityId}) op=${operation === 'delete' ? 'delete' : 'upsert'}`);
 
     if(navigator.onLine && supabaseClient && supabaseSession && !syncProcessing){
@@ -8162,14 +8214,18 @@
   // round-trip이 생겨 저장이 느려진다. 이 함수는 항목이 몇 개든 읽기 1번+쓰기 1번.
   async function enqueueEntitySyncBatch(items){
     if(!items || items.length === 0) return;
-    const queue = await loadEntitySyncQueue();
-    const now = new Date().toISOString();
-    let count = 0;
-    items.forEach(item=>{
-      if(mergeEntityIntoQueue(queue, item, now)) count++;
+    const count = await runEntityQueueOp(async ()=>{
+      const queue = await loadEntitySyncQueue();
+      const now = new Date().toISOString();
+      let c = 0;
+      items.forEach(item=>{
+        if(mergeEntityIntoQueue(queue, item, now)) c++;
+      });
+      if(c === 0) return 0;
+      await saveEntitySyncQueue(queue);
+      return c;
     });
-    if(count === 0) return;
-    await saveEntitySyncQueue(queue);
+    if(!count) return;
     console.log(`[Sync] batch enqueue: ${count}건`);
 
     if(navigator.onLine && supabaseClient && supabaseSession && !syncProcessing){
@@ -8287,8 +8343,26 @@
       }
 
       if(changed){
-        const remaining = queue.filter(q => q.status !== 'synced');
-        await saveEntitySyncQueue(remaining);
+        // 여기서 곧바로 (동기화 시작 시점에 읽어둔) queue를 그대로 다시 쓰면, 그 사이
+        // 새로 들어온 항목(예: syncSingleEntity가 네트워크 응답을 기다리는 동안 사용자가
+        // 사진을 더 찍어서 enqueueEntitySyncBatch가 돈 경우)을 통째로 덮어써 잃게 된다.
+        // 락을 잡고 최신 큐를 다시 읽어 이번에 처리한 항목(queueId 기준)만 결과를
+        // 반영하고, 나머지(새로 들어온 것 포함)는 그대로 둔다.
+        const statusById = new Map(batch.map(item => [item.queueId, item]));
+        await runEntityQueueOp(async ()=>{
+          const latest = await loadEntitySyncQueue();
+          const merged = latest.map(q=>{
+            const updated = statusById.get(q.queueId);
+            if(!updated) return q;
+            // 동기화가 진행되는 동안 같은 항목이 다시 수정되어 재인큐됐다면(더 최근
+            // enqueuedAt) 방금 끝난(이제는 낡은) 결과로 되돌리지 않고 그대로 pending으로
+            // 남겨 다음 처리 때 새 내용으로 다시 동기화되게 한다.
+            if(q.enqueuedAt && updated.enqueuedAt && q.enqueuedAt > updated.enqueuedAt) return q;
+            return updated;
+          });
+          const remaining = merged.filter(q => q.status !== 'synced');
+          await saveEntitySyncQueue(remaining);
+        });
       }
 
       lastSyncTimestamp = new Date().toISOString();
