@@ -7509,15 +7509,39 @@
       }
     });
 
+    const countedDamageIds = new Set();
+    existing.forEach(ed=> (linkedByEd[ed.id] || []).forEach(({ d })=> countedDamageIds.add(d.id)));
+
     (site.markers || []).forEach(m=>{
       (m.photos || []).forEach(p=>{
         (p.damages || []).forEach(d=>{
           if(d.damageOrigin !== 'NEW') return;
+          countedDamageIds.add(d.id);
           rows.push({
             '구분':'신규', '구간':'', '구성요소': d.component || '', '위치':'',
             '손상명': d.damageType || '', '조사지점': '지점 ' + m.num,
             '기존규모':'', '현재규모': d.measurement || '',
             '증감치수':'', '증감률':'', '증감상세':'', '증감여부':'신규',
+            '원인': d.cause || '', '보수방안': d.repairMethod || '', '비고': d.investigatorComment || ''
+          });
+        });
+      });
+    });
+
+    // 미분류 — 조사자가 "신규손상/기존손상" 구분을 아직 안 고른 손상기록(damageOrigin이
+    // 비어있거나, EXISTING인데 연결 안 됨). 조용히 빠지면 보고서가 실제 조사량보다
+    // 적어 보이고 조사자가 놓친 걸 알아챌 방법이 없으므로, 별도 구분으로 그대로 낸다.
+    // 손상명·규모·원인이 전부 빈 완전 미입력 상태는 잡음이라 제외한다.
+    (site.markers || []).forEach(m=>{
+      (m.photos || []).forEach(p=>{
+        (p.damages || []).forEach(d=>{
+          if(countedDamageIds.has(d.id)) return;
+          if(!d.damageType && !d.measurement && !d.cause) return;
+          rows.push({
+            '구분':'미분류', '구간':'', '구성요소': d.component || '', '위치':'',
+            '손상명': d.damageType || '(손상명 미입력)', '조사지점': '지점 ' + m.num,
+            '기존규모':'', '현재규모': d.measurement || '',
+            '증감치수':'', '증감률':'', '증감상세':'', '증감여부':'미분류(신규/기존 구분 필요)',
             '원인': d.cause || '', '보수방안': d.repairMethod || '', '비고': d.investigatorComment || ''
           });
         });
@@ -14743,6 +14767,14 @@
     const siteName = site.name || '시설물';
     const today = new Date().toLocaleDateString('ko-KR');
 
+    // 사진이 아직 로컬에 안 채워져 있으면(다른 시설물을 보다가 이 시설물 보고서를
+    // 바로 만들거나, 클라우드에서 불러온 뒤라 아직 이 지점을 화면에서 안 열어봤거나)
+    // 여기서 미리 채운다 — 안 그러면 "다. 지점별" 사진이 통째로 비어서 나간다.
+    try{ await hydratePhotoBlobs(siteMarkers); }catch(e){}
+    if(supabaseClient && supabaseSession && navigator.onLine){
+      try{ await downloadPendingCloudPhotos([site]); }catch(e){}
+    }
+
     function imgDims(dataUrl, maxW){
       return new Promise((resolve)=>{
         const im = new Image();
@@ -14794,6 +14826,7 @@
             const loc = r['위치'] ? ' (' + r['위치'] + ')' : (r['조사지점'] ? ' [' + r['조사지점'] + ']' : '');
             let tag = '';
             if(r['구분'] === '신규') tag = ' — 신규';
+            else if(r['구분'] === '미분류') tag = ' — ⚠구분필요(신규/기존)';
             else if(r['구분'] === '기존(미조사)') tag = ' — 미조사(' + (r['증감여부'] || '') + ')';
             else if(r['증감여부'] && !['동일','미확인'].includes(r['증감여부'])) tag = ' — ' + r['증감여부'] + (r['증감치수'] ? ' ' + r['증감치수'] : '');
             return new Paragraph({ children:[ new TextRun({ text:'· ' + (r['손상명'] || '(손상명 없음)') + loc + (scale ? ', ' + scale : '') + tag, size:15 }) ] });
@@ -14859,6 +14892,11 @@
           const cellKids = [];
           if(p.src){
             cellKids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: await toBytes(p.src), transformation: await imgDims(p.src, 250) }) ], spacing:{ after:60 } }));
+          } else {
+            // 하이드레이션을 시도했는데도 사진을 못 채웠다면(클라우드 다운로드 실패 등)
+            // 조용히 빈칸으로 나가지 않고 이유를 남긴다 — 나중에 재시도할 수 있게.
+            const reason = p.pendingCloudDownload ? '(사진 없음 — 클라우드에서 아직 못 받음, 온라인 상태에서 다시 시도해주세요)' : '(사진 없음)';
+            cellKids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text: reason, italics:true, size:14, color:'999999' }) ], spacing:{ after:60 } }));
           }
           cellKids.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows:[
             new TableRow({ children:[ labelCell('현황'), textCell([ new Paragraph({ children:[ new TextRun({ text: numText + ' ', bold:true, size:16 }), new TextRun({ text: hyeonhwang, size:15 }) ] }) ]) ] }),
