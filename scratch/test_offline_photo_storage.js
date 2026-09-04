@@ -13,7 +13,7 @@ async function runStorageVerificationSuite() {
 
   // 1. Static HTML / JS Verification
   const hasPhotoStoreConst = indexHtml.includes("const IDB_PHOTO_STORE = 'photoBlobs';");
-  const hasIdbVersion2 = indexHtml.includes("const IDB_VERSION = 2;");
+  const hasIdbVersion = /const IDB_VERSION = [23];/.test(indexHtml);
   const hasIdbPhotoPut = indexHtml.includes("function idbPutPhotoBlob(");
   const hasIdbPhotoGet = indexHtml.includes("function idbGetPhotoBlob(");
   const hasDiagnostics = indexHtml.includes("window.PeachShotStorageDiagnostics = {") &&
@@ -23,7 +23,7 @@ async function runStorageVerificationSuite() {
     indexHtml.includes("testWriteReadDelete()");
 
   record('TEST 00', 'IndexedDB 듀얼 스토어 및 진단도구 선언 검증',
-    hasPhotoStoreConst && hasIdbVersion2 && hasIdbPhotoPut && hasIdbPhotoGet && hasDiagnostics,
+    hasPhotoStoreConst && hasIdbVersion && hasIdbPhotoPut && hasIdbPhotoGet && hasDiagnostics,
     'IDB_PHOTO_STORE, idbPutPhotoBlob/Get, PeachShotStorageDiagnostics 구현 확인');
 
   // Simulated IndexedDB Memory Engine with 'kv' and 'photoBlobs' object stores

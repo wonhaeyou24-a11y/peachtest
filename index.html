@@ -3508,6 +3508,8 @@
       req.onsuccess = ()=>{
         const db = req.result;
         db.onversionchange = ()=>{ try{ db.close(); }catch(e){} idbConn = null; };
+        db.onclose = ()=>{ idbConn = null; };
+        db.onerror = ()=>{ idbConn = null; };
         resolve(db);
       };
       req.onerror = ()=>{ idbConn = null; reject(req.error || new Error('IndexedDB 열기 실패')); };
@@ -4515,34 +4517,41 @@
   }
 
   async function hydratePhotoBlobs(markersArr){
-    for(const m of (markersArr || [])){
+    if(!markersArr || !markersArr.length) return;
+    const fetchTasks = [];
+    for(const m of markersArr){
       for(const p of (m.photos || [])){
         const ref = p.photoRef || p.id;
         if(ref && !p.src){
-          try{
-            // 1. photoBlobs 전용 스토어에서 직접 Blob 로드
-            const record = await idbGetPhotoBlob(ref);
-            if(record && record.blob){
-              p.src = await blobToDataUrl(record.blob);
-              p.blobSize = record.size;
-              p.mimeType = record.mimeType;
-            } else {
-              // 2. 레거시 kv 스토어 폴백 조회 (하위 호환 및 점진적 마이그레이션)
-              const legacyData = await storageGet(PHOTO_STORE_PREFIX + ref);
-              if(legacyData){
-                p.src = legacyData;
-                const blob = dataUrlToBlob(legacyData);
-                if(blob){
-                  await idbPutPhotoBlob(ref, blob, blob.type);
+          fetchTasks.push((async()=>{
+            try{
+              // 1. photoBlobs 전용 스토어에서 직접 Blob 로드
+              const record = await idbGetPhotoBlob(ref);
+              if(record && record.blob){
+                p.src = await blobToDataUrl(record.blob);
+                p.blobSize = record.size || (record.blob && record.blob.size);
+                p.mimeType = record.mimeType || (record.blob && record.blob.type);
+              } else {
+                // 2. 레거시 kv 스토어 폴백 조회 (하위 호환 및 점진적 마이그레이션)
+                const legacyData = await storageGet(PHOTO_STORE_PREFIX + ref);
+                if(legacyData){
+                  p.src = legacyData;
+                  const blob = dataUrlToBlob(legacyData);
+                  if(blob){
+                    await idbPutPhotoBlob(ref, blob, blob.type);
+                  }
                 }
               }
+            }catch(e){
+              // [절대 원칙] 사진 읽기 일시 실패 시에도 메타데이터/지점을 절대 삭제하지 않음
+              console.warn('사진 복구 실패(메타데이터 보존)', ref, e);
             }
-          }catch(e){
-            // [절대 원칙] 사진 읽기 일시 실패 시에도 메타데이터/지점을 절대 삭제하지 않음
-            console.warn('사진 복구 실패(메타데이터 보존)', ref, e);
-          }
+          })());
         }
       }
+    }
+    if(fetchTasks.length > 0){
+      await Promise.allSettled(fetchTasks);
     }
   }
 
@@ -7445,8 +7454,16 @@
 
   function commitLiveToCurrentSite(){
     if(!currentSiteId) return;
-    const s = sites.find(x => x.id === currentSiteId);
-    if(!s) return;
+    let s = sites.find(x => x.id === currentSiteId);
+    if(!s){
+      s = {
+        id: currentSiteId,
+        projectId: currentProjectId || null,
+        name: '시설물 ' + (sites.length + 1),
+        createdAt: new Date().toISOString()
+      };
+      sites.push(s);
+    }
     if(currentDrawingId){
       const d = drawings.find(x => x.id === currentDrawingId);
       if(d) d.imageSrc = baseImageSrc;
@@ -7526,26 +7543,31 @@
 
       for(const p of points){
         const existing = existingById.get(p.id);
+        const resolvedDrawingId = p.drawingId || (targetSite && targetSite.currentDrawingId) || (drawings[0] && drawings[0].id) || null;
         if(!existing){
           targetMarkers.push({
             id: p.id,
             num: p.num,
             xPct: p.xPct,
             yPct: p.yPct,
-            drawingId: p.drawingId,
+            drawingId: resolvedDrawingId,
             lat: p.lat,
             lng: p.lng,
             gps: p.gps,
             locationSource: p.locationSource || 'manual',
             locationHistory: p.locationHistory || [],
-            photos: p.photos || [],
+            photos: (p.photos || []).map(ph => ({ ...ph })),
             createdAt: p.createdAt || new Date().toISOString()
           });
         } else {
           // durable store가 더 최신 데이터인 경우 안전하게 병합
           if(p.xPct != null && existing.xPct !== p.xPct) existing.xPct = p.xPct;
           if(p.yPct != null && existing.yPct !== p.yPct) existing.yPct = p.yPct;
-          if(p.drawingId && existing.drawingId !== p.drawingId) existing.drawingId = p.drawingId;
+          if(p.drawingId && existing.drawingId !== p.drawingId){
+            existing.drawingId = p.drawingId;
+          } else if(!existing.drawingId && resolvedDrawingId){
+            existing.drawingId = resolvedDrawingId;
+          }
           if(p.lat != null && existing.lat !== p.lat) existing.lat = p.lat;
           if(p.lng != null && existing.lng !== p.lng) existing.lng = p.lng;
           if(p.gps && !existing.gps) existing.gps = p.gps;
@@ -7553,8 +7575,25 @@
           if(p.locationHistory && (!existing.locationHistory || existing.locationHistory.length < p.locationHistory.length)){
             existing.locationHistory = p.locationHistory;
           }
-          if(p.photos && p.photos.length > 0 && (!existing.photos || existing.photos.length < p.photos.length)){
-            existing.photos = p.photos;
+          // 사진 배열 병합: 기존 메모리에 src가 있으면 온전히 보존하고 메타데이터 보강
+          if(p.photos && p.photos.length > 0){
+            if(!existing.photos || existing.photos.length === 0){
+              existing.photos = p.photos.map(ph => ({ ...ph }));
+            } else {
+              const existingPhotoMap = new Map(existing.photos.map(ph => [ph.id || ph.photoRef, ph]));
+              p.photos.forEach(ph => {
+                const pKey = ph.id || ph.photoRef;
+                const exPh = existingPhotoMap.get(pKey);
+                if(!exPh){
+                  existing.photos.push({ ...ph });
+                } else {
+                  if(ph.note && !exPh.note) exPh.note = ph.note;
+                  if(ph.damages && (!exPh.damages || exPh.damages.length < ph.damages.length)) exPh.damages = ph.damages;
+                  if(ph.exif && !exPh.exif) exPh.exif = ph.exif;
+                  if(!exPh.photoRef && ph.photoRef) exPh.photoRef = ph.photoRef;
+                }
+              });
+            }
           }
         }
       }
@@ -11675,14 +11714,14 @@
   // 도면별로 조사점을 분리해서 관리한다.
   // ================================================================
   function renderDrawingTabs(){
-    if(currentMode !== 'image' || !drawings || drawings.length === 0){
+    if(currentMode !== 'image'){
       drawingTabs.style.display = 'none';
       drawingTabs.innerHTML = '';
       return;
     }
     drawingTabs.style.display = 'flex';
     drawingTabs.innerHTML = '';
-    drawings.slice().sort((a,b)=>(a.order||0)-(b.order||0)).forEach(d=>{
+    (drawings || []).slice().sort((a,b)=>(a.order||0)-(b.order||0)).forEach(d=>{
       const tab = document.createElement('button');
       tab.className = 'drawing-tab' + (d.id === currentDrawingId ? ' active' : '');
       tab.textContent = d.name + (d.type ? ' · ' + d.type : '');
@@ -14263,28 +14302,15 @@
   })();
 
   async function initPeachShotApp(){
+    // 1. IndexedDB 연결 및 영구 저장소 활성화
     try{
-      // 1. IndexedDB 연결 및 영구 저장소 활성화
       await openIDB();
       initStoragePersistence();
     }catch(e){
       console.warn('IndexedDB 초기화 경고:', e);
     }
 
-    // 2. 기본 로컬 선호 설정 로드
-    try{
-      await loadWorkMode();
-      await loadDamageUsage();
-      await loadGlobalDamageMaster();
-      await loadOrgDamageMasterCache();
-      await loadRoleCache();
-      loadDbMetaAndReferences();
-      loadOtherCandidates();
-    }catch(e){
-      console.warn('기본 설정 로드 경고:', e);
-    }
-
-    // 3. 로컬 상태 로드 및 Durable InspectionPoints 복구 (최우선 확정)
+    // 2. [최우선 0순위] 로컬 상태 로드 및 Durable InspectionPoints 복구 (프로젝트 즉시 렌더링)
     try{
       await loadState();
       todaysMarkerCount();
@@ -14292,7 +14318,24 @@
       console.error('로컬 데이터 복구 실패:', e);
     }
 
-    // 4. 클라우드 및 동기화 초기화 (로컬 복구 완료 후 비동기 진행)
+    // 3. 기본 로컬 선호 설정 및 마스터 데이터 백그라운드 병렬 로드
+    (async ()=>{
+      try{
+        await Promise.allSettled([
+          loadWorkMode(),
+          loadDamageUsage(),
+          loadGlobalDamageMaster(),
+          loadOrgDamageMasterCache(),
+          loadRoleCache()
+        ]);
+        loadDbMetaAndReferences();
+        loadOtherCandidates();
+      }catch(e){
+        console.warn('기본 설정 백그라운드 로드 경고:', e);
+      }
+    })();
+
+    // 4. 클라우드 및 동기화 초기화 (로컬 복구 완료 후 백그라운드 진행)
     try{
       parsePendingInviteFromUrl();
       loadSupabaseConfig();
