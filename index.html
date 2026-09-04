@@ -7427,6 +7427,75 @@
     return { unavailable:false, oldVal, newVal, delta, percent };
   }
 
+  // ================================================================
+  // 손상현황 통합표 — 기존손상 목록 구성(구간·구성요소·위치·손상명)은 그대로 두고,
+  // 이번 조사에서 확인된 현재규모·증감·증감여부와 신규손상을 한 표에 정리한다.
+  // 손상비교 Excel과 Word 보고서가 공유한다(물량표 = 이 표).
+  // 행 구성: (1) 기존손상 × 이번 조사에서 연결된 지점  (2) 조사 안 된 기존손상
+  //          (3) 신규손상.
+  // ================================================================
+  const DAMAGE_INVENTORY_COLUMNS = ['구분','구간','구성요소','위치','손상명','조사지점','기존규모','현재규모','증감치수','증감률','증감여부','원인','보수방안','비고'];
+
+  function buildDamageInventory(site){
+    if(!site) return [];
+    const rows = [];
+    const existing = (site.existingDamages || []).filter(ed => !ed.isDeleted);
+    const linkedByEd = {}; // ed.id -> [{ m, d }]
+    (site.markers || []).forEach(m=>{
+      (m.photos || []).forEach(p=>{
+        (p.damages || []).forEach(d=>{
+          if(d.damageOrigin === 'EXISTING' && d.existingDamageId){
+            (linkedByEd[d.existingDamageId] = linkedByEd[d.existingDamageId] || []).push({ m, d });
+          }
+        });
+      });
+    });
+
+    existing.forEach(ed=>{
+      const links = linkedByEd[ed.id] || [];
+      if(links.length === 0){
+        rows.push({
+          '구분':'기존(미조사)', '구간': ed.section || '', '구성요소': ed.component || '', '위치': ed.drawingPosition || '',
+          '손상명': ed.damageName || '', '조사지점':'',
+          '기존규모': ed.measurement || '', '현재규모':'',
+          '증감치수':'', '증감률':'', '증감여부': ed.status || '미조사',
+          '원인': ed.cause || '', '보수방안': ed.repairMethod || '', '비고': ed.notes || ''
+        });
+      } else {
+        links.forEach(({ m, d })=>{
+          const cmp = compareMeasurements(ed.measurement, d.measurement);
+          const auto = cmp.unavailable ? '미확인' : (cmp.delta > 0 ? '증가' : cmp.delta < 0 ? '감소' : '동일');
+          rows.push({
+            '구분':'기존', '구간': ed.section || '', '구성요소': d.component || ed.component || '', '위치': ed.drawingPosition || '',
+            '손상명': ed.damageName || d.damageType || '', '조사지점': '지점 ' + m.num,
+            '기존규모': ed.measurement || '', '현재규모': d.measurement || '',
+            '증감치수': cmp.unavailable ? '' : (cmp.delta > 0 ? '+' : '') + cmp.delta.toFixed(2),
+            '증감률': cmp.unavailable ? '' : (cmp.percent > 0 ? '+' : '') + cmp.percent.toFixed(1) + '%',
+            '증감여부': d.changeStatus || auto,
+            '원인': d.cause || ed.cause || '', '보수방안': d.repairMethod || ed.repairMethod || '', '비고': ed.notes || ''
+          });
+        });
+      }
+    });
+
+    (site.markers || []).forEach(m=>{
+      (m.photos || []).forEach(p=>{
+        (p.damages || []).forEach(d=>{
+          if(d.damageOrigin !== 'NEW') return;
+          rows.push({
+            '구분':'신규', '구간':'', '구성요소': d.component || '', '위치':'',
+            '손상명': d.damageType || '', '조사지점': '지점 ' + m.num,
+            '기존규모':'', '현재규모': d.measurement || '',
+            '증감치수':'', '증감률':'', '증감여부':'신규',
+            '원인': d.cause || '', '보수방안': d.repairMethod || '', '비고': d.investigatorComment || ''
+          });
+        });
+      });
+    });
+
+    return rows;
+  }
+
   function syncMeasurementText(d){
     const validTypes = getMeasurementFields(d.damageType).map(fd => fd.type);
     const items = (d.measurementItems || []).filter(mi => validTypes.includes(mi.type) && mi.value !== '' && mi.value != null);
@@ -10749,7 +10818,9 @@
       });
     });
 
-    if(detailRows.length === 0 && newDamageRows.length === 0){
+    const inventoryRows = buildDamageInventory(site);
+
+    if(detailRows.length === 0 && newDamageRows.length === 0 && inventoryRows.length === 0){
       alert('내보낼 손상 데이터가 없습니다.');
       return;
     }
@@ -10770,6 +10841,7 @@
         '변경 전': a.before != null ? String(a.before) : '', '변경 후': a.after != null ? String(a.after) : '' }));
 
     const sheets = [
+      { name:'손상현황통합표', rows: inventoryRows, headerLabels: DAMAGE_INVENTORY_COLUMNS },
       { name:'요약', rows: summaryRows, headerLabels:['항목','값'] },
       { name:'상세비교', rows: detailRows, headerLabels: detailRows[0] ? Object.keys(detailRows[0]) : ['프로젝트','시설물'] },
       { name:'신규손상', rows: newDamageRows, headerLabels:['지점','손상종류','손상규모','원인','보수방안','조사자의견'] },
@@ -14230,6 +14302,26 @@
             }));
           }
         }
+      }
+
+      // ---- 손상현황 통합표 (물량표) — 기존손상 배치 그대로 + 현재규모·증감·신규 ----
+      const inventoryRows = buildDamageInventory(currentSiteObj());
+      if(inventoryRows.length > 0){
+        children.push(new Paragraph({ text:'손상현황 통합표 (물량표)', heading: HeadingLevel.HEADING_1, spacing:{ before:400, after:150 } }));
+        const invCols = ['구분','구간','구성요소','위치','손상명','기존규모','현재규모','증감','증감여부'];
+        const invW = 100 / invCols.length;
+        const invHeader = new TableRow({ children: invCols.map(h =>
+          new TableCell({ width:{size:invW, type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:h, bold:true, size:16}) ] }) ] })
+        )});
+        const invDataRows = inventoryRows.map(r => {
+          const 증감 = [r['증감치수'], r['증감률'] ? '(' + r['증감률'] + ')' : ''].filter(Boolean).join(' ');
+          const cells = [r['구분'], r['구간'], r['구성요소'], r['위치'], r['손상명'], r['기존규모'], r['현재규모'], 증감, r['증감여부']];
+          return new TableRow({ children: cells.map(v =>
+            new TableCell({ width:{size:invW, type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:String(v == null ? '' : v), size:15}) ] }) ] })
+          )});
+        });
+        children.push(new Table({ width:{size:100, type:WidthType.PERCENTAGE}, rows:[invHeader, ...invDataRows] }));
+        children.push(new Paragraph({ children:[ new TextRun({ text:'※ 증감치수·증감률은 규모 문자열의 대표 수치를 비교한 근사값입니다. 증감여부는 조사자가 지정한 값이 있으면 그 값을 씁니다.', italics:true, size:14, color:'777777' }) ], spacing:{ after:250 } }));
       }
 
       const visibleExistingForReport = (currentSiteObj() && currentSiteObj().existingDamages || []).filter(ed => !ed.isDeleted);
