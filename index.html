@@ -5630,7 +5630,7 @@
       for(const s of psites){
         const lightSite = JSON.parse(JSON.stringify(s));
         (lightSite.markers || []).forEach(m=>{
-          (m.photos || []).forEach(p=>{ if(p.cloudRef) delete p.src; });
+          (m.photos || []).forEach(p=>{ if(p.cloudRef) delete p.src; delete p.original; });
         });
         const { error: facErr } = await supabaseClient.from('ps_facilities').upsert({
           id: s.id,
@@ -7798,6 +7798,32 @@
   }
 
   async function loadSite(site){
+    // 다른 시설물로 넘어가기 직전, 방금까지 보던 시설물의 사진 원본(base64, 장당
+    // 수백KB~수MB)을 메모리에서 내려놓는다. 사진은 이미 photoBlobs 스토어에
+    // 안전하게 분리 저장돼 있고(추가/수정할 때마다 즉시 blob으로 저장됨) 필요할
+    // 때 hydratePhotoBlobs()로 다시 불러올 수 있으므로, 지금 안 보고 있는
+    // 시설물의 사진까지 계속 메모리에 붙들고 있을 이유가 없다.
+    // (모든 loadSite 호출부가 직전에 commitLiveToCurrentSite()를 부르므로, 여기
+    // 시점의 markers는 곧 교체될 "이전" 시설물의 마커 배열 — sites[] 안의 같은
+    // 배열 참조라 여기서 지우면 다음에 그 시설물을 다시 열 때도 반영된다.)
+    // 이걸 안 놓으면 현장에서 여러 시설물을 옮겨다니며 조사할수록(사진이 쌓일수록)
+    // 메모리 사용량이 끝없이 늘어나 브라우저/PWA가 반복적으로 죽거나 재시작되며
+    // 그 사이 저장 안 된 조사내용이 사라지는 사고로 이어질 수 있다.
+    if(currentSiteId && currentSiteId !== site.id){
+      (markers || []).forEach(m=>{
+        (m.photos || []).forEach(p=>{
+          // blobExtracted가 없으면(아직 안전하게 분리저장 안 됐으면) 절대 안 지운다 —
+          // 드물어야 하지만, 혹시 그렇다면 메모리를 더 쓰는 게 사진을 잃는 것보다 낫다.
+          if(p.blobExtracted && p.src) delete p.src;
+          // 사진 주석(그리기) 되돌리기용 편집 전 원본도 같은 이유로 정리한다 —
+          // 애초에 durable/blob 스토어 어디에도 저장되지 않는 세션 한정 값이라
+          // 잃어도 데이터 유실이 아니다(다른 시설물을 보고 온 뒤에는 "되돌리기"만
+          // 못 쓰게 될 뿐, 사진 자체는 그대로 남아있음).
+          delete p.original;
+        });
+      });
+    }
+
     ensureDrawingsIntegrity(site);
     ensureExistingDamagesIntegrity(site);
     existingDamages = site.existingDamages;
@@ -7906,6 +7932,13 @@
         photos: (m.photos || []).map(p => {
           const pCopy = { ...p };
           delete pCopy.src;
+          // 사진 주석(그리기) 기능이 "되돌리기"용으로 들고 있는 편집 전 원본
+          // base64(p.original)도 src와 똑같이 큰 이미지 문자열이다 — 이것도 안 빼면
+          // "경량" 스냅샷이 주석을 단 사진마다 사실상 이미지 2장 분량을 매 저장마다
+          // 통째로 다시 기록하게 되어, 애초에 이 스냅샷을 경량화한 목적이 무의미해진다.
+          // 되돌리기는 어차피 같은 세션에서 주석 직후에나 쓰는 기능이라, 저장된
+          // 스냅샷/클라우드에까지 들고 다닐 필요가 없다.
+          delete pCopy.original;
           return pCopy;
         })
       }))
@@ -8466,7 +8499,7 @@
 
         site.revision = expectedRevision + 1;
         const lightSite = JSON.parse(JSON.stringify(site));
-        (lightSite.markers || []).forEach(m => (m.photos || []).forEach(p => { if(p.cloudRef) delete p.src; }));
+        (lightSite.markers || []).forEach(m => (m.photos || []).forEach(p => { if(p.cloudRef) delete p.src; delete p.original; }));
 
         const { error } = await supabaseClient.from('ps_facilities').upsert({
           id: site.id,
