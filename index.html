@@ -2519,6 +2519,7 @@
           <button class="ghost" id="btnExportAllData">📦 데이터 안전 내보내기</button>
           <button class="ghost" id="btnImportDataTrigger">📥 데이터 안전 가져오기</button>
           <input type="file" id="importDataFileInput" accept=".json" style="display:none;" />
+          <button class="ghost" id="btnExportDiagLog" title="저장 지연/실패, 오류, 메모리 사용량 기록을 텍스트 파일로 내보냅니다. 문제가 생겼을 때 이 파일을 보내주시면 원인을 훨씬 빠르게 찾을 수 있습니다.">🩺 진단 로그 내보내기</button>
           <button class="primary" id="btnRunIntegrityCheck">🔍 무결성 전체 검사</button>
         </div>
       </div>
@@ -2996,6 +2997,99 @@
   const SNAPSHOT_PREFIX = 'point-shot-snapshot-';
   const MAX_SNAPSHOTS = 3;
   const SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000; // 5분
+
+  // ================================================================
+  // 진단 로그 — 실기기(특히 iOS Safari/PWA)에서 저장 지연·실패·크래시가
+  // 왜 나는지, 여기(개발 환경)에서는 재현/측정을 못 하기 때문에 만든
+  // 최소 침습 계측. 저장/오류/온오프라인전환/메모리 사용량을 기기에
+  // 남겨두고, "진단 & 데이터관리" 탭에서 텍스트 파일로 내보내 알려주시면
+  // 다음번엔 추측이 아니라 실제 기록으로 원인을 바로 좁힐 수 있다.
+  // 로그 자체가 앱 동작에 부담을 주면 안 되므로: 항목은 최근 N개만 유지,
+  // 기록은 메모리 버퍼에만 쌓고 IndexedDB 반영은 몇 초 단위로 묶어서 한다
+  // (그러지 않으면 이 로그 자체가 저장을 더 느리게 만드는 아이러니가 생김).
+  // ================================================================
+  const DIAG_LOG_KEY = 'point-shot-diagnostic-log';
+  const DIAG_LOG_MAX_ENTRIES = 500;
+  let diagLogBuffer = [];
+  let diagLogDirty = false;
+  let diagLogFlushTimer = null;
+
+  async function loadDiagLog(){
+    try{
+      const saved = await storageGet(DIAG_LOG_KEY);
+      if(Array.isArray(saved)) diagLogBuffer = saved;
+    }catch(e){}
+  }
+
+  async function flushDiagLog(){
+    if(!diagLogDirty) return;
+    diagLogDirty = false;
+    try{ await storageSet(DIAG_LOG_KEY, diagLogBuffer); }catch(e){}
+  }
+
+  function scheduleDiagLogFlush(){
+    if(diagLogFlushTimer) return;
+    diagLogFlushTimer = setTimeout(()=>{
+      diagLogFlushTimer = null;
+      flushDiagLog();
+    }, 3000);
+  }
+
+  // category: 'save' | 'error' | 'sync' | 'net' | 'memory' | 'lifecycle'
+  function diagLog(category, message, extra){
+    try{
+      diagLogBuffer.push({ ts: new Date().toISOString(), category, message, extra: extra || undefined });
+      if(diagLogBuffer.length > DIAG_LOG_MAX_ENTRIES){
+        diagLogBuffer.splice(0, diagLogBuffer.length - DIAG_LOG_MAX_ENTRIES);
+      }
+      diagLogDirty = true;
+      scheduleDiagLogFlush();
+    }catch(e){
+      // 진단 로그 자체가 실패해도 앱 본 기능에는 절대 영향이 없어야 한다.
+    }
+  }
+
+  // 사진 원본이 메모리에 얼마나 쌓여있는지(지난번 메모리누수 수정이 실제로
+  // 효과가 있는지 실기기에서 확인할 수 있는 지표) + 브라우저가 알려주는
+  // 힙/저장소 사용량을 한 번에 기록한다.
+  async function diagLogMemorySnapshot(label){
+    try{
+      let mem = null;
+      if(typeof performance !== 'undefined' && performance.memory){
+        mem = {
+          usedMb: (performance.memory.usedJSHeapSize / 1048576).toFixed(1),
+          limitMb: (performance.memory.jsHeapSizeLimit / 1048576).toFixed(0)
+        };
+      }
+      let storage = null;
+      if(navigator.storage && navigator.storage.estimate){
+        const est = await navigator.storage.estimate();
+        storage = { usedMb: (est.usage / 1048576).toFixed(1), quotaMb: (est.quota / 1048576).toFixed(0) };
+      }
+      let hydratedPhotoCount = 0, hydratedPhotoCharsApprox = 0;
+      (sites || []).forEach(s => (s.markers || []).forEach(m => (m.photos || []).forEach(p => {
+        if(p.src){ hydratedPhotoCount++; hydratedPhotoCharsApprox += (p.src.length || 0); }
+      })));
+      diagLog('memory', label, { mem, storage, hydratedPhotoCount, hydratedPhotoMbApprox: (hydratedPhotoCharsApprox / 1048576).toFixed(1), siteCount: (sites || []).length });
+    }catch(e){}
+  }
+
+  // 이 앱 코드가 직접 try/catch로 잡지 않은 진짜 미확인 오류(진짜 크래시로 이어질 수
+  // 있는 것들)까지 전부 기록한다 — 최대한 일찍 등록해서 앱 초기화 중 나는 오류도 잡는다.
+  if(typeof window !== 'undefined'){
+    window.addEventListener('error', (e)=>{
+      diagLog('error', 'Uncaught error: ' + (e && e.message || '(메시지 없음)'), {
+        filename: e && e.filename, lineno: e && e.lineno, colno: e && e.colno,
+        stack: (e && e.error && e.error.stack) ? String(e.error.stack).slice(0, 2000) : undefined
+      });
+    });
+    window.addEventListener('unhandledrejection', (e)=>{
+      const reason = e && e.reason;
+      diagLog('error', 'Unhandled promise rejection: ' + (reason && reason.message ? reason.message : String(reason)), {
+        stack: (reason && reason.stack) ? String(reason.stack).slice(0, 2000) : undefined
+      });
+    });
+  }
 
   // ================================================================
   // 데이터 스키마 버전 / 마이그레이션 — STEP 2
@@ -6922,6 +7016,29 @@
   const btnExportAllData = document.getElementById('btnExportAllData');
   const btnImportDataTrigger = document.getElementById('btnImportDataTrigger');
   const importDataFileInput = document.getElementById('importDataFileInput');
+  const btnExportDiagLog = document.getElementById('btnExportDiagLog');
+
+  if(btnExportDiagLog){
+    btnExportDiagLog.addEventListener('click', async ()=>{
+      await flushDiagLog(); // 아직 IndexedDB에 안 반영된 최근 몇 초 기록까지 포함
+      diagLogMemorySnapshot('진단 로그 내보내기 시점'); // 내보내는 지금 시점 상태도 마지막 줄에 남김
+      await flushDiagLog();
+      if(diagLogBuffer.length === 0){
+        alert('아직 기록된 진단 로그가 없습니다. 앱을 평소처럼 쓰다가 문제가 생기면 다시 눌러주세요.');
+        return;
+      }
+      const lines = diagLogBuffer.map(e=>{
+        const extra = e.extra ? ' ' + JSON.stringify(e.extra) : '';
+        return `[${e.ts}] (${e.category}) ${e.message}${extra}`;
+      });
+      const header = `PeachShot 진단 로그 — 내보낸 시각: ${new Date().toLocaleString('ko-KR')} — 총 ${diagLogBuffer.length}건\n` +
+        `기기: ${navigator.userAgent}\n` + '='.repeat(60) + '\n';
+      const blob = new Blob([header + lines.join('\n')], { type:'text/plain' });
+      // downloadDocxBlob은 이름과 달리 내용에 상관없이 그대로 다운로드만 시키는
+      // 범용 헬퍼라 텍스트 로그 내보내기에도 그대로 재사용한다(중복 구현 방지).
+      downloadDocxBlob(blob, 'peachshot_진단로그_' + new Date().toISOString().replace(/[:.]/g,'-') + '.txt');
+    });
+  }
 
   if(btnRunIntegrityCheck){
     btnRunIntegrityCheck.addEventListener('click', async ()=>{
@@ -7828,6 +7945,7 @@
           delete p.original;
         });
       });
+      diagLogMemorySnapshot('시설물 전환 (' + currentSiteId + ' → ' + site.id + ')');
     }
 
     ensureDrawingsIntegrity(site);
@@ -7901,6 +8019,7 @@
 
   // 실제 저장 1회를 수행한다. 큐를 거치지 않고 이 함수를 직접 호출하지 않는다.
   async function performSaveState(){
+    const __diagT0 = Date.now();
     commitLiveToCurrentSite();
     setSaveIndicator('saving');
 
@@ -7970,6 +8089,19 @@
 
     const totalOk = currentSitePhotosOk && otherSitesPhotosOk && durablePointsOk && metadataOk;
     setSaveIndicator(totalOk ? 'saved' : 'failed');
+    // 실패는 항상 남기고, 성공은 눈에 띄게 느렸을 때만 남긴다(정상 저장마다 남기면
+    // 로그가 금방 차서 정작 필요한 기록이 밀려나므로) — "여전히 가끔 늦다"를 실제
+    // 소요시간으로 확인할 수 있게 하는 목적.
+    const __diagMs = Date.now() - __diagT0;
+    if(!totalOk || __diagMs > 800){
+      diagLog('save', totalOk ? 'save slow' : 'save FAILED', {
+        durationMs: __diagMs, currentSitePhotosOk, otherSitesPhotosOk, durablePointsOk, metadataOk,
+        markerCount: (markers || []).length,
+        photoCount: (markers || []).reduce((s,m)=>s+(m.photos||[]).length, 0),
+        siteCount: (sites || []).length,
+        online: navigator.onLine
+      });
+    }
     if(totalOk){
       maybeTakeSnapshot();
       queueCloudSync();
@@ -8012,6 +8144,9 @@
         // 화면엔 계속 "저장 중"으로 남아 사용자가 무한정 기다리게 될 수 있었다.
         // 여기서 확실히 실패로 갱신해 다음 저장(재시도)이 언제 필요한지 알 수 있게 한다.
         try{ setSaveIndicator('failed'); }catch(e2){}
+        diagLog('save', 'performSaveState threw: ' + (e && e.message || String(e)), {
+          stack: (e && e.stack) ? String(e.stack).slice(0, 2000) : undefined
+        });
       }
       resolvers.forEach((resolve)=> resolve(ok));
     } while(savePending); // 저장하는 동안 새 요청이 들어왔다면 최신 상태로 한 번 더
@@ -8928,15 +9063,20 @@
 
   // 오프라인 → 온라인 복귀 시 자동 동기화 리스너
   window.addEventListener('online', async ()=>{
+    diagLog('net', 'online 전환', { saveInProgress, syncProcessing });
     updateNet();
     try{
       await processSyncQueue();
       await pullCloudChanges();
     }catch(error){
       console.warn('[Sync] online recovery failed', error);
+      diagLog('sync', 'online 복귀 처리 실패: ' + (error && error.message || String(error)));
     }
   });
-  window.addEventListener('offline', ()=> updateSyncStatusIndicator());
+  window.addEventListener('offline', ()=>{
+    diagLog('net', 'offline 전환', { saveInProgress });
+    updateSyncStatusIndicator();
+  });
 
   // 글로벌 동기화 진단 네임스페이스
   if(typeof window !== 'undefined'){
@@ -9032,6 +9172,11 @@
       refreshStageHeader();
       updateResetImageLabel();
       setSaveIndicator('failed');
+      // loadState 실패는 "저장 실패"가 아니라 "불러오기 실패"인데 같은 인디케이터를
+      // 재사용해서 사용자에게는 "영구저장실패"로 보인다 — 실제 원인 구분을 위해 기록.
+      diagLog('error', 'loadState 실패(불러오기 단계, 저장 실패 아님): ' + (e && e.message || String(e)), {
+        stack: (e && e.stack) ? String(e.stack).slice(0, 2000) : undefined
+      });
     }
   }
 
@@ -15463,6 +15608,8 @@
     try{
       await openIDB();
       initStoragePersistence();
+      await loadDiagLog(); // 진단로그 복원 — 지난 세션에 남긴 기록에 이어서 계속 쌓는다
+      diagLog('lifecycle', '앱 시작', { online: navigator.onLine });
     }catch(e){
       console.warn('IndexedDB 초기화 경고:', e);
     }
@@ -15471,8 +15618,10 @@
     try{
       await loadState();
       todaysMarkerCount();
+      diagLogMemorySnapshot('앱 시작 직후');
     }catch(e){
       console.error('로컬 데이터 복구 실패:', e);
+      diagLog('error', 'initPeachShotApp: 로컬 데이터 복구 실패: ' + (e && e.message || String(e)));
     }
 
     // 3. 기본 로컬 선호 설정 및 마스터 데이터 백그라운드 병렬 로드
@@ -15507,6 +15656,8 @@
   // 앱 종료 대비 보조 안전 저장
   document.addEventListener('visibilitychange', ()=>{
     if(document.visibilityState === 'hidden'){
+      diagLog('lifecycle', 'visibilitychange: hidden', { saveInProgress });
+      flushDiagLog();
       try{
         commitLiveToCurrentSite();
         saveState();
@@ -15517,6 +15668,8 @@
   });
 
   window.addEventListener('pagehide', ()=>{
+    diagLog('lifecycle', 'pagehide', { saveInProgress });
+    flushDiagLog();
     try{
       commitLiveToCurrentSite();
       saveState();
@@ -15524,6 +15677,10 @@
       console.warn('pagehide 저장 실패', e);
     }
   });
+
+  // 30분마다 메모리/저장소 사용량을 한 번씩 남긴다 — 장시간 현장조사 중 서서히
+  // 메모리가 쌓이는지(지난 메모리누수 수정이 실제로 버티는지) 확인용 정기 기록.
+  setInterval(()=>{ diagLogMemorySnapshot('정기 점검(30분)'); }, 30 * 60 * 1000);
 
   // 브라우저 탭을 직접 닫거나 다른 주소로 이동할 때만 뜨는 네이티브 "나가시겠습니까?"
   // 확인창. pagehide/visibilitychange는 비동기 저장을 기다려줄 방법이 없어서(브라우저가
