@@ -6216,48 +6216,21 @@
     }catch(e){}
   }
 
+  // getConflictRecords / saveConflictRecords는 예전에 여기(구 UI용)와 아래
+  // (약 7900줄, Phase 4-2 엔진 loadConflictRecords)에 같은 저장소(CONFLICT_RECORDS_KEY)를
+  // 다루는 구현이 두 벌 있었다 — 실제 충돌은 아래 엔진의 detectAndRecordConflict가
+  // 기록하는데, 여기 있던 필드명(entityType/localData/createdAt 등 camelCase)이 그
+  // 기록의 실제 필드명(entity_type/local_data/detectedAt 등 snake_case)과 달라서
+  // 충돌 해결 버튼(내 로컬 유지/서버 수용/사본 보존)이 조용히 아무 것도 안 하고
+  // 충돌만 지워버리는 문제가 있었다. 저장 로직은 아래 하나로 합치고, 여기서는
+  // 실제 기록 형태(snake_case)를 기준으로 읽도록 고쳤다.
   async function getConflictRecords(){
-    try{
-      const list = await storageGet(CONFLICT_RECORDS_KEY);
-      return Array.isArray(list) ? list : [];
-    }catch(e){
-      return [];
-    }
+    return await loadConflictRecords();
   }
+  // saveConflictRecords 구현은 아래(약 7900줄)에 있다 — 같은 이름을 두 번 선언하지 않는다.
 
-  async function saveConflictRecords(list){
-    try{
-      await storageSet(CONFLICT_RECORDS_KEY, list);
-      syncState.conflictCount = list.length;
-      if(list.length > 0) syncState.status = 'conflict';
-      else if(syncState.status === 'conflict') syncState.status = 'synced';
-      updateSyncStatusBar();
-      saveSyncState();
-    }catch(e){}
-  }
-
-  async function recordOccConflict(entityType, entityId, localData, cloudData, localRev, cloudRev){
-    const list = await getConflictRecords();
-    const existingIdx = list.findIndex(c => c.entityId === entityId && c.entityType === entityType);
-    const item = {
-      id: 'conf_' + genId(),
-      organizationId: activeOrganizationId || (localData && localData.organizationId) || null,
-      projectId: currentProjectId,
-      entityType: entityType || 'facility',
-      entityId: entityId,
-      localRevision: localRev || 1,
-      cloudRevision: cloudRev || 1,
-      localData: JSON.parse(JSON.stringify(localData || {})),
-      cloudData: JSON.parse(JSON.stringify(cloudData || {})),
-      createdAt: new Date().toISOString(),
-      status: 'open'
-    };
-    if(existingIdx >= 0) list[existingIdx] = item;
-    else list.unshift(item);
-    await saveConflictRecords(list);
-    broadcastSyncEvent('CONFLICT_DETECTED', { entityId, entityType });
-    return item;
-  }
+  // recordOccConflict — 예전 충돌 기록 함수, 어디서도 호출되지 않는 죽은 코드였다
+  // (지금은 detectAndRecordConflict가 그 역할을 한다). 정리 과정에서 제거.
 
   async function resolveOccConflict(conflictId, resolutionType){
     const list = await getConflictRecords();
@@ -6266,24 +6239,24 @@
 
     if(resolutionType === 'keep_local'){
       // 로컬 버전 유지: 클라우드로 강제 푸시
-      const curProj = projects.find(p => p.id === target.projectId);
+      const curProj = projects.find(p => p.id === target.project_id);
       if(curProj) await pushProjectToCloud(curProj, { silent:true, force:true });
     } else if(resolutionType === 'accept_cloud'){
       // 클라우드 버전 수용: 로컬에 클라우드 데이터 적용
-      if(target.entityType === 'project' && target.cloudData){
-        const pIdx = projects.findIndex(p => p.id === target.projectId);
-        if(pIdx >= 0) projects[pIdx] = Object.assign(projects[pIdx], target.cloudData);
-      } else if(target.entityType === 'facility' && target.cloudData){
-        const sIdx = sites.findIndex(s => s.id === target.entityId);
-        if(sIdx >= 0) sites[sIdx] = Object.assign(sites[sIdx], target.cloudData);
+      if(target.entity_type === 'project' && target.cloud_data){
+        const pIdx = projects.findIndex(p => p.id === target.project_id);
+        if(pIdx >= 0) projects[pIdx] = Object.assign(projects[pIdx], target.cloud_data);
+      } else if(target.entity_type === 'facility' && target.cloud_data){
+        const sIdx = sites.findIndex(s => s.id === target.entity_id);
+        if(sIdx >= 0) sites[sIdx] = Object.assign(sites[sIdx], target.cloud_data);
       }
       await saveState();
     } else if(resolutionType === 'save_copy'){
       // 사본으로 보존: 로컬 데이터를 새 ID로 복사하고 클라우드 수용
-      if(target.entityType === 'project' && target.localData){
-        const copyProj = Object.assign({}, target.localData, {
+      if(target.entity_type === 'project' && target.local_data){
+        const copyProj = Object.assign({}, target.local_data, {
           id: genId(),
-          name: (target.localData.name || '프로젝트') + ' (충돌 보존 사본)',
+          name: (target.local_data.name || '프로젝트') + ' (충돌 보존 사본)',
           savedAt: new Date().toISOString()
         });
         projects.push(copyProj);
@@ -6439,11 +6412,11 @@
       conflicts.forEach(c => {
         const itemBox = document.createElement('div');
         itemBox.style.cssText = 'background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-bottom:8px;';
-        const eName = (c.localData && c.localData.name) || c.entityId;
+        const eName = (c.local_data && c.local_data.name) || c.entity_id;
         itemBox.innerHTML = `
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-            <span style="font-weight:600; font-size:12px;">[${escapeHtml(c.entityType)}] ${escapeHtml(eName)}</span>
-            <span style="font-size:10px; color:var(--muted);">${new Date(c.createdAt).toLocaleTimeString('ko-KR')}</span>
+            <span style="font-weight:600; font-size:12px;">[${escapeHtml(c.entity_type)}] ${escapeHtml(eName)}</span>
+            <span style="font-size:10px; color:var(--muted);">${new Date(c.detectedAt || c.createdAt).toLocaleTimeString('ko-KR')}</span>
           </div>
           <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;">
             <button class="card-btn" style="flex:1; min-width:110px;" id="btnKeepLocal_${c.id}">내 로컬 버전 유지</button>
@@ -6601,7 +6574,6 @@
       updateSyncStatusBar,
       renderSyncDashboard,
       getConflictRecords,
-      recordOccConflict,
       resolveOccConflict,
       broadcastSyncEvent
     });
@@ -6678,7 +6650,7 @@
     // 5. 동기화 대기열 및 충돌 레코드 검사
     const conflicts = await getConflictRecords();
     conflicts.forEach(c => {
-      if(!c.entityId || !c.entityType){
+      if(!c.entity_id || !c.entity_type){
         issues.push({ category:'SyncConflicts', severity:'medium', message:`손상된 동시성 충돌 레코드 감지: ${c.id}`, entityId: c.id, fixable:true });
       }
     });
@@ -6863,8 +6835,8 @@
       <!-- 시스템 및 사용자 정보 그리드 -->
       <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:10px; margin-bottom:14px;">
         <div style="background:var(--panel-2); border:1px solid var(--line); border-radius:6px; padding:10px;">
-          <div style="font-size:11px; color:var(--muted);">앱 및 스키마 버전</div>
-          <div style="font-size:13px; font-weight:700; color:var(--text); margin-top:2px;">v${APP_VERSION} / Sch ${CURRENT_SCHEMA_VERSION}</div>
+          <div style="font-size:11px; color:var(--muted);">데이터 스키마 버전</div>
+          <div style="font-size:13px; font-weight:700; color:var(--text); margin-top:2px;">Schema v${CURRENT_SCHEMA_VERSION}</div>
         </div>
         <div style="background:var(--panel-2); border:1px solid var(--line); border-radius:6px; padding:10px;">
           <div style="font-size:11px; color:var(--muted);">네트워크 / 로그인</div>
@@ -7913,6 +7885,13 @@
   async function saveConflictRecords(records){
     try{
       await storageSet(CONFLICT_RECORDS_KEY, records);
+      // 구 UI(동기화 대시보드 상단 배지)가 쓰던 즉시 반영 로직을 합쳤다 — 저장하자마자
+      // 충돌 배지가 바로 뜨고, 마지막 충돌이 사라지면 바로 내려간다.
+      syncState.conflictCount = records.length;
+      if(records.length > 0) syncState.status = 'conflict';
+      else if(syncState.status === 'conflict') syncState.status = 'synced';
+      if(typeof updateSyncStatusBar === 'function') updateSyncStatusBar();
+      saveSyncState();
     }catch(e){
       console.warn('[Sync] 충돌 기록 저장 실패', e);
     }
