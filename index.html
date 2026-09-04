@@ -2411,8 +2411,14 @@
           <select id="dmFacilityForm" style="width:100%; padding:8px; background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:4px;"></select>
         </div>
       </div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px;">
+        <button type="button" class="ghost" id="btnDmAllExport" style="flex:1 1 auto; min-width:180px;">📦 전체 손상마스터 Excel 내보내기</button>
+        <button type="button" class="ghost" id="btnDmAllImport" style="flex:1 1 auto; min-width:180px;">📦 전체 손상마스터 Excel 가져오기</button>
+        <input type="file" id="dmAllExcelInput" accept=".xlsx,.xls" style="display:none;">
+      </div>
+      <div class="std-ref-note" style="margin-bottom:15px;">전체 = 모든 시설물 종류×형식을 한 파일(한 시트)로. 앞 2열이 "시설물종류 / 시설물형식"입니다. 가져오면 이 기기 공용 손상마스터에 전체 교체로 반영됩니다.</div>
       <div id="dmSourceNote" class="std-ref-note" style="margin-bottom:15px; display:none;"></div>
-      
+
       <div id="dmContent" style="display:none; border-top:1px solid var(--line); padding-top:20px;">
         <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px;">
           <button type="button" class="ghost" id="btnDmExcelExport" style="flex:1 1 auto; min-width:150px;">📤 현재 내용 Excel로 내보내기</button>
@@ -14990,6 +14996,82 @@
     if(!dmTypeSel.value || !dmFormSel.value){ alert('시설물 종류와 형식을 먼저 선택하세요.'); return; }
     dmExcelInput.value = '';
     dmExcelInput.click();
+  });
+
+  // ---- 전체 손상마스터 (모든 종류×형식 한 파일) ----
+  const DM_ALL_EXCEL_COLUMNS = ['시설물종류','시설물형식'].concat(DM_EXCEL_COLUMNS.map(c=>c.label));
+  const btnDmAllExport = document.getElementById('btnDmAllExport');
+  const btnDmAllImport = document.getElementById('btnDmAllImport');
+  const dmAllExcelInput = document.getElementById('dmAllExcelInput');
+
+  if(btnDmAllExport) btnDmAllExport.addEventListener('click', async ()=>{
+    if(!(await ensureXlsxLoaded())){ alert('Excel 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인해주세요.'); return; }
+    const rows = [];
+    Object.keys(FACILITY_FORMS).forEach(type=>{
+      if(type === '기타') return;
+      FACILITY_FORMS[type].forEach(form=>{
+        if(form === '기타') return;
+        const g = globalDamageMaster[type] && globalDamageMaster[type][form];
+        const list = (Array.isArray(g) && g.length) ? g : ((STANDARD_DB[type] && STANDARD_DB[type][form]) || []);
+        dmRowsToExcel(list).forEach(r => rows.push(Object.assign({ '시설물종류': type, '시설물형식': form }, r)));
+      });
+    });
+    if(rows.length === 0){ alert('내보낼 손상마스터가 없습니다.'); return; }
+    downloadWorkbook(rows, DM_ALL_EXCEL_COLUMNS, '전체_손상마스터.xlsx');
+  });
+
+  if(btnDmAllImport) btnDmAllImport.addEventListener('click', ()=>{ dmAllExcelInput.value = ''; dmAllExcelInput.click(); });
+
+  if(dmAllExcelInput) dmAllExcelInput.addEventListener('change', async ()=>{
+    const file = dmAllExcelInput.files && dmAllExcelInput.files[0];
+    if(!file) return;
+    const check = await validateUploadedFile(file, ['zip'], 20);
+    if(!check.ok){ alert('파일을 가져올 수 없습니다: ' + check.reason); return; }
+    if(!(await ensureXlsxLoaded())){ alert('Excel 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인해주세요.'); return; }
+    try{
+      const wb = XLSX.read(await file.arrayBuffer(), { type:'array' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const raw = XLSX.utils.sheet_to_json(sheet, { defval:'' });
+      if(raw.length === 0){ alert('가져올 데이터가 없습니다(빈 시트).'); return; }
+      const k0 = Object.keys(raw[0]);
+      if(!k0.includes('시설물종류') || !k0.includes('시설물형식') || !k0.includes('부위')){
+        alert('"시설물종류", "시설물형식", "부위" 컬럼이 모두 있어야 합니다. 전체 내보내기 양식을 그대로 사용해주세요.');
+        return;
+      }
+      if(raw.length > 8000){ alert('한 번에 가져올 수 있는 행이 너무 많습니다(최대 8000행).'); return; }
+
+      const groups = {};
+      raw.forEach(row=>{
+        const type = String(row['시설물종류'] || '').trim();
+        const form = String(row['시설물형식'] || '').trim();
+        if(!type || !form) return;
+        const item = dmExcelRowToItem(row);
+        if(!item) return;
+        if(!groups[type]) groups[type] = {};
+        if(!groups[type][form]) groups[type][form] = [];
+        groups[type][form].push(item);
+      });
+      const comboCount = Object.keys(groups).reduce((s,t)=> s + Object.keys(groups[t]).length, 0);
+      if(comboCount === 0){ alert('시설물종류·시설물형식·부위가 있는 행이 없습니다.'); return; }
+
+      if(!confirm(comboCount + '개 (시설물종류 × 형식) 조합을 이 기기 공용 손상마스터에 전체 교체로 반영합니다.\n이미 진행 중인 프로젝트는 그대로이며, 이 기기에서 새로 만드는 프로젝트부터 적용됩니다.\n계속할까요?')) return;
+
+      Object.keys(groups).forEach(type=>{
+        Object.keys(groups[type]).forEach(form=>{
+          if(!globalDamageMaster[type]) globalDamageMaster[type] = {};
+          globalDamageMaster[type][form] = groups[type][form];
+          if(!globalDamageMasterVersion[type]) globalDamageMasterVersion[type] = {};
+          globalDamageMasterVersion[type][form] = (globalDamageMasterVersion[type][form] || 0) + 1;
+        });
+      });
+      await saveGlobalDamageMaster();
+      logActivity('손상마스터 전체 Excel 가져오기', comboCount + '개 (종류×형식) 조합 — 이 기기 공용');
+      alert(comboCount + '개 조합을 이 기기 공용 손상마스터에 반영했습니다.');
+      if(dmTypeSel.value && dmFormSel.value) loadDmConfig();
+    }catch(e){
+      console.error('전체 손상마스터 Excel 가져오기 실패', e);
+      alert('Excel 파일을 읽는 중 오류가 발생했습니다. 양식 형식을 확인해주세요.');
+    }
   });
 
   if(dmExcelInput) dmExcelInput.addEventListener('change', async ()=>{
