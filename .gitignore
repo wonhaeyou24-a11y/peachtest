@@ -1,0 +1,23 @@
+# 의존성 / 빌드
+node_modules/
+dist/
+
+# OS / 에디터
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+
+# 외부 참조 스킬 원본 (slope-facemap-report 등) — 로컬 보관, 저장소에 올리지 않음
+docs/ref/
+
+# 스크래치 산출물
+scratch/*.output
+scratch/*.log
+*.local
+
+# 로컬 개발 서버 설정 (기기별)
+.claude/launch.json
+
+# Supabase 스키마 SQL — 로컬 참조 보관(원격 main에는 사용자가 미포함)
+svgschema_*.sql

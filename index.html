@@ -674,7 +674,7 @@
   /* Workspace v1.0 섹션26·28: Inspector에서 선택된 지점을 Main(도면)에서 강조 */
   .marker.selected{
     box-shadow: 0 0 0 3px #2E6DA4, 0 2px 8px rgba(0,0,0,0.45);
-    transform: scale(1.25);
+    /* 확대(scale) 보정은 JS updateMarkerScale()가 인라인으로 처리한다(선택 시 1.25/zScale) */
     z-index: 6;
   }
 
@@ -11293,6 +11293,22 @@
     if(!frame) return;
     frame.style.transform = 'translate(' + zTx + 'px,' + zTy + 'px) scale(' + zScale + ')';
     zoomLabel.textContent = Math.round(zScale * 100) + '%';
+    updateMarkerScale();
+  }
+
+  // 도면을 확대해도 마킹 핀은 화면상 같은 크기를 유지한다 —
+  // .marker는 scale(zScale)되는 .img-frame의 자식이라 그대로 두면 핀도 같이 커져서
+  // 붙어있는 손상끼리 확대해도 겹침이 안 풀린다(지도앱과 반대). 핀에 1/zScale
+  // 역보정을 걸면 "확대할수록 핀 대비 간격이 벌어져" 겹침이 자연스럽게 해소된다.
+  // 좌표 데이터(xPct/yPct)는 전혀 건드리지 않는다.
+  function updateMarkerScale(){
+    const frame = document.getElementById('imgFrame');
+    if(!frame) return;
+    const inv = 1 / (zScale || 1);
+    frame.querySelectorAll('.marker').forEach(el=>{
+      const base = el.classList.contains('selected') ? 1.25 : 1;
+      el.style.transform = 'scale(' + (base * inv) + ')';
+    });
   }
 
   function zoomAt(cx, cy, newScale){
@@ -11698,6 +11714,7 @@
       el.title = '지점 ' + m.num + (hasPhotos ? ' · 사진 ' + m.photos.length + '장' : ' · 미촬영');
       frame.appendChild(el);
     });
+    updateMarkerScale();
   }
 
   function updateCounts(){
