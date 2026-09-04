@@ -7807,11 +7807,16 @@
 
   function queueCloudSync(){
     if(!currentProjectId) return;
+    // 이 기기가 마지막으로 클라우드와 맞춘 리비전을 함께 넘긴다. 예전엔 아무것도 안
+    // 넘겨서 syncSingleEntity가 항상 baseline=1로 검사했고, 프로젝트가 클라우드에
+    // 한 번 올라가 revision이 2가 되는 순간부터 저장할 때마다 거짓 충돌이 쌓였다.
+    const proj = projects.find(p => p.id === currentProjectId);
     enqueueEntitySync({
       entityType: 'project',
       entityId: currentProjectId,
       operation: 'upsert',
       projectId: currentProjectId,
+      revision: (proj && typeof proj.revision === 'number') ? proj.revision : 1,
       payload: { id: currentProjectId }
     });
   }
@@ -8073,23 +8078,32 @@
         if(!proj) return { ok: true };
         const orgId = proj.organizationId || null;
 
+        // 이 기기가 알고 있는 클라우드 리비전. 큐 항목의 revision(담길 때 스냅샷)이
+        // 뒤처졌을 수 있어 로컬 엔티티의 현재 revision과 함께 큰 값을 기준으로 삼는다.
+        // 이게 없으면 첫 동기화 후 클라우드 revision이 2가 되는 순간부터 매번 거짓 충돌.
+        const baseRevision = Math.max(
+          typeof proj.revision === 'number' ? proj.revision : 1,
+          expectedRevision
+        );
+
         const { data: existing, error: fetchErr } = await supabaseClient.from('ps_projects').select('data, updated_at').eq('id', entityId).maybeSingle();
-        if(!fetchErr && existing && existing.data && existing.data.revision && existing.data.revision > expectedRevision){
+        const cloudRevision = (existing && existing.data && typeof existing.data.revision === 'number') ? existing.data.revision : 0;
+        if(!fetchErr && cloudRevision > baseRevision){
           await detectAndRecordConflict({
             organization_id: orgId,
             project_id: entityId,
             entity_type: 'project',
             entity_id: entityId,
             user_id: userId,
-            local_revision: expectedRevision,
-            cloud_revision: existing.data.revision,
+            local_revision: baseRevision,
+            cloud_revision: cloudRevision,
             local_data: proj,
             cloud_data: existing.data
           });
-          return { ok: false, conflict: true, reason: `Revision mismatch: Local ${expectedRevision} vs Cloud ${existing.data.revision}` };
+          return { ok: false, conflict: true, reason: `Revision mismatch: Local ${baseRevision} vs Cloud ${cloudRevision}` };
         }
 
-        proj.revision = expectedRevision + 1;
+        proj.revision = Math.max(baseRevision, cloudRevision) + 1;
         const { error } = await supabaseClient.from('ps_projects').upsert({
           id: proj.id,
           user_id: userId,
