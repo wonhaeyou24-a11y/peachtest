@@ -2414,6 +2414,12 @@
       <div id="dmSourceNote" class="std-ref-note" style="margin-bottom:15px; display:none;"></div>
       
       <div id="dmContent" style="display:none; border-top:1px solid var(--line); padding-top:20px;">
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px;">
+          <button type="button" class="ghost" id="btnDmExcelExport" style="flex:1 1 auto; min-width:150px;">📤 현재 내용 Excel로 내보내기</button>
+          <button type="button" class="ghost" id="btnDmExcelImport" style="flex:1 1 auto; min-width:150px;">📥 Excel로 가져오기</button>
+          <input type="file" id="dmExcelInput" accept=".xlsx,.xls" style="display:none;">
+        </div>
+        <div class="std-ref-note" style="margin-bottom:15px;">엑셀 양식으로 부위·손상명·원인·보수/보강방안을 한 번에 작성할 수 있습니다. 내보내기 → 엑셀 편집 → 가져오기 순서로 쓰면 됩니다. 가져올 때 전체 교체 / 병합을 선택합니다.</div>
         <div style="display:flex; gap:8px; margin-bottom:15px;">
           <button type="button" class="ghost dm-tab-btn active" id="dmTabPartsBtn" onclick="dmSwitchTab('parts')" style="flex:1;">부위 관리</button>
           <button type="button" class="ghost dm-tab-btn" id="dmTabTypesBtn" onclick="dmSwitchTab('types')" style="flex:1;">손상명 관리</button>
@@ -14921,10 +14927,114 @@
   const dmFormSel = document.getElementById('dmFacilityForm');
   const dmList = document.getElementById('dmDamageList');
   const btnDamageMaster = document.getElementById('btnDamageMaster');
-  
+
   if (btnDamageMaster) {
     btnDamageMaster.addEventListener('click', openDamageMaster);
   }
+
+  // ---- 손상마스터 Excel 양식 내보내기 / 가져오기 (기존손상 방식과 동일 패턴) ----
+  const DM_EXCEL_COLUMNS = [
+    { key:'component', label:'부위' },
+    { key:'damageType', label:'손상명' },
+    { key:'cause', label:'손상원인' },
+    { key:'repairOptions', label:'보수방안', array:true },
+    { key:'reinforcementOptions', label:'보강방안', array:true },
+    { key:'investigationItems', label:'조사항목' },
+    { key:'sourcePage', label:'근거' },
+    { key:'enabled', label:'사용' }
+  ];
+
+  function dmRowsToExcel(items){
+    return (items || []).map(it=>{
+      const r = {};
+      DM_EXCEL_COLUMNS.forEach(c=>{
+        if(c.array) r[c.label] = (Array.isArray(it[c.key]) ? it[c.key] : []).join(', ');
+        else if(c.key === 'enabled') r[c.label] = (it.enabled === false) ? 'N' : 'Y';
+        else r[c.label] = it[c.key] != null ? it[c.key] : '';
+      });
+      return r;
+    });
+  }
+
+  function dmExcelRowToItem(row){
+    const comp = String(row['부위'] || '').trim();
+    const dt = String(row['손상명'] || '').trim();
+    if(!comp && !dt) return null; // 부위·손상명 둘 다 비면 건너뜀
+    const arr = (v)=> String(v || '').split(',').map(s=>s.trim()).filter(Boolean);
+    return {
+      component: comp,
+      damageType: dt,
+      cause: String(row['손상원인'] || '').trim(),
+      repairOptions: arr(row['보수방안']),
+      reinforcementOptions: arr(row['보강방안']),
+      investigationItems: String(row['조사항목'] || '').trim(),
+      sourcePage: String(row['근거'] || '').trim(),
+      enabled: !/^\s*n/i.test(String(row['사용'] == null ? 'Y' : row['사용']))
+    };
+  }
+
+  const btnDmExcelExport = document.getElementById('btnDmExcelExport');
+  const btnDmExcelImport = document.getElementById('btnDmExcelImport');
+  const dmExcelInput = document.getElementById('dmExcelInput');
+
+  if(btnDmExcelExport) btnDmExcelExport.addEventListener('click', async ()=>{
+    const type = dmTypeSel.value, form = dmFormSel.value;
+    if(!type || !form){ alert('시설물 종류와 형식을 먼저 선택하세요.'); return; }
+    if(!(await ensureXlsxLoaded())){ alert('Excel 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인해주세요.'); return; }
+    const rows = dmRowsToExcel(dmCurrentData || []);
+    if(rows.length === 0) rows.push(Object.fromEntries(DM_EXCEL_COLUMNS.map(c => [c.label, ''])));
+    downloadWorkbook(rows, DM_EXCEL_COLUMNS.map(c=>c.label), type + '_' + form + '_손상마스터.xlsx');
+  });
+
+  if(btnDmExcelImport) btnDmExcelImport.addEventListener('click', ()=>{
+    if(!dmTypeSel.value || !dmFormSel.value){ alert('시설물 종류와 형식을 먼저 선택하세요.'); return; }
+    dmExcelInput.value = '';
+    dmExcelInput.click();
+  });
+
+  if(dmExcelInput) dmExcelInput.addEventListener('change', async ()=>{
+    const file = dmExcelInput.files && dmExcelInput.files[0];
+    if(!file) return;
+    const check = await validateUploadedFile(file, ['zip'], 20); // xlsx = zip 컨테이너
+    if(!check.ok){ alert('파일을 가져올 수 없습니다: ' + check.reason); return; }
+    if(!(await ensureXlsxLoaded())){ alert('Excel 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인해주세요.'); return; }
+    try{
+      const wb = XLSX.read(await file.arrayBuffer(), { type:'array' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const raw = XLSX.utils.sheet_to_json(sheet, { defval:'' });
+      if(raw.length === 0){ alert('가져올 데이터가 없습니다(빈 시트).'); return; }
+      if(!Object.keys(raw[0]).includes('부위')){ alert('"부위" 컬럼을 찾을 수 없습니다. 내보내기 양식의 헤더를 그대로 사용해주세요.'); return; }
+      if(raw.length > 3000){ alert('한 번에 가져올 수 있는 행이 너무 많습니다(최대 3000행).'); return; }
+
+      const parsed = raw.map(dmExcelRowToItem).filter(Boolean);
+      if(parsed.length === 0){ alert('부위 또는 손상명이 있는 행이 없습니다.'); return; }
+
+      const replace = confirm(
+        '가져올 항목 ' + parsed.length + '건.\n\n' +
+        '[확인] = 전체 교체 (현재 손상마스터를 삭제하고 엑셀 내용으로)\n' +
+        '[취소] = 병합 (같은 부위+손상명은 갱신, 없는 항목은 추가)'
+      );
+
+      if(replace){
+        dmCurrentData = parsed;
+      } else {
+        if(!Array.isArray(dmCurrentData)) dmCurrentData = [];
+        parsed.forEach(np=>{
+          const idx = dmCurrentData.findIndex(x =>
+            (x.component || '').trim() === np.component && (x.damageType || '').trim() === np.damageType);
+          if(idx >= 0) dmCurrentData[idx] = Object.assign({}, dmCurrentData[idx], np);
+          else dmCurrentData.push(np);
+        });
+      }
+      markDmDirty();
+      renderDmList();
+      renderDmPartsList();
+      alert(parsed.length + '건을 ' + (replace ? '전체 교체로' : '병합으로') + ' 반영했습니다. 저장하려면 아래 저장 버튼(이 프로젝트에만 / 이 기기에 / 조직 전체)을 눌러주세요.');
+    }catch(e){
+      console.error('손상마스터 Excel 가져오기 실패', e);
+      alert('Excel 파일을 읽는 중 오류가 발생했습니다. 양식 형식을 확인해주세요.');
+    }
+  });
 
   // ---- 기준DB 연결 검사 (명령문 23·55번) ----
   const btnDbCheck = document.getElementById('btnDbCheck');
