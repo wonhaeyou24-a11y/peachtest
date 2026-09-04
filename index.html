@@ -2335,6 +2335,10 @@
             <span class="more-item-title">프로젝트 전체 손상현황 Excel</span>
             <span class="more-item-desc">이 프로젝트의 모든 시설물 손상현황·증감을 한 파일로 집계</span>
           </button>
+          <button class="more-item" id="btnAppearanceReport">
+            <span class="more-item-title">외관조사 보고서 (양식)</span>
+            <span class="more-item-desc">외관조사 결과표 → 조사위치도 → 지점별 사진(현황·원인·대책) 양식</span>
+          </button>
           <button class="more-item" id="btnSaveWork">
             <span class="more-item-title">백업 내보내기</span>
             <span class="more-item-desc">현재 시설물을 파일 하나로 저장</span>
@@ -2914,6 +2918,7 @@
   const btnZip = document.getElementById('btnZip');
   const btnWord = document.getElementById('btnWord');
   const btnProjectDamageExcel = document.getElementById('btnProjectDamageExcel');
+  const btnAppearanceReport = document.getElementById('btnAppearanceReport');
 
   const captureModal = document.getElementById('captureModal');
   const captureTitle = document.getElementById('captureTitle');
@@ -14541,6 +14546,200 @@
     }finally{
       btnWord.disabled = false;
       btnWord.textContent = originalLabel;
+    }
+  });
+
+  // ================================================================
+  // 외관조사 보고서 (양식) — 사용자 제공 양식 참조:
+  //   가. 단일구간 외관조사 결과 (구분/외관조사 결과/원인추정) — 손상데이터에서 자동 생성
+  //   나. 조사위치도 (마킹 도면 + 실제 지도)
+  //   다. 지점별 세부 조사결과 — 2열 사진 그리드, 각 사진 아래 현황/원인/대책 표 + 원문자
+  // 머리글: 프로젝트명 | 시설물명
+  // 기존 "워드로 내보내기"는 그대로 두고 별도 버튼으로 제공한다.
+  // ================================================================
+  function circledNum(n){
+    if(n >= 1 && n <= 20) return String.fromCharCode(0x2460 + n - 1);
+    if(n >= 21 && n <= 35) return String.fromCharCode(0x3251 + n - 21);
+    if(n >= 36 && n <= 50) return String.fromCharCode(0x32B1 + n - 36);
+    return '(' + n + ')';
+  }
+
+  btnAppearanceReport.addEventListener('click', async ()=>{
+    moreModal.style.display = 'none';
+    const site = currentSiteObj();
+    if(!site){ alert('시설물을 먼저 선택해주세요.'); return; }
+    if((markers || []).length === 0 && !baseImageSrc){ alert('내보낼 조사 기록이 없습니다.'); return; }
+    if(typeof docx === 'undefined'){
+      try{ await loadScriptOnce('https://cdn.jsdelivr.net/npm/docx@8.0.4/build/index.js'); }catch(e){}
+    }
+    if(typeof docx === 'undefined'){ alert('문서 생성 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 다시 시도해주세요.'); return; }
+
+    btnAppearanceReport.disabled = true;
+    const origLabel = btnAppearanceReport.textContent;
+    btnAppearanceReport.textContent = '문서 생성 중…';
+    commitLiveToCurrentSite();
+    try{
+      const { Document, Packer, Paragraph, TextRun, ImageRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, Header } = docx;
+      const project = projects.find(p => p.id === currentProjectId);
+      const projectName = (project && project.name) || '';
+      const siteName = site.name || currentSiteName() || '시설물';
+      const today = new Date().toLocaleDateString('ko-KR');
+
+      function imgDims(dataUrl, maxW){
+        return new Promise((resolve)=>{
+          const im = new Image();
+          im.onload = ()=>{
+            const w = Math.min(maxW, im.naturalWidth || maxW);
+            const h = Math.round((im.naturalHeight || maxW*0.75) * (w / (im.naturalWidth || maxW)));
+            resolve({ width: w, height: h });
+          };
+          im.onerror = ()=> resolve({ width:maxW, height:Math.round(maxW*0.75) });
+          im.src = dataUrl;
+        });
+      }
+      async function toBytes(dataUrl){
+        const buf = await dataUrlToBlob(dataUrl).arrayBuffer();
+        return new Uint8Array(buf);
+      }
+      const labelCell = (t)=> new TableCell({ width:{size:12,type:WidthType.PERCENTAGE}, shading:{fill:'F2F2F2'}, margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ children:[ new TextRun({text:t, bold:true, size:15}) ] }) ] });
+      const textCell = (paras, size)=> new TableCell({ width:{size:size||88,type:WidthType.PERCENTAGE}, margins:{top:40,bottom:40,left:60,right:60}, children: Array.isArray(paras) ? paras : [ new Paragraph({ children:[ new TextRun({text:String(paras||''), size:15}) ] }) ] });
+
+      const children = [];
+      children.push(new Paragraph({ text: siteName + ' 외관조사 보고서', heading: HeadingLevel.TITLE }));
+      children.push(new Paragraph({ children:[ new TextRun({ text:(projectName ? projectName + ' · ' : '') + '작성일 ' + today, size:18, color:'555555' }) ], spacing:{ after:300 } }));
+
+      // ---- 가. 단일구간 외관조사 결과 ----
+      children.push(new Paragraph({ text:'가. 단일구간 외관조사 결과', heading: HeadingLevel.HEADING_1, spacing:{ before:200, after:120 } }));
+      children.push(new Paragraph({ children:[ new TextRun({ text:'<표> 단일구간 외관조사 결과', bold:true, size:16 }) ], spacing:{ after:100 } }));
+
+      const inv = buildDamageInventory(site);
+      const apHeader = new TableRow({ children: [
+        new TableCell({ width:{size:16,type:WidthType.PERCENTAGE}, shading:{fill:'D9E2F3'}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:'구분', bold:true, size:16}) ] }) ] }),
+        new TableCell({ width:{size:60,type:WidthType.PERCENTAGE}, shading:{fill:'D9E2F3'}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:'외관조사 결과', bold:true, size:16}) ] }) ] }),
+        new TableCell({ width:{size:24,type:WidthType.PERCENTAGE}, shading:{fill:'D9E2F3'}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:'원인추정', bold:true, size:16}) ] }) ] })
+      ]});
+      const apRows = [apHeader];
+      if(inv.length === 0){
+        apRows.push(new TableRow({ children:[ labelCell('전체'), textCell('조사된 손상 없음 — 전반적으로 양호한 상태로 확인됨.'), textCell('-') ] }));
+      } else {
+        const byPart = {};
+        const partOrder = [];
+        inv.forEach(r=>{
+          const part = r['구성요소'] || '기타';
+          if(!byPart[part]){ byPart[part] = []; partOrder.push(part); }
+          byPart[part].push(r);
+        });
+        partOrder.forEach(part=>{
+          const items = byPart[part];
+          const resultParas = items.map(r=>{
+            const scale = r['현재규모'] || r['기존규모'] || '';
+            const loc = r['위치'] ? ' (' + r['위치'] + ')' : (r['조사지점'] ? ' [' + r['조사지점'] + ']' : '');
+            let tag = '';
+            if(r['구분'] === '신규') tag = ' — 신규';
+            else if(r['구분'] === '기존(미조사)') tag = ' — 미조사(' + (r['증감여부'] || '') + ')';
+            else if(r['증감여부'] && !['동일','미확인'].includes(r['증감여부'])) tag = ' — ' + r['증감여부'] + (r['증감치수'] ? ' ' + r['증감치수'] : '');
+            return new Paragraph({ children:[ new TextRun({ text:'· ' + (r['손상명'] || '(손상명 없음)') + loc + (scale ? ', ' + scale : '') + tag, size:15 }) ] });
+          });
+          const causes = Array.from(new Set(items.map(r=>r['원인']).filter(Boolean)));
+          const causeParas = causes.length
+            ? causes.map(c => new Paragraph({ children:[ new TextRun({ text:'· ' + c, size:15 }) ] }))
+            : [ new Paragraph({ children:[ new TextRun({ text:'-', size:15 }) ] }) ];
+          apRows.push(new TableRow({ children:[ labelCell(part), textCell(resultParas, 60), textCell(causeParas, 24) ] }));
+        });
+      }
+      children.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows: apRows }));
+      children.push(new Paragraph({ children:[ new TextRun({ text:'※ 손상데이터에서 자동 생성된 표입니다. 구분은 손상의 구성요소(부위) 기준으로 묶었습니다.', italics:true, size:13, color:'808080' }) ], spacing:{ before:80, after:250 } }));
+
+      // ---- 나. 조사위치도 ----
+      children.push(new Paragraph({ text:'나. 조사위치도', heading: HeadingLevel.HEADING_1, spacing:{ before:200, after:120 } }));
+      let anyLocationImg = false;
+      const sortedDrawings = (drawings || []).slice().sort((a,b)=>(a.order||0)-(b.order||0));
+      for(const d of sortedDrawings){
+        if(!d.imageSrc) continue;
+        const marked = await buildMarkedImageFor(d.imageSrc, d.id);
+        if(!marked) continue;
+        anyLocationImg = true;
+        children.push(new Paragraph({ children:[ new TextRun({ text:'· ' + (d.name || '도면') + (d.type ? ' (' + d.type + ')' : ''), size:15, bold:true }) ], spacing:{ before:120, after:80 } }));
+        children.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: await toBytes(marked), transformation: await imgDims(marked, 560) }) ], spacing:{ after:120 } }));
+      }
+      if(markers.some(m => m.lat != null && m.lng != null)){
+        let mapImg = null;
+        try{ mapImg = await buildRealMapImage(); }catch(e){ mapImg = null; }
+        if(!mapImg){ try{ mapImg = buildMapOverviewImage(); }catch(e){} }
+        if(mapImg){
+          anyLocationImg = true;
+          children.push(new Paragraph({ children:[ new TextRun({ text:'· 지도 위치도', size:15, bold:true }) ], spacing:{ before:120, after:80 } }));
+          children.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: await toBytes(mapImg), transformation: await imgDims(mapImg, 560) }) ], spacing:{ after:120 } }));
+        }
+      }
+      if(!anyLocationImg){
+        children.push(new Paragraph({ children:[ new TextRun({ text:'등록된 위치도(도면/지도)가 없습니다.', size:15 }) ], spacing:{ after:150 } }));
+      }
+
+      // ---- 다. 지점별 세부 조사결과 ----
+      children.push(new Paragraph({ text:'다. 지점별 세부 조사결과', heading: HeadingLevel.HEADING_1, spacing:{ before:300, after:120 } }));
+
+      const photoCells = [];
+      const markersSorted = markers.slice().sort((a,b)=>(a.num||0)-(b.num||0));
+      for(const m of markersSorted){
+        const photos = m.photos || [];
+        for(let pi=0; pi<photos.length; pi++){
+          const p = photos[pi];
+          const dmgs = p.damages || [];
+          const hyeonhwang = dmgs.length
+            ? dmgs.map(d=>{
+                const nm = d.damageType || d.damageName || '(종류 미지정)';
+                const comp = d.component ? ' (' + d.component + ')' : '';
+                const meas = d.measurement ? ', ' + d.measurement : '';
+                return nm + comp + meas;
+              }).join(' / ')
+            : (p.note && p.note.trim() ? p.note.trim() : '현황 사진');
+          const causes = Array.from(new Set(dmgs.map(d=>d.cause).filter(Boolean))).join(', ');
+          const measures = Array.from(new Set(dmgs.map(d=>d.repairMethod).filter(Boolean))).join(', ');
+          const numText = circledNum(m.num || (photoCells.length + 1));
+
+          const cellKids = [];
+          if(p.src){
+            cellKids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: await toBytes(p.src), transformation: await imgDims(p.src, 250) }) ], spacing:{ after:60 } }));
+          }
+          cellKids.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows:[
+            new TableRow({ children:[ labelCell('현황'), textCell([ new Paragraph({ children:[ new TextRun({ text: numText + ' ', bold:true, size:16 }), new TextRun({ text: hyeonhwang, size:15 }) ] }) ]) ] }),
+            new TableRow({ children:[ labelCell('원인'), textCell(causes || '-') ] }),
+            new TableRow({ children:[ labelCell('대책'), textCell(measures || '주의관찰') ] })
+          ]}));
+          photoCells.push(new TableCell({ width:{size:50,type:WidthType.PERCENTAGE}, margins:{top:100,bottom:140,left:100,right:100}, children: cellKids }));
+        }
+      }
+
+      if(photoCells.length === 0){
+        children.push(new Paragraph({ children:[ new TextRun({ text:'촬영된 지점 사진이 없습니다.', size:15 }) ] }));
+      } else {
+        const gridRows = [];
+        for(let i=0; i<photoCells.length; i+=2){
+          const rowCells = [ photoCells[i] ];
+          rowCells.push(photoCells[i+1] || new TableCell({ width:{size:50,type:WidthType.PERCENTAGE}, children:[ new Paragraph({ text:'' }) ] }));
+          gridRows.push(new TableRow({ children: rowCells }));
+        }
+        children.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows: gridRows }));
+      }
+
+      const headerPara = new Header({ children:[ new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text: [projectName, siteName].filter(Boolean).join('  |  '), size:15, color:'666666' }) ] }) ] });
+      const wordDoc = new Document({ sections:[{ headers:{ default: headerPara }, children }] });
+      const blob = await Packer.toBlob(wordDoc);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = siteName + '_외관조사보고서.docx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }catch(e){
+      console.error(e);
+      alert('문서 생성 중 오류가 발생했습니다.');
+    }finally{
+      btnAppearanceReport.disabled = false;
+      btnAppearanceReport.textContent = origLabel;
     }
   });
 
