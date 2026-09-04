@@ -1967,7 +1967,7 @@
     <button class="ghost icon-btn" id="btnMore" title="내보내기 · 백업">⋯</button>
   </div>
   <div class="actions">
-    <button class="ghost" id="btnWorkMode" title="사무실/현장 모드 전환 (데이터는 똑같이 공유됩니다)">📍 현장 모드</button>
+    <button class="ghost" id="btnWorkMode" style="display:none;">📍</button>
     <button class="ghost office-only" id="btnDashboardQuick" title="프로젝트 현황 대시보드" style="display:none;">📊 대시보드</button>
     <button class="ghost" id="btnProjectSwitch" title="프로젝트 전환 · 관리">📁 프로젝트</button>
     <button class="primary" id="btnNewSite" title="새 시설물 추가">＋ 시설물</button>
@@ -2210,20 +2210,20 @@
 </div>
 
 <!-- Project List Modal -->
-<!-- 긴급 현장조사: prompt() 2연타 대신 모바일 친화적인 모달로 같은 입력(임시 프로젝트명·
-     임시 시설물명)을 받는다. 데이터 생성 로직은 그대로이고 입력 UI만 바뀐 것이다. -->
+<!-- 현장조사 바로 시작: 프로젝트명·시설물명만 입력받고 즉시 조사 시작.
+     데이터 생성 로직은 일반 프로젝트와 동일하다(임시 프로젝트 개념 없음). -->
 <div class="modal-backdrop" id="fieldQuickStartModal" style="display:none;">
   <div class="modal">
     <div class="modal-head">
-      <h2>⚡ 긴급 현장조사</h2>
+      <h2>⚡ 현장조사 바로 시작</h2>
       <button class="close-x" id="closeFieldQuickStart" aria-label="닫기">✕</button>
     </div>
     <div class="modal-body">
-      <div class="hint">최소한의 이름만 입력하고 바로 조사를 시작합니다. 나머지 상세정보는 사무실 복귀 후 보완할 수 있습니다.</div>
-      <label style="display:block; margin-top:12px;">임시 프로젝트명
+      <div class="hint">이름만 입력하고 바로 조사를 시작합니다. 시설물 종류·형식 등 상세정보는 나중에 "시설물 목록 → 정보 보완"에서 채우면 됩니다.</div>
+      <label style="display:block; margin-top:12px;">프로젝트명
         <input id="fqsProjectName" type="text" class="site-search-input" style="margin-top:4px;">
       </label>
-      <label style="display:block; margin-top:12px;">임시 시설물명
+      <label style="display:block; margin-top:12px;">시설물명
         <input id="fqsFacilityName" type="text" class="site-search-input" style="margin-top:4px;">
       </label>
     </div>
@@ -2242,7 +2242,7 @@
     </div>
     <div class="modal-body">
       <div class="hint">여러 시설물을 하나의 조사 프로젝트로 묶어 관리합니다. (예: "OO고속도로 정밀점검 2026")</div>
-      <button class="primary" id="btnFieldQuickStart" style="width:100%; margin-bottom:10px;">⚡ 현장 임시조사 바로 시작</button>
+      <button class="primary" id="btnFieldQuickStart" style="width:100%; margin-bottom:10px;">⚡ 현장조사 바로 시작</button>
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
         <button class="ghost" id="btnNewProject" style="flex:1 1 auto; min-width:140px; white-space:nowrap;">＋ 새 프로젝트 만들기</button>
         <button class="ghost" id="btnImportProjectBackup" style="flex:1 1 auto; min-width:140px; white-space:nowrap;">📦 백업 불러오기</button>
@@ -2319,8 +2319,8 @@
           <span class="more-item-desc">5분 간격 자동 저장된 이전 상태로 되돌리기 (최근 3개)</span>
         </button>
 
-        <button class="more-group-toggle" id="btnToggleManageGroup">
-          <span id="manageGroupToggleLabel">🗂️ 관리·문서 더보기</span>
+        <button class="more-group-toggle" id="btnToggleManageGroup" style="display:none;">
+          <span id="manageGroupToggleLabel">🗂️ 관리·문서</span>
         </button>
         <div class="more-menu-group" id="moreGroupManage">
           <button class="more-item" id="btnZip">
@@ -3079,7 +3079,6 @@
       createdAt: raw.createdAt || raw.savedAt || now,
       updatedAt: raw.savedAt || raw.createdAt || now,
       standardDbVersion: raw.standardDbVersion || null,
-      isTemp: !!raw.isTemp,
       damageMaster: raw.damageMaster ? JSON.parse(JSON.stringify(raw.damageMaster)) : undefined,
       savedAt: raw.savedAt || undefined,
       revision: typeof raw.revision === 'number' ? raw.revision : 1,
@@ -3252,7 +3251,7 @@
 
   // ---------- Migration Preview & Validation Tools ----------
   function previewMigration(project, facilityList){
-    const targetProj = project || { id: 'temp_proj', name: '임시 프로젝트' };
+    const targetProj = project || { id: 'preview_proj', name: '(미지정 프로젝트)' };
     const targetSites = Array.isArray(facilityList) ? facilityList : (sites || []);
     const normProj = normalizeProject(targetProj);
     const facilities = [];
@@ -4747,32 +4746,23 @@
   };
 
   // ================================================================
-  // 사무실 모드 / 현장 모드 — 순수한 화면 표시용 선호값이다. 두 모드는 완전히
-  // 같은 프로젝트 데이터를 그대로 쓰며, 모드를 바꾼다고 데이터가 옮겨지거나
-  // 복사되지 않는다. 또한 어느 모드에서도 모든 기능에 항상 접근할 수 있다
-  // (현장에서도 시설물 정보 보완·기준DB 확인 등 "사무실" 업무가 전부 가능해야 함).
+  // 사무실 모드 / 현장 모드 구분 제거 (2026-09) — 개발 방향상 두 모드가
+  // 완전히 같은 데이터·같은 기능이라 구분할 이유가 없어졌다. 항상 전체 UI를
+  // 쓴다. (예전 .office-only 요소 = 전부 표시, 모드 전환 버튼 = 숨김)
+  // 코드 변경 최소화를 위해 appWorkMode 변수 자체는 'office' 고정으로 남겨둔다.
   // ================================================================
-  let appWorkMode = 'field'; // 'field' | 'office' — 기기별 선호값(기본은 현장)
+  let appWorkMode = 'office'; // 고정 — 모드 구분 없음
   const WORK_MODE_KEY = 'point-shot-work-mode';
   async function loadWorkMode(){
-    try{ const v = await storageGet(WORK_MODE_KEY); if(v === 'office' || v === 'field') appWorkMode = v; }
-    catch(e){ /* 기본값 유지 */ }
+    appWorkMode = 'office';
     renderWorkMode();
   }
   function renderWorkMode(){
-    if(!btnWorkMode) return;
-    if(appWorkMode === 'office'){
-      btnWorkMode.textContent = '🏢 사무실 모드';
-      btnWorkMode.className = 'ghost mode-office';
-    } else {
-      btnWorkMode.textContent = '📍 현장 모드';
-      btnWorkMode.className = 'ghost mode-field';
-    }
-    document.body.classList.toggle('mode-office', appWorkMode === 'office');
-    document.body.classList.toggle('mode-field', appWorkMode !== 'office');
-    document.querySelectorAll('.office-only').forEach(el=>{
-      el.style.display = (appWorkMode === 'office') ? '' : 'none';
-    });
+    appWorkMode = 'office';
+    if(btnWorkMode) btnWorkMode.style.display = 'none';
+    document.body.classList.add('mode-office');
+    document.body.classList.remove('mode-field');
+    document.querySelectorAll('.office-only').forEach(el=>{ el.style.display = ''; });
     updatePcExplorerDocking();
     if(typeof updateInspectorCollapse === 'function') updateInspectorCollapse();
   }
@@ -4842,22 +4832,10 @@
     observer.observe(siteModal, { attributes:true, attributeFilter:['style'] });
   })();
 
-  // 더보기 메뉴를 열 때마다, 지금 모드에 맞는 기본 펼침 상태로 맞춘다.
-  // 현장모드: "관리·문서"는 접어서 화면을 단순하게 유지(현장에서 자주 쓰는 6개만 바로 보임).
-  // 사무실모드: 관리 작업이 중심이므로 처음부터 펼쳐서 보여준다.
-  // 어느 쪽이든 접혀있어도 탭 한 번이면 항상 열 수 있다 — 기능을 없애는 게 아니다.
+  // 더보기 메뉴의 "관리·문서" 그룹 접기/펼치기 구분 제거 (2026-09) — 항상 펼침.
   function applyManageGroupDefaultState(){
     if(!moreGroupManage) return;
-    const collapse = (appWorkMode !== 'office');
-    moreGroupManage.classList.toggle('collapsed', collapse);
-    if(manageGroupToggleLabel) manageGroupToggleLabel.textContent = collapse ? '🗂️ 관리·문서 더보기' : '🗂️ 관리·문서 접기';
-  }
-
-  if(btnToggleManageGroup){
-    btnToggleManageGroup.addEventListener('click', ()=>{
-      const nowCollapsed = moreGroupManage.classList.toggle('collapsed');
-      manageGroupToggleLabel.textContent = nowCollapsed ? '🗂️ 관리·문서 더보기' : '🗂️ 관리·문서 접기';
-    });
+    moreGroupManage.classList.remove('collapsed');
   }
 
   // ================================================================
@@ -9481,7 +9459,7 @@
       titleGroup.className = 'card-title-group';
       const title = document.createElement('span');
       title.className = 'card-title';
-      title.textContent = (project.isTemp ? '⚡ ' : '') + project.name;
+      title.textContent = project.name;
       titleGroup.appendChild(title);
 
       if(isActive){
@@ -9692,16 +9670,8 @@
 
   if(projectSearch) projectSearch.addEventListener('input', renderProjectList);
 
-  btnWorkMode.addEventListener('click', async ()=>{
-    appWorkMode = (appWorkMode === 'office') ? 'field' : 'office';
-    renderWorkMode();
-    // 모드 전환 즉시 반영: 사진/손상편집 화면이 이미 열려있다면 다시 그려서
-    // 숨겨야 할 항목(보수공법/보강공법/상세정보 등)이 바로 나타나거나 사라지게 한다.
-    if(typeof activeMarkerId !== 'undefined' && activeMarkerId){
-      renderPreviewGridIfOpen(activeMarkerId);
-    }
-    try{ await storageSet(WORK_MODE_KEY, appWorkMode); }catch(e){ /* 표시용 선호값이라 저장 실패해도 조사에는 영향 없음 */ }
-  });
+  // 모드 전환 버튼 제거됨 (사무실/현장 모드 구분 없음). btnWorkMode 요소는
+  // 숨김 상태로만 남아있고 클릭 핸들러는 붙이지 않는다.
 
   btnProjectSwitch.addEventListener('click', ()=>{
     renderProjectList();
@@ -9776,7 +9746,6 @@
       name: projectName,
       createdAt: new Date().toISOString(),
       savedAt: new Date().toISOString(),
-      isTemp: true,
       standardDbVersion: standardDbVersion
     };
     projects.push(project);
@@ -9798,7 +9767,7 @@
     switchMode('map');
     saveState();
     renderProjectHeader();
-    alert('임시 현장조사를 시작합니다.\n지도에서 현재 위치를 눌러 첫 조사점을 만들어보세요.\n사무실 복귀 후 "📁 프로젝트"에서 정식 프로젝트로 전환하고, 시설물 목록에서 "📝 정보 보완"으로 상세정보를 채워주세요.');
+    alert('현장조사를 시작합니다.\n지도에서 현재 위치를 눌러 첫 조사점을 만들어보세요.\n시설물 정보(종류·형식 등)는 "시설물 목록 → 정보 보완"에서 언제든 채울 수 있습니다.');
   });
 
   // ================================================================
