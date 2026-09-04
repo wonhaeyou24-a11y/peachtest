@@ -2331,6 +2331,10 @@
             <span class="more-item-title">워드로 내보내기 (HWP 호환)</span>
             <span class="more-item-desc">한글(HWP)에서 '열기'로 바로 여는 보고서</span>
           </button>
+          <button class="more-item" id="btnProjectDamageExcel">
+            <span class="more-item-title">프로젝트 전체 손상현황 Excel</span>
+            <span class="more-item-desc">이 프로젝트의 모든 시설물 손상현황·증감을 한 파일로 집계</span>
+          </button>
           <button class="more-item" id="btnSaveWork">
             <span class="more-item-title">백업 내보내기</span>
             <span class="more-item-desc">현재 시설물을 파일 하나로 저장</span>
@@ -2909,6 +2913,7 @@
   const noGpsBody = document.getElementById('noGpsBody');
   const btnZip = document.getElementById('btnZip');
   const btnWord = document.getElementById('btnWord');
+  const btnProjectDamageExcel = document.getElementById('btnProjectDamageExcel');
 
   const captureModal = document.getElementById('captureModal');
   const captureTitle = document.getElementById('captureTitle');
@@ -10763,6 +10768,7 @@
   // Excel Injection 방어(sanitizeExcelCell)를 거친다.
   function downloadMultiSheetWorkbook(sheets, filename){
     const wb = XLSX.utils.book_new();
+    const usedSheetNames = new Set();
     sheets.forEach(sheet=>{
       const safeRows = sheet.rows.map(row=>{
         const out = {};
@@ -10770,7 +10776,12 @@
         return out;
       });
       const ws = XLSX.utils.json_to_sheet(safeRows, { header: sheet.headerLabels });
-      XLSX.utils.book_append_sheet(wb, ws, sheet.name);
+      // Excel 시트명 제약: 31자 이하, \ / ? * [ ] : 불가, 중복 불가
+      let base = String(sheet.name || 'Sheet').replace(/[\\/?*\[\]:]/g, ' ').trim().slice(0, 28) || 'Sheet';
+      let name = base, i = 2;
+      while(usedSheetNames.has(name)){ name = base.slice(0, 24) + ' (' + (i++) + ')'; }
+      usedSheetNames.add(name);
+      XLSX.utils.book_append_sheet(wb, ws, name);
     });
     XLSX.writeFile(wb, filename);
   }
@@ -10850,6 +10861,57 @@
       { name:'손상이력', rows: historyRows, headerLabels:['시각','활동','내용','변경 전','변경 후'] }
     ];
     downloadMultiSheetWorkbook(sheets, site.name + '_손상비교.xlsx');
+  });
+
+  // 프로젝트 전체 손상현황 집계 Excel — 이 프로젝트의 모든 시설물을 순회해
+  // 손상현황 통합표를 한 파일로 모은다. (사진 원본은 필요 없음 — buildDamageInventory는
+  // 마커/손상 메타데이터만 읽는다. 모든 시설물 데이터는 이미 sites[]에 들어있다.)
+  btnProjectDamageExcel.addEventListener('click', async ()=>{
+    moreModal.style.display = 'none';
+    const project = projects.find(p => p.id === currentProjectId);
+    if(!project){ alert('프로젝트를 먼저 선택해주세요.'); return; }
+    commitLiveToCurrentSite();
+    const psites = sites.filter(s => s.projectId === project.id);
+    if(psites.length === 0){ alert('이 프로젝트에 시설물이 없습니다.'); return; }
+    if(!(await ensureXlsxLoaded())){ alert('Excel 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인해주세요.'); return; }
+
+    const invHeader = ['시설물', ...DAMAGE_INVENTORY_COLUMNS];
+    const allRows = [];
+    const perFacilitySheets = [];
+    const facilitySummary = [];
+    let tPoints = 0, tExisting = 0, tNew = 0, tInc = 0, tDec = 0;
+
+    psites.forEach(s=>{
+      const rows = buildDamageInventory(s).map(r => Object.assign({ '시설물': s.name }, r));
+      allRows.push(...rows);
+      perFacilitySheets.push({ name: s.name || '시설물', rows, headerLabels: invHeader });
+
+      const pts = (s.markers || []).length;
+      const ex = (s.existingDamages || []).filter(d => !d.isDeleted).length;
+      const newCnt = rows.filter(r => r['구분'] === '신규').length;
+      const incCnt = rows.filter(r => r['증감여부'] === '증가').length;
+      const decCnt = rows.filter(r => r['증감여부'] === '감소').length;
+      tPoints += pts; tExisting += ex; tNew += newCnt; tInc += incCnt; tDec += decCnt;
+      facilitySummary.push({ '시설물': s.name, '조사지점': pts, '기존손상': ex, '신규손상': newCnt, '증가': incCnt, '감소': decCnt, '통합표 행수': rows.length });
+    });
+    facilitySummary.push({ '시설물': '── 합계 ──', '조사지점': tPoints, '기존손상': tExisting, '신규손상': tNew, '증가': tInc, '감소': tDec, '통합표 행수': allRows.length });
+
+    const sheets = [
+      { name:'프로젝트 요약', headerLabels:['항목','값'], rows:[
+        { '항목':'프로젝트', '값': project.name },
+        { '항목':'시설물 수', '값': psites.length },
+        { '항목':'총 조사지점', '값': tPoints },
+        { '항목':'기존손상 합계', '값': tExisting },
+        { '항목':'신규손상 합계', '값': tNew },
+        { '항목':'규모 증가', '값': tInc },
+        { '항목':'규모 감소', '값': tDec },
+        { '항목':'생성일', '값': new Date().toLocaleString('ko-KR') }
+      ]},
+      { name:'시설물별 집계', rows: facilitySummary, headerLabels:['시설물','조사지점','기존손상','신규손상','증가','감소','통합표 행수'] },
+      { name:'손상현황통합표(전체)', rows: allRows, headerLabels: invHeader },
+      ...perFacilitySheets
+    ];
+    downloadMultiSheetWorkbook(sheets, project.name + '_프로젝트손상현황.xlsx');
   });
 
   btnImportExcel.addEventListener('click', ()=>{ excelImportInput.value = ''; excelImportInput.click(); });
