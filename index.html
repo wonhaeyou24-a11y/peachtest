@@ -18,6 +18,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://unpkg.com/docx@8.0.4/build/index.js"></script>
 <script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -1974,7 +1975,7 @@
     <button class="ghost office-only" id="btnToggleExplorer" title="탐색기 접기/펼치기" style="display:none;">◀ 탐색기</button>
     <button class="ghost" id="btnResetImage" title="현재 시설물의 이미지를 불러오거나 교체">이미지</button>
   </div>
-  <input type="file" id="fileInput" accept="image/*">
+  <input type="file" id="fileInput" accept="image/*,application/pdf,.pdf">
   <input type="file" id="workFileInput" accept="application/json,.json">
 </div>
 
@@ -4489,7 +4490,7 @@
         p.id = photoId;
         p.photoRef = photoId;
 
-        // Base64 src가 존재하면 photoBlobs 전용 스토어에 순수 Blob 형태로 저장
+        // Base64 src가 존재하면 photoBlobs 전용 스토어에 순수 Blob 형태로 영구 저장
         if(p.src && typeof p.src === 'string' && p.src.startsWith('data:')){
           try{
             const blob = dataUrlToBlob(p.src);
@@ -4498,8 +4499,8 @@
               if(ok){
                 p.blobSize = blob.size;
                 p.mimeType = blob.type;
-                // [원칙] photoBlobs 저장이 확인된 후에만 metadata에서 거대 Base64 src 제거
-                delete p.src;
+                // [메모리 보존] UI 즉시 렌더링을 위해 실시간 메모리의 p.src는 보존하며,
+                // KV 스냅샷 직렬화 시에만 경량화를 위해 제외됩니다.
               } else {
                 allOk = false;
               }
@@ -7695,9 +7696,21 @@
     }
 
     // 3. 저장 시작 시점의 state를 snapshot으로 확정 (사진 원본 Base64가 제외된 경량 메타데이터)
+    const lightweightSites = (sites || []).map(s => ({
+      ...s,
+      markers: (s.markers || []).map(m => ({
+        ...m,
+        photos: (m.photos || []).map(p => {
+          const pCopy = { ...p };
+          delete pCopy.src;
+          return pCopy;
+        })
+      }))
+    }));
+
     const snapshot = {
       schemaVersion: CURRENT_SCHEMA_VERSION,
-      sites,
+      sites: lightweightSites,
       currentSiteId,
       projects,
       currentProjectId,
@@ -8687,6 +8700,37 @@
     });
   }
 
+  async function pdfToDataUrls(file, maxWidth = 2000){
+    if(typeof pdfjsLib === 'undefined'){
+      throw new Error('PDF 변환 라이브러리(PDF.js)가 로드되지 않았습니다.');
+    }
+    if(!pdfjsLib.GlobalWorkerOptions.workerSrc){
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    const pageCount = pdf.numPages;
+    const results = [];
+
+    for(let pageNum = 1; pageNum <= pageCount; pageNum++){
+      const page = await pdf.getPage(pageNum);
+      const unscaledViewport = page.getViewport({ scale: 1.0 });
+      let scale = 2.0; // 도면 선명도를 위한 2배율 기본값
+      if(maxWidth && unscaledViewport.width * scale > maxWidth){
+        scale = maxWidth / unscaledViewport.width;
+      }
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      const ctx = canvas.getContext('2d');
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+      results.push({ pageNum, dataUrl, totalPages: pageCount });
+    }
+    return results;
+  }
+
   // ---------- 새 시설물 추가 / 시설물 전환 ----------
   // ---------- 시설물 생성 폼 (종류/형식/기본정보) ----------
   const facilityModal = document.getElementById('facilityModal');
@@ -8868,39 +8912,114 @@
   fileInput.addEventListener('change', async (e)=>{
     const file = e.target.files[0];
     if(!file) return;
-    const check = await validateUploadedFile(file, ['image'], 50);
-    if(!check.ok){ alert('불러올 수 없는 이미지입니다.\n' + check.reason); fileInput.value=''; pendingNewDrawing=false; return; }
+    const check = await validateUploadedFile(file, ['image', 'pdf'], 100);
+    if(!check.ok){ alert('불러올 수 없는 도면 파일입니다.\n' + check.reason); fileInput.value=''; pendingNewDrawing=false; return; }
     if(!currentSiteId){
-      // 시설물 없이 바로 이미지 선택한 경우를 대비한 안전장치
+      // 시설물 없이 바로 도면 선택한 경우를 대비한 안전장치
       const site = { id: genId(), name: '시설물 ' + (sites.length + 1), savedAt: new Date().toISOString(), baseImageSrc:null, markers:[], nextNum:1, projectId: currentProjectId };
       sites.push(site);
       currentSiteId = site.id;
       drawings = [];
       currentDrawingId = null;
     }
-    const dataUrl = await fileToDataUrl(file, 1600);
+
+    const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+    let convertedPages = [];
+
+    try{
+      if(isPdf){
+        convertedPages = await pdfToDataUrls(file, 2000);
+        if(!convertedPages || convertedPages.length === 0){
+          alert('PDF에서 도면 이미지를 추출하지 못했습니다.');
+          fileInput.value=''; pendingNewDrawing=false; return;
+        }
+      } else {
+        const dataUrl = await fileToDataUrl(file, 2000);
+        convertedPages = [{ pageNum: 1, dataUrl, totalPages: 1 }];
+      }
+    }catch(err){
+      alert('도면 파일 변환 중 오류가 발생했습니다: ' + (err.message || err));
+      fileInput.value=''; pendingNewDrawing=false; return;
+    }
+
+    const baseNameInput = file.name.replace(/\.[^/.]+$/, '').trim();
 
     if(pendingNewDrawing){
       // 새 도면 추가 — 기존 도면과 그 조사점은 전혀 건드리지 않는다
-      const name = (prompt('새 도면의 이름을 입력하세요 (예: 정면도, 측면도)', '도면 ' + (drawings.length + 1)) || ('도면 ' + (drawings.length + 1))).trim() || ('도면 ' + (drawings.length + 1));
-      const d = { id: genId(), name, type:'', order: drawings.length + 1, imageSrc: dataUrl, description:'', createdAt: new Date().toISOString() };
-      drawings.push(d);
-      currentDrawingId = d.id;
-      baseImageSrc = dataUrl;
+      const defaultName = baseNameInput || ('도면 ' + (drawings.length + 1));
+      const userBaseName = (prompt('새 도면의 이름을 입력하세요 (예: 정면도, 평면도, 1층 도면)', defaultName) || defaultName).trim() || defaultName;
+
+      let firstNewId = null;
+      convertedPages.forEach((page, pIdx) => {
+        const dName = convertedPages.length > 1 ? `${userBaseName} (${page.pageNum}p)` : userBaseName;
+        const d = {
+          id: genId(),
+          name: dName,
+          type: isPdf ? 'PDF 도면' : '',
+          order: drawings.length + 1,
+          imageSrc: page.dataUrl,
+          description: '',
+          createdAt: new Date().toISOString()
+        };
+        drawings.push(d);
+        if(pIdx === 0) firstNewId = d.id;
+      });
+
+      if(firstNewId){
+        currentDrawingId = firstNewId;
+        const activeD = drawings.find(x => x.id === firstNewId);
+        baseImageSrc = activeD ? activeD.imageSrc : convertedPages[0].dataUrl;
+      }
     } else if(currentDrawingId && drawings.length > 0){
       // 현재 도면의 이미지만 교체 — 이 도면 소속 조사점만 지우고, 다른 도면·지도 지점은 그대로 둔다
       const dId = currentDrawingId;
       markers = markers.filter(m => !(m.xPct != null && m.drawingId === dId));
       const d = drawings.find(x => x.id === dId);
-      if(d) d.imageSrc = dataUrl;
-      baseImageSrc = dataUrl;
+      if(d){
+        d.imageSrc = convertedPages[0].dataUrl;
+        if(isPdf) d.type = 'PDF 도면';
+      }
+      baseImageSrc = convertedPages[0].dataUrl;
       if(markers.length === 0) nextNum = 1; // 시설물 전체에 조사점이 하나도 안 남았을 때만 번호를 리셋
+
+      // 만약 PDF가 여러 페이지인 경우, 2페이지 이후는 추가 도면으로 자동 연속 등록
+      if(convertedPages.length > 1){
+        const userBaseName = d ? d.name.replace(/\s*\(\d+p\)$/, '') : (baseNameInput || '도면');
+        for(let pIdx = 1; pIdx < convertedPages.length; pIdx++){
+          const page = convertedPages[pIdx];
+          const extraD = {
+            id: genId(),
+            name: `${userBaseName} (${page.pageNum}p)`,
+            type: 'PDF 도면',
+            order: drawings.length + 1,
+            imageSrc: page.dataUrl,
+            description: '',
+            createdAt: new Date().toISOString()
+          };
+          drawings.push(extraD);
+        }
+      }
     } else {
       // 이 시설물의 첫 도면
-      const d = { id: genId(), name: '도면 1', type:'', order:1, imageSrc: dataUrl, description:'', createdAt: new Date().toISOString() };
-      drawings = [d];
-      currentDrawingId = d.id;
-      baseImageSrc = dataUrl;
+      const defaultName = baseNameInput || '도면 1';
+      let firstNewId = null;
+      convertedPages.forEach((page, pIdx) => {
+        const dName = convertedPages.length > 1 ? `${defaultName} (${page.pageNum}p)` : defaultName;
+        const d = {
+          id: genId(),
+          name: dName,
+          type: isPdf ? 'PDF 도면' : '',
+          order: drawings.length + 1,
+          imageSrc: page.dataUrl,
+          description: '',
+          createdAt: new Date().toISOString()
+        };
+        drawings.push(d);
+        if(pIdx === 0) firstNewId = d.id;
+      });
+
+      currentDrawingId = firstNewId || (drawings[0] && drawings[0].id) || null;
+      baseImageSrc = convertedPages[0].dataUrl;
       markers = [];
       nextNum = 1;
     }
@@ -12618,6 +12737,17 @@
   function openPreview(markerId){
     activeMarkerId = markerId;
     renderPreviewGrid(markerId);
+
+    // [이중 안전 복구] 만약 메모리에 src가 없는 사진이 있다면 photoBlobs로부터 즉시 비동기 로드
+    const m = markers.find(x=>x.id===markerId);
+    if(m && m.photos && m.photos.some(p => !p.src)){
+      hydratePhotoBlobs([m]).then(()=>{
+        if(activeMarkerId === markerId){
+          renderPreviewGrid(markerId);
+        }
+      }).catch(()=>{});
+    }
+
     // Workspace v1.0 섹션26·28: Inspector에서 지점을 선택하면 Main(도면/지도)에서도
     // 해당 마커가 시각적으로 강조되어야 한다. renderMarkers()/renderMapMarkers()는
     // activeMarkerId를 이미 참조하도록 고쳐뒀으니, 다시 그리기만 하면 된다 —
@@ -12646,8 +12776,22 @@
       const top = document.createElement('div');
       top.className = 'photo-card-top';
       const img = document.createElement('img');
-      img.src = p.src;
+      img.src = p.src || '';
       img.alt = '지점 ' + m.num + ' 사진 ' + (idx+1);
+
+      // p.src가 아직 메모리에 없는 경우 즉시 해당 사진 개별 로드
+      if(!p.src && (p.photoRef || p.id)){
+        idbGetPhotoBlob(p.photoRef || p.id).then(rec => {
+          if(rec && rec.blob){
+            blobToDataUrl(rec.blob).then(url => {
+              if(url){
+                p.src = url;
+                img.src = url;
+              }
+            });
+          }
+        }).catch(()=>{});
+      }
       top.appendChild(img);
 
       if(p.quality && p.quality.warnings && p.quality.warnings.length){
