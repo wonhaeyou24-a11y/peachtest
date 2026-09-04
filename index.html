@@ -14850,11 +14850,15 @@
       const apRows = [];
       let apNote = '';
       if(site.facilityType === '절토사면'){
-        const W = 100/4; // 그리드 4열: 구분(그룹)/구분(소분류) 각 1칸(단일행은 2칸 병합) + 외관조사결과 2.5칸 + 원인추정 1.5칸
+        // 4개 그리드 열의 폭 — 반드시 합이 100이어야 한다(전에는 50+62.5+37.5=150로
+        // 잘못 계산해서 한글/워드가 표를 정상 폭으로 못 그리고 글자가 세로로 한 자씩
+        // 찌그러져 나오는 문제가 있었다). 그룹칸+소분류칸(각 8%, 단일행은 16%로 병합)
+        // + 외관조사결과(60%) + 원인추정(24%) = 100%.
+        const GROUP_COL = 8, SUB_COL = 8, RESULT_COL = 60, CAUSE_COL = 24;
         apRows.push(new TableRow({ children: [
-          new TableCell({ columnSpan:2, width:{size:W*2,type:WidthType.PERCENTAGE}, shading:{fill:'D9E2F3'}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:'구분', bold:true, size:16}) ] }) ] }),
-          new TableCell({ width:{size:W*2.5,type:WidthType.PERCENTAGE}, shading:{fill:'D9E2F3'}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:'외관조사 결과', bold:true, size:16}) ] }) ] }),
-          new TableCell({ width:{size:W*1.5,type:WidthType.PERCENTAGE}, shading:{fill:'D9E2F3'}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:'원인추정', bold:true, size:16}) ] }) ] })
+          new TableCell({ columnSpan:2, width:{size:GROUP_COL+SUB_COL,type:WidthType.PERCENTAGE}, shading:{fill:'D9E2F3'}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:'구분', bold:true, size:16}) ] }) ] }),
+          new TableCell({ width:{size:RESULT_COL,type:WidthType.PERCENTAGE}, shading:{fill:'D9E2F3'}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:'외관조사 결과', bold:true, size:16}) ] }) ] }),
+          new TableCell({ width:{size:CAUSE_COL,type:WidthType.PERCENTAGE}, shading:{fill:'D9E2F3'}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:'원인추정', bold:true, size:16}) ] }) ] })
         ]}));
 
         const buckets = SLOPE_APPEARANCE_CATEGORIES.map(()=>[]);
@@ -14864,15 +14868,15 @@
           const items = buckets[i];
           const cells = [];
           if(cat.sub === null){
-            cells.push(new TableCell({ columnSpan:2, width:{size:W*2,type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:cat.group, bold:true, size:15}) ] }) ] }));
+            cells.push(new TableCell({ columnSpan:2, width:{size:GROUP_COL+SUB_COL,type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:cat.group, bold:true, size:15}) ] }) ] }));
           } else {
             if(cat.sub === '보호시설'){
-              cells.push(new TableCell({ rowSpan:3, width:{size:W,type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:cat.group, bold:true, size:14}) ] }) ] }));
+              cells.push(new TableCell({ rowSpan:3, width:{size:GROUP_COL,type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:cat.group, bold:true, size:14}) ] }) ] }));
             }
-            cells.push(new TableCell({ width:{size:W,type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:cat.sub, size:15}) ] }) ] }));
+            cells.push(new TableCell({ width:{size:SUB_COL,type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:cat.sub, size:15}) ] }) ] }));
           }
-          cells.push(new TableCell({ width:{size:W*2.5,type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children: resultParasFor(items) }));
-          cells.push(new TableCell({ width:{size:W*1.5,type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children: causeParasFor(items) }));
+          cells.push(new TableCell({ width:{size:RESULT_COL,type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children: resultParasFor(items) }));
+          cells.push(new TableCell({ width:{size:CAUSE_COL,type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children: causeParasFor(items) }));
           apRows.push(new TableRow({ children: cells }));
         });
         apNote = '※ 「시설물의 안전 및 유지관리 실시 세부지침」 14장 절토사면 양식의 고정된 구분 행입니다. 조사 데이터가 없는 항목은 "-"로 비워 두었으니 필요한 내용을 직접 채워 넣으시면 됩니다. 구분 배정은 부위(구성요소) 입력값을 기준으로 자동 분류한 것이라 대략적일 수 있습니다.';
