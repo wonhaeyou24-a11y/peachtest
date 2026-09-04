@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-shot-v8-durable-capture-fix'; // PeachShot Durable Storage & Camera Capture 안정화 버전
+const CACHE_NAME = 'point-shot-v9-pdf-drawing-offline'; // PeachShot PDF 도면 오프라인 캐시 추가
 // 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
 // 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
 // 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.
@@ -14,7 +14,8 @@ const CORE_ASSETS = [
   './apple-touch-icon.png'
 ];
 
-// 지도(Leaflet)·ZIP 내보내기(JSZip)·보고서(docx)·클라우드 동기화(Supabase)에 필요한 외부 라이브러리.
+// 지도(Leaflet)·ZIP 내보내기(JSZip)·보고서(docx)·클라우드 동기화(Supabase)·
+// PDF 도면 읽기(pdf.js)에 필요한 외부 라이브러리.
 // 오프라인 현장에서도 핵심 조사 기능이 그대로 동작하도록 서비스워커가 미리 저장해 둔다.
 // (핵심 조사 기능은 아니므로, 캐싱에 실패해도 앱 설치 자체는 막지 않는다 — 아래에서 개별 처리)
 const VENDOR_ASSETS = [
@@ -22,7 +23,9 @@ const VENDOR_ASSETS = [
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
   'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
   'https://unpkg.com/docx@8.0.4/build/index.js',
-  'https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js'
+  'https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
 ];
 
 self.addEventListener('install', (event) => {
