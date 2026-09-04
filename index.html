@@ -7829,6 +7829,10 @@
     if(totalOk){
       maybeTakeSnapshot();
       queueCloudSync();
+      if(currentSiteId){
+        const liveSite = currentSiteObj();
+        if(liveSite && liveSite.id === currentSiteId) queueEntitySyncForFacility(liveSite);
+      }
     }
     return totalOk;
   }
@@ -7916,6 +7920,38 @@
     });
   }
 
+  // 시설물 + 그 안의 마커·기존손상을 전부 동기화 큐에 올린다(3-배선). 예전엔
+  // saveState()가 project 행 1개만 큐에 넣어서, 팀원이 같은 시설물을 나눠 조사해도
+  // 마커·기존손상은 "클라우드 동기화" 수동 버튼(시설물 통짜 덮어쓰기)으로만 올라갔다.
+  // 이제 저장할 때마다 자동으로 개별 마커·기존손상 단위로 큐잉된다 —
+  // pullCloudChanges(아래, 4번 안전화와 짝)가 이걸 ID 기준으로 합쳐서 병합한다.
+  // 도면(drawings)은 아직 포함하지 않는다 — 이미지가 커서 큐 항목으로 담기엔
+  // 부담이 크다. 도면은 기존처럼 수동 버튼으로만 올린다.
+  function queueEntitySyncForFacility(site){
+    if(!site || !site.id) return;
+    const items = [{
+      entityType: 'facility', entityId: site.id, projectId: site.projectId, facilityId: site.id,
+      revision: (typeof site.revision === 'number' ? site.revision : 1),
+      payload: { id: site.id }
+    }];
+    (site.markers || []).forEach(m=>{
+      items.push({
+        entityType: 'inspection_point', entityId: m.id, projectId: site.projectId, facilityId: site.id,
+        revision: (typeof m.revision === 'number' ? m.revision : 1),
+        payload: { id: m.id }
+      });
+    });
+    // isDeleted 항목도 포함 — 팀원의 소프트삭제 상태 자체가 동기화돼야 하는 데이터다.
+    (site.existingDamages || []).forEach(ed=>{
+      items.push({
+        entityType: 'existing_damage', entityId: ed.id, projectId: site.projectId, facilityId: site.id,
+        revision: (typeof ed.revision === 'number' ? ed.revision : 1),
+        payload: { id: ed.id }
+      });
+    });
+    enqueueEntitySyncBatch(items).catch(()=>{});
+  }
+
   async function loadSyncQueue(){
     return await loadEntitySyncQueue();
   }
@@ -7981,10 +8017,12 @@
   }
 
   // 표준화된 Sync Queue 항목 인큐 (Queue Compression & Soft Delete)
-  async function enqueueEntitySync({ entityType, entityId, operation, projectId, facilityId, revision, payload }){
-    if(!entityType || !entityId) return;
-    const queue = await loadEntitySyncQueue();
-    const now = new Date().toISOString();
+  // 큐 압축 로직 본체(순수 함수, I/O 없음) — enqueueEntitySync(1건)와
+  // enqueueEntitySyncBatch(여러 건, 아래)가 공유한다. 여러 건을 한 번에 넣을 때
+  // 매번 큐를 통째로 읽고 쓰면(IndexedDB round-trip) 마커가 많은 시설물에서
+  // 저장할 때마다 느려지므로, 배치 경로는 큐를 한 번만 읽고/쓴다.
+  function mergeEntityIntoQueue(queue, { entityType, entityId, operation, projectId, facilityId, revision, payload }, now){
+    if(!entityType || !entityId) return null;
     const op = operation === 'delete' ? 'delete' : 'upsert';
     const normType = String(entityType).toLowerCase();
     const targetProjId = projectId || currentProjectId || null;
@@ -8022,8 +8060,37 @@
         status: 'pending'
       });
     }
+    return normType;
+  }
+
+  async function enqueueEntitySync({ entityType, entityId, operation, projectId, facilityId, revision, payload }){
+    if(!entityType || !entityId) return;
+    const queue = await loadEntitySyncQueue();
+    const now = new Date().toISOString();
+    const normType = mergeEntityIntoQueue(queue, { entityType, entityId, operation, projectId, facilityId, revision, payload }, now);
+    if(!normType) return;
     await saveEntitySyncQueue(queue);
-    console.log(`[Sync] enqueue: ${normType} (${entityId}) op=${op} rev=${rev}`);
+    console.log(`[Sync] enqueue: ${normType} (${entityId}) op=${operation === 'delete' ? 'delete' : 'upsert'}`);
+
+    if(navigator.onLine && supabaseClient && supabaseSession && !syncProcessing){
+      processSyncQueue().catch(()=>{});
+    }
+  }
+
+  // 여러 엔티티를 한 번의 큐 읽기/쓰기로 인큐 — 시설물 저장할 때마다 그 시설물의
+  // 마커·기존손상을 전부 개별 enqueueEntitySync로 넣으면 N번의 IndexedDB
+  // round-trip이 생겨 저장이 느려진다. 이 함수는 항목이 몇 개든 읽기 1번+쓰기 1번.
+  async function enqueueEntitySyncBatch(items){
+    if(!items || items.length === 0) return;
+    const queue = await loadEntitySyncQueue();
+    const now = new Date().toISOString();
+    let count = 0;
+    items.forEach(item=>{
+      if(mergeEntityIntoQueue(queue, item, now)) count++;
+    });
+    if(count === 0) return;
+    await saveEntitySyncQueue(queue);
+    console.log(`[Sync] batch enqueue: ${count}건`);
 
     if(navigator.onLine && supabaseClient && supabaseSession && !syncProcessing){
       processSyncQueue().catch(()=>{});
@@ -8513,6 +8580,13 @@
       let mergedCount = 0;
 
       // 1. Facilities Pull
+      // 예전엔 원격 시설물 blob(rf.data)으로 로컬 시설물을 통째로 덮어써서, 그
+      // 시설물 자체는 아직 개별 동기화가 안 됐지만 markers/existingDamages 배열
+      // 안에는 있던 로컬 전용 항목(팀원이 방금 막 추가한 지점 등)이 통째로
+      // 사라질 수 있었다(3-배선/4). 이제 시설물의 메타데이터(이름·종류·형식 등)만
+      // 병합하고, 배열 필드는 로컬 값을 그대로 유지 — 마커·기존손상은 아래 2·3단계가
+      // ID 기준으로 개별 병합한다(팀원 A·B가 각자 추가한 지점이 합집합으로 합쳐짐).
+      const FACILITY_ARRAY_FIELDS = ['markers', 'existingDamages', 'drawings'];
       const { data: remoteFacs, error: facErr } = await supabaseClient.from('ps_facilities').select('*').eq('project_id', targetProjId);
       if(!facErr && Array.isArray(remoteFacs)){
         remoteFacs.forEach(rf => {
@@ -8522,16 +8596,19 @@
           }
           const idx = sites.findIndex(s => s.id === rf.id);
           if(idx >= 0 && rf.data){
-            sites[idx] = Object.assign({}, sites[idx], rf.data);
+            const merged = Object.assign({}, sites[idx], rf.data);
+            FACILITY_ARRAY_FIELDS.forEach(f => { merged[f] = sites[idx][f]; }); // 로컬 배열 유지
+            sites[idx] = merged;
             mergedCount++;
           } else if(rf.data){
+            // 로컬에 아예 없던 시설물(팀원이 새로 만든 것) — 통째로 받는다. 소실 위험 없음.
             sites.push(rf.data);
             mergedCount++;
           }
         });
       }
 
-      // 2. Inspection Points Pull
+      // 2. Inspection Points Pull (마커 — ID 기준 합집합)
       try{
         const { data: remotePts } = await supabaseClient.from('ps_inspection_points').select('*').eq('project_id', targetProjId);
         if(Array.isArray(remotePts)){
@@ -8553,10 +8630,33 @@
         }
       }catch(e){}
 
+      // 3. Existing Damages Pull (기존손상 — ID 기준 합집합, 소프트삭제 상태도 그대로 반영)
+      try{
+        const { data: remoteEds } = await supabaseClient.from('ps_existing_damages').select('*').eq('project_id', targetProjId);
+        if(Array.isArray(remoteEds)){
+          remoteEds.forEach(re => {
+            if(pendingKeys.has(`existing_damage:${re.id}`)) return;
+            const site = sites.find(s => s.id === re.facility_id);
+            if(site){
+              if(!site.existingDamages) site.existingDamages = [];
+              const eIdx = site.existingDamages.findIndex(ed => ed.id === re.id);
+              const edData = re.data || { id: re.id };
+              if(eIdx >= 0){
+                site.existingDamages[eIdx] = Object.assign({}, site.existingDamages[eIdx], edData);
+              } else {
+                site.existingDamages.push(edData);
+              }
+              mergedCount++;
+            }
+          });
+        }
+      }catch(e){}
+
       if(mergedCount > 0){
         await storageSet(STORAGE_KEY, { schemaVersion: CURRENT_SCHEMA_VERSION, sites, currentSiteId, projects, currentProjectId, deletedSites });
         refreshStageHeader();
         renderMarkers();
+        if(typeof renderExistingDamages === 'function'){ try{ renderExistingDamages(); }catch(e){} }
       }
 
       await setSyncCursor(targetProjId, new Date().toISOString());
