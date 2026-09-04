@@ -7341,7 +7341,23 @@
     return null;
   }
 
-  function getMeasurementFields(damageType){
+  // 손상마스터(부위-손상명별로 손상관리자가 지정한 "규모세팅")가 있으면 그걸 그대로
+  // 쓰고, 없으면(기존 시설물·기존 데이터와의 하위호환) 기존 키워드 매칭 하드코딩
+  // 템플릿(MEASUREMENT_TEMPLATES)으로 대체한다. site를 안 넘기면(기존 호출부 대부분)
+  // currentSiteObj()로 대체 — 이 함수를 부르는 곳이 전부 "현재 화면에 열려 있는
+  // 시설물" 맥락이었기 때문에 동작은 그대로다. 프로젝트 전체 보고서처럼 다른
+  // 시설물 데이터를 다룰 때는 호출부에서 site를 명시적으로 넘긴다.
+  function getMeasurementFields(damageType, site){
+    site = site || (typeof currentSiteObj === 'function' ? currentSiteObj() : null);
+    if(site && site.facilityType && site.facilityForm && damageType){
+      const stdList = resolveDamageStandard(site.facilityType, site.facilityForm);
+      if(stdList && stdList.length){
+        const entry = stdList.find(x => x.damageType === damageType);
+        if(entry && Array.isArray(entry.measurementFields) && entry.measurementFields.length){
+          return entry.measurementFields;
+        }
+      }
+    }
     if(damageType){
       for(const key of ['crack','spall','displacement','seepage','erosion']){
         const tpl = MEASUREMENT_TEMPLATES[key];
@@ -7349,6 +7365,23 @@
       }
     }
     return MEASUREMENT_TEMPLATES.general.fields;
+  }
+
+  // 손상마스터 규모세팅 UI/Excel 입출력용: "라벨:단위1/단위2, 라벨2:단위" 문자열 ↔
+  // getMeasurementFields()가 그대로 쓸 수 있는 {type,label,defaultUnit,units} 배열.
+  function parseDmMeasurementFieldsText(text){
+    if(!text) return [];
+    return String(text).split(',').map(s=>s.trim()).filter(Boolean).map(entry=>{
+      const idx = entry.indexOf(':');
+      const label = (idx >= 0 ? entry.slice(0, idx) : entry).trim();
+      if(!label) return null;
+      const unitsRaw = (idx >= 0 ? entry.slice(idx+1) : '').split('/').map(u=>u.trim()).filter(Boolean);
+      const units = unitsRaw.length ? unitsRaw : ['개소'];
+      return { type: 'dm:' + label, label, defaultUnit: units[0], units };
+    }).filter(Boolean);
+  }
+  function formatDmMeasurementFieldsText(fields){
+    return (fields || []).map(f => f.label + (f.units && f.units.length ? ':' + f.units.join('/') : '')).join(', ');
   }
 
   // measurementItems(구조화된 값)가 있으면 그걸로 legacy 자유텍스트(d.measurement)를
@@ -7396,10 +7429,10 @@
 
   // 자유텍스트 규모 문자열에서 damageType이 쓰는 항목들(type별로)의 {value, unit}을 뽑는다.
   // 매칭 못 찾은 항목은 결과에 없다(억지로 0 등을 채우지 않는다).
-  function parseMeasurementText(text, damageType){
+  function parseMeasurementText(text, damageType, site){
     const out = {};
     if(!text) return out;
-    const fields = getMeasurementFields(damageType);
+    const fields = getMeasurementFields(damageType, site);
     fields.forEach(fd=>{
       const aliases = (MEASUREMENT_TYPE_ALIASES[fd.type] || []).concat([fd.label]);
       for(const alias of aliases){
@@ -7418,8 +7451,8 @@
   // 기존손상 자유텍스트 규모 vs 현재 조사의 measurementItems(구조화된 값)를 항목별로 비교.
   // 반환: [{ type, label, oldValue, newValue, unit, delta, percent }] — oldValue가 없으면
   // (기존 텍스트에서 그 항목을 못 찾았으면) delta/percent는 null(=신규 측정값으로만 표시).
-  function compareMeasurementsDetailed(oldStr, newItems, damageType){
-    const oldParsed = parseMeasurementText(oldStr, damageType);
+  function compareMeasurementsDetailed(oldStr, newItems, damageType, site){
+    const oldParsed = parseMeasurementText(oldStr, damageType, site);
     const results = [];
     (newItems || []).forEach(item=>{
       if(item.value === '' || item.value == null) return;
@@ -7494,7 +7527,7 @@
           // measurementItems(구조화된 값)가 있으면 항목별(길이/균열폭/깊이 등) 비교를 우선한다 —
           // "L=2.0m, CW=0.5mm"처럼 값이 섞인 규모를 첫 숫자만 보고 비교하던 것보다 정확하다.
           const detailedCmp = (d.measurementItems && d.measurementItems.length)
-            ? compareMeasurementsDetailed(ed.measurement, d.measurementItems, d.damageType || ed.damageName)
+            ? compareMeasurementsDetailed(ed.measurement, d.measurementItems, d.damageType || ed.damageName, site)
             : [];
           const detailedText = formatMeasurementDetail(detailedCmp);
           const auto = detailedCmp.length > 0
@@ -13562,7 +13595,7 @@
           measWrap.appendChild(measLab);
 
           if(!d.measurementItems) d.measurementItems = [];
-          const measFieldDefs = getMeasurementFields(d.damageType);
+          const measFieldDefs = getMeasurementFields(d.damageType, site);
           measFieldDefs.forEach(fd=>{
             let item = d.measurementItems.find(mi => mi.type === fd.type);
             if(!item){
@@ -15347,6 +15380,7 @@
   const DM_EXCEL_COLUMNS = [
     { key:'component', label:'부위' },
     { key:'damageType', label:'손상명' },
+    { key:'measurementFields', label:'규모세팅', measurementFields:true },
     { key:'cause', label:'손상원인' },
     { key:'repairOptions', label:'보수방안', array:true },
     { key:'reinforcementOptions', label:'보강방안', array:true },
@@ -15359,7 +15393,8 @@
     return (items || []).map(it=>{
       const r = {};
       DM_EXCEL_COLUMNS.forEach(c=>{
-        if(c.array) r[c.label] = (Array.isArray(it[c.key]) ? it[c.key] : []).join(', ');
+        if(c.measurementFields) r[c.label] = formatDmMeasurementFieldsText(it[c.key]);
+        else if(c.array) r[c.label] = (Array.isArray(it[c.key]) ? it[c.key] : []).join(', ');
         else if(c.key === 'enabled') r[c.label] = (it.enabled === false) ? 'N' : 'Y';
         else r[c.label] = it[c.key] != null ? it[c.key] : '';
       });
@@ -15375,6 +15410,7 @@
     return {
       component: comp,
       damageType: dt,
+      measurementFields: parseDmMeasurementFieldsText(row['규모세팅']),
       cause: String(row['손상원인'] || '').trim(),
       repairOptions: arr(row['보수방안']),
       reinforcementOptions: arr(row['보강방안']),
@@ -15833,7 +15869,8 @@
       const enabledOpacity = item.enabled === false ? '0.5' : '1';
       const causeStr = item.cause || '';
       const repairStr = (item.repairOptions || []).join(', ');
-      
+      const measFieldsStr = formatDmMeasurementFieldsText(item.measurementFields);
+
       card.innerHTML = `
         <div style="display:flex; justify-content:space-between; margin-bottom:10px; opacity:${enabledOpacity}">
           <input type="text" value="${escapeHtml(item.damageType || '')}" onchange="updateDmItem(${index}, 'damageType', this.value)" style="font-size:15px; font-weight:bold; background:transparent; color:var(--text); border:none; border-bottom:1px solid var(--amber);" placeholder="손상명 입력">
@@ -15850,6 +15887,10 @@
           <div>
             <label style="font-size:11px; color:var(--muted);">손상원인</label>
             <input type="text" value="${escapeHtml(causeStr)}" onchange="updateDmItem(${index}, 'cause', this.value)" style="width:100%; background:var(--panel); border:1px solid var(--line); color:var(--text); padding:4px; border-radius:3px;">
+          </div>
+          <div style="grid-column: span 2;">
+            <label style="font-size:11px; color:var(--muted);">규모세팅 (라벨:단위, 라벨:단위1/단위2 — 예: 길이:m, 균열폭:mm)</label>
+            <input type="text" value="${escapeHtml(measFieldsStr)}" onchange="updateDmItemMeasurementFields(${index}, this.value)" style="width:100%; background:var(--panel); border:1px solid var(--line); color:var(--text); padding:4px; border-radius:3px;" placeholder="비워두면 손상명으로 자동 추정">
           </div>
           <div style="grid-column: span 2;">
             <label style="font-size:11px; color:var(--muted);">보수방안 (쉼표로 구분)</label>
@@ -15872,6 +15913,11 @@
     dmCurrentData[index][key] = value.split(',').map(s => s.trim()).filter(s => s);
     markDmDirty();
   };
+
+  window.updateDmItemMeasurementFields = function(index, value) {
+    dmCurrentData[index].measurementFields = parseDmMeasurementFieldsText(value);
+    markDmDirty();
+  };
   
   function markDmDirty() {
     dmIsDirty = true;
@@ -15885,6 +15931,7 @@
       component: existingParts.length ? existingParts[0].name : '전면부',
       cause: '',
       repairOptions: [],
+      measurementFields: [],
       enabled: true
     });
     markDmDirty();
