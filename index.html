@@ -2104,7 +2104,8 @@
       <button class="danger" id="btnRemoveAllPhotos">사진 전체 삭제</button>
       <button class="ghost" id="btnMoveMarker">위치 이동</button>
       <button class="ghost" id="btnDownloadAllPhotos">원본 전체 다운로드</button>
-      <button class="primary" id="btnAddMorePhotos">사진 추가 촬영</button>
+      <button class="ghost" id="btnAddMorePhotos">사진 추가 촬영</button>
+      <button class="primary" id="btnSaveClosePreview">✓ 저장하고 닫기</button>
     </div>
   </div>
 </div>
@@ -10070,9 +10071,35 @@
     await importProjectBackupZip(file);
   });
 
-  btnMore.addEventListener('click', ()=>{ updateCompleteMenuLabel(); applyManageGroupDefaultState(); moreModal.style.display = 'flex'; });
-  closeMoreModal.addEventListener('click', ()=>{ moreModal.style.display = 'none'; });
-  moreModal.addEventListener('click', (e)=>{ if(e.target === moreModal) moreModal.style.display = 'none'; });
+  // ---- 더보기 → 하위 기능창 → 닫기 시 더보기창으로 복귀 ----
+  // 더보기의 각 버튼은 moreModal을 숨기고 자기 기능창을 연다(호출부가 ~25곳이라
+  // 하나하나 안 고치고 옵저버로 공통 처리). 사용자가 X/배경으로 더보기를 "직접"
+  // 닫은 경우엔 복귀하지 않는다.
+  let moreReturnArmed = false;
+  function isBackdropOpen(el){ return el && (el.style.display === 'flex' || el.style.display === 'block'); }
+  const moreDisplayObs = new MutationObserver(()=>{
+    if(isBackdropOpen(moreModal)) return;
+    if(moreModal.dataset.explicitClose === '1'){ moreModal.dataset.explicitClose = ''; return; }
+    // 더보기가 (기능창을 열기 위해) 숨겨졌다 — 그 기능창이 닫히면 복귀하도록 표시
+    moreReturnArmed = true;
+  });
+  moreDisplayObs.observe(moreModal, { attributes:true, attributeFilter:['style'] });
+  const backdropCloseObs = new MutationObserver(()=>{
+    if(!moreReturnArmed || isBackdropOpen(moreModal)) return;
+    const anyOtherOpen = Array.from(document.querySelectorAll('.modal-backdrop'))
+      .some(el => el !== moreModal && isBackdropOpen(el));
+    if(!anyOtherOpen){
+      moreReturnArmed = false;
+      moreModal.style.display = 'flex';
+    }
+  });
+  document.querySelectorAll('.modal-backdrop').forEach(el=>{
+    if(el !== moreModal) backdropCloseObs.observe(el, { attributes:true, attributeFilter:['style'] });
+  });
+
+  btnMore.addEventListener('click', ()=>{ moreReturnArmed = false; updateCompleteMenuLabel(); applyManageGroupDefaultState(); moreModal.style.display = 'flex'; });
+  closeMoreModal.addEventListener('click', ()=>{ moreReturnArmed = false; moreModal.dataset.explicitClose = '1'; moreModal.style.display = 'none'; });
+  moreModal.addEventListener('click', (e)=>{ if(e.target === moreModal){ moreReturnArmed = false; moreModal.dataset.explicitClose = '1'; moreModal.style.display = 'none'; } });
 
   // ---------- 백업 내보내기 / 불러오기 (파일, 다른 기기로 이동 시에도 사용 가능) ----------
   function pad2(n){ return String(n).padStart(2,'0'); }
@@ -13236,7 +13263,7 @@
           // 부위가 결정되면 그 부위에 등록된 손상명만 보여준다(부위→손상명 순서, 손상이 부위를
           // 만들지 않는다 — 명령문 9번). 부위 목록이 없는 경우(기준DB 미연결)는 종전과 동일하게 전체 표시.
           const partFilteredTypes = (usingStandard && d.component)
-            ? typeOptions.filter(t => t === '기타' || customDamageTypes.includes(t) || (stdList.find(x=>x.damageType===t)||{}).component === d.component)
+            ? typeOptions.filter(t => t === '기타' || customDamageTypes.includes(t) || stdList.some(x => x.damageType === t && x.component === d.component))
             : typeOptions;
           // 비활성화된 손상명은 신규 선택지에서 숨기되, 이미 이 기록에 선택되어 있다면 계속 보여준다.
           const visibleTypes = partFilteredTypes.filter(t => !disabledTypes.has(t) || d.damageType === t);
@@ -13250,11 +13277,21 @@
           function selectDamageType(newType){
             d.damageType = newType;
             recordDamageTypeUsage(newType);
-            const entry = usingStandard ? stdList.find(x=>x.damageType===newType) : null;
+            // 같은 손상명이 여러 부위에 있을 수 있으므로, 현재 선택된 부위와 일치하는 항목을 우선.
+            const entry = usingStandard
+              ? (stdList.find(x => x.damageType === newType && x.component === d.component) || stdList.find(x => x.damageType === newType))
+              : null;
             if(entry){
               if(!d.component) d.component = entry.component || '';
-              // 원인(cause)과 조사항목은 자동으로 채우지 않는다 — 아래에 "지침 추천 원인" 칩과
-              // "지침 조사항목" 참고문구로 각각 따로 보여주고, 조사자가 직접 선택/입력한다.
+              // 손상마스터에 등록된 값(원인·보수·보강)을 비어있을 때만 자동으로 채운다 —
+              // 현장에서 타자 없이 바로 조사하고, 특별한 경우만 칩/직접입력으로 수정한다.
+              if(!d.cause && entry.cause) d.cause = entry.cause;
+              if(!d.repairMethod && Array.isArray(entry.repairOptions) && entry.repairOptions.length){
+                d.repairMethod = entry.repairOptions.join(', ');
+              }
+              if(!d.reinforcementMethod && Array.isArray(entry.reinforcementOptions) && entry.reinforcementOptions.length){
+                d.reinforcementMethod = entry.reinforcementOptions.join(', ');
+              }
               if(!d.standardReference) d.standardReference = '2026년 개정 「시설물의 안전 및 유지관리 실시 세부지침」해설서(' + (site.facilityType) + '편) ' + (entry.sourcePage||'');
             }
             renderDamageRecords();
@@ -13599,11 +13636,22 @@
     a.remove();
   }
 
-  closePreview.addEventListener('click', ()=>{
+  function closePreviewModal(){
     if(inspectorInlineSlot && inspectorInlineSlot.style.display !== 'none'){ undockPreviewInline(); }
     previewModal.style.display = 'none';
+  }
+  closePreview.addEventListener('click', closePreviewModal);
+  previewModal.addEventListener('click', (e)=>{ if(e.target === previewModal) closePreviewModal(); });
+
+  // 손상 입력값은 바꿀 때마다 자동 저장되지만, 조사자가 "다 넣었다"를 확실히
+  // 확정하고 닫을 수 있도록 명시적 저장 버튼을 둔다.
+  const btnSaveClosePreview = document.getElementById('btnSaveClosePreview');
+  if(btnSaveClosePreview) btnSaveClosePreview.addEventListener('click', async ()=>{
+    btnSaveClosePreview.disabled = true;
+    try{ await saveState(); }catch(e){}
+    btnSaveClosePreview.disabled = false;
+    closePreviewModal();
   });
-  previewModal.addEventListener('click', (e)=>{ if(e.target === previewModal) previewModal.style.display = 'none'; });
 
   btnAddMorePhotos.addEventListener('click', ()=>{
     previewModal.style.display = 'none';
