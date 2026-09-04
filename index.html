@@ -15407,9 +15407,57 @@
     }
   });
 
+  // 새 버전 안내 배너 — 순수 JS로만 만들어서(HTML 템플릿을 안 건드림) 최소 변경 유지.
+  // 왜 필요한가: service-worker.js는 CACHE_NAME이 바뀌어야만 새 버전으로 인식되고
+  // install/activate가 실행되는데(파일 상단 주석 참고), 그렇게 새 버전이 조용히
+  // 설치되어도 "이미 열려 있는 화면"은 여전히 예전 JS로 실행 중이라 사용자가 직접
+  // 새로고침(또는 앱 완전히 종료 후 재실행)하기 전까지는 수정사항이 하나도 반영되지
+  // 않는다 — 특히 오프라인 상태에서는 이 예전 JS가 그대로 계속 쓰이게 된다. 이 배너가
+  // 없으면 사용자 입장에서는 "고쳤다고 했는데 여전히 그대로다"로 보일 수밖에 없다.
+  function showSwUpdateBanner(reg){
+    if(document.getElementById('swUpdateBanner')) return;
+    const bar = document.createElement('div');
+    bar.id = 'swUpdateBanner';
+    bar.style.cssText = 'position:fixed; left:0; right:0; bottom:0; z-index:99999; background:var(--amber,#f0ad4e); color:#1a1206; padding:10px 14px; display:flex; gap:10px; align-items:center; justify-content:center; flex-wrap:wrap; font-size:13px; box-shadow:0 -2px 8px rgba(0,0,0,.25);';
+    const span = document.createElement('span');
+    span.textContent = '⟳ 새 버전이 준비됐습니다(저장 안정성 개선 포함). 지금 조사 중인 내용은 자동 저장된 뒤 반영됩니다.';
+    const refreshBtn = document.createElement('button');
+    refreshBtn.type = 'button';
+    refreshBtn.textContent = '지금 새로고침';
+    refreshBtn.style.cssText = 'padding:6px 12px; border-radius:4px; border:none; background:#1a1206; color:#fff; cursor:pointer; font-weight:600;';
+    refreshBtn.addEventListener('click', async ()=>{
+      try{ await saveState(); }catch(e){}
+      location.reload();
+    });
+    const laterBtn = document.createElement('button');
+    laterBtn.type = 'button';
+    laterBtn.textContent = '나중에';
+    laterBtn.style.cssText = 'padding:6px 12px; border-radius:4px; border:1px solid #1a1206; background:transparent; color:#1a1206; cursor:pointer;';
+    laterBtn.addEventListener('click', ()=> bar.remove());
+    bar.appendChild(span); bar.appendChild(refreshBtn); bar.appendChild(laterBtn);
+    document.body.appendChild(bar);
+  }
+
   if('serviceWorker' in navigator){
     window.addEventListener('load', ()=>{
-      navigator.serviceWorker.register('./service-worker.js').catch(()=>{});
+      navigator.serviceWorker.register('./service-worker.js').then(reg=>{
+        if(!reg) return;
+        if(reg.waiting && navigator.serviceWorker.controller){
+          showSwUpdateBanner(reg);
+        }
+        reg.addEventListener('updatefound', ()=>{
+          const nw = reg.installing;
+          if(!nw) return;
+          nw.addEventListener('statechange', ()=>{
+            // controller가 이미 있다는 건 이번이 첫 설치가 아니라 "업데이트"라는 뜻.
+            // (service-worker.js가 install에서 이미 skipWaiting()을 무조건 호출하므로
+            // installed 상태가 되면 곧바로 activate까지 자동으로 이어진다.)
+            if(nw.state === 'installed' && navigator.serviceWorker.controller){
+              showSwUpdateBanner(reg);
+            }
+          });
+        });
+      }).catch(()=>{});
     });
   }
   // ==========================================
