@@ -4505,6 +4505,17 @@
         p.id = photoId;
         p.photoRef = photoId;
 
+        // 이미 이번 세션에서 blob으로 뽑아 저장한 사진은 다시 건드리지 않는다.
+        // p.src는 화면 즉시 렌더링을 위해 메모리에 계속 남아있으므로(위 주석 참고),
+        // 이 플래그가 없으면 저장할 때마다 이미 저장된 사진까지 전부 다시
+        // base64→Blob 변환 + IndexedDB 쓰기를 반복하게 된다. 방문한 시설물·사진이
+        // 쌓일수록(현장에서 여러 시설물을 옮겨다니며 조사할수록) saveState() 한 번의
+        // 비용이 계속 커져서 저장이 점점 느려지고, 앱을 끄거나 백그라운드로 보낼 때
+        // 저장이 채 안 끝난 상태로 종료되어 방금 조사한 내용이 사라질 위험이 커진다.
+        // (사진 내용이 실제로 바뀌는 유일한 경로 — 사진 주석 저장/되돌리기, 클라우드
+        // 다운로드 — 는 그 자리에서 이 플래그를 직접 지워 다시 추출되게 한다.)
+        if(p.blobExtracted && p.src && typeof p.src === 'string' && p.src.startsWith('data:')) continue;
+
         // Base64 src가 존재하면 photoBlobs 전용 스토어에 순수 Blob 형태로 영구 저장
         if(p.src && typeof p.src === 'string' && p.src.startsWith('data:')){
           try{
@@ -4514,6 +4525,7 @@
               if(ok){
                 p.blobSize = blob.size;
                 p.mimeType = blob.type;
+                p.blobExtracted = true;
                 // [메모리 보존] UI 즉시 렌더링을 위해 실시간 메모리의 p.src는 보존하며,
                 // KV 스냅샷 직렬화 시에만 경량화를 위해 제외됩니다.
               } else {
@@ -5673,6 +5685,7 @@
               if(!error && data){
                 p.src = await blobToDataUrl(data);
                 delete p.pendingCloudDownload;
+                delete p.blobExtracted; // 이 기기에는 처음 들어온 내용 — 다음 저장 때 로컬 blob 스토어에도 반드시 써야 함
               }
             }catch(e){ console.warn('사진 다운로드 실패', e); }
           }
@@ -8634,6 +8647,31 @@
   }
 
   // Pull Engine: 클라우드 변경분 조회 및 로컬 보호 병합
+  // 원격 photos 배열을 로컬 photos 배열에 ID 기준으로 안전하게 합친다 — 마커/기존손상
+  // pull이 공유. 통째로 덮어쓰면(이전 방식) 이 기기에서만 찍은 사진이 클라우드의
+  // 예전 버전으로 되돌아가며 사라질 수 있었다(시설물 pull에서 이미 같은 문제를
+  // FACILITY_ARRAY_FIELDS로 고친 것과 동일한 원칙을 photos 배열 안쪽까지 적용).
+  function mergePhotosUnion(localPhotos, remotePhotos){
+    const local = localPhotos || [];
+    const remote = remotePhotos || [];
+    if(!remote.length) return local;
+    const photoMap = new Map(local.map(ph => [ph.id || ph.photoRef, ph]));
+    remote.forEach(ph=>{
+      const key = ph && (ph.id || ph.photoRef);
+      const exPh = key != null ? photoMap.get(key) : undefined;
+      if(!exPh){
+        local.push(ph);
+        if(key != null) photoMap.set(key, ph);
+      } else {
+        // 이미 로컬에 있는 사진은 원격 값으로 덮지 않고, 로컬에 비어있는 항목만 보강한다.
+        if(ph.note && !exPh.note) exPh.note = ph.note;
+        if(ph.damages && (!exPh.damages || exPh.damages.length < ph.damages.length)) exPh.damages = ph.damages;
+        if(!exPh.photoRef && ph.photoRef) exPh.photoRef = ph.photoRef;
+      }
+    });
+    return local;
+  }
+
   async function pullCloudChanges(projectId){
     if(!supabaseClient || !supabaseSession || !navigator.onLine) return { ok: false, reason: 'Offline' };
     const targetProjId = projectId || currentProjectId;
@@ -8687,7 +8725,16 @@
               const mIdx = site.markers.findIndex(m => m.id === rp.id);
               const markerData = rp.data || { id: rp.id, num: rp.num, xPct: rp.x, yPct: rp.y };
               if(mIdx >= 0){
-                site.markers[mIdx] = Object.assign({}, site.markers[mIdx], markerData);
+                const localMarker = site.markers[mIdx];
+                const merged = Object.assign({}, localMarker, markerData);
+                // photos는 로컬·원격에서 각자 찍은 사진이 있을 수 있으므로 통째로
+                // 덮지 않고 합친다 — 그대로 두면 오프라인에서 막 찍은 사진이 이
+                // pull 한 번으로 사라질 수 있었다.
+                merged.photos = mergePhotosUnion(localMarker.photos, markerData.photos);
+                if(localMarker.locationHistory && localMarker.locationHistory.length >= (markerData.locationHistory || []).length){
+                  merged.locationHistory = localMarker.locationHistory;
+                }
+                site.markers[mIdx] = merged;
               } else {
                 site.markers.push(markerData);
               }
@@ -8709,7 +8756,10 @@
               const eIdx = site.existingDamages.findIndex(ed => ed.id === re.id);
               const edData = re.data || { id: re.id };
               if(eIdx >= 0){
-                site.existingDamages[eIdx] = Object.assign({}, site.existingDamages[eIdx], edData);
+                const localEd = site.existingDamages[eIdx];
+                const merged = Object.assign({}, localEd, edData);
+                merged.photos = mergePhotosUnion(localEd.photos, edData.photos);
+                site.existingDamages[eIdx] = merged;
               } else {
                 site.existingDamages.push(edData);
               }
@@ -14101,6 +14151,7 @@
     if(p && p.original){
       p.src = p.original;
       delete p.original;
+      delete p.blobExtracted; // 사진 내용이 바뀌었으므로 다음 저장 때 blob을 다시 추출해야 함
       renderPreviewGrid(annoMarkerId);
       renderLog();
       saveState();
@@ -14116,6 +14167,7 @@
     const dataUrl = annoCanvas.toDataURL('image/jpeg', 0.9);
     if(!p.original) p.original = p.src;
     p.src = dataUrl;
+    delete p.blobExtracted; // 사진 내용이 바뀌었으므로 다음 저장 때 blob을 다시 추출해야 함
     annotateModal.style.display = 'none';
     renderPreviewGrid(annoMarkerId);
     renderLog();
