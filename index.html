@@ -2340,6 +2340,10 @@
             <span class="more-item-title">외관조사 보고서 (양식)</span>
             <span class="more-item-desc">외관조사 결과표 → 조사위치도 → 지점별 사진(현황·원인·대책) 양식</span>
           </button>
+          <button class="more-item" id="btnAppearanceReportProject">
+            <span class="more-item-title">프로젝트 전체 외관조사 보고서</span>
+            <span class="more-item-desc">이 프로젝트의 모든 시설물을 같은 양식으로 반복해 한 Word 파일로 묶음</span>
+          </button>
           <button class="more-item" id="btnSaveWork">
             <span class="more-item-title">백업 내보내기</span>
             <span class="more-item-desc">현재 시설물을 파일 하나로 저장</span>
@@ -2921,6 +2925,7 @@
   const btnWord = document.getElementById('btnWord');
   const btnProjectDamageExcel = document.getElementById('btnProjectDamageExcel');
   const btnAppearanceReport = document.getElementById('btnAppearanceReport');
+  const btnAppearanceReportProject = document.getElementById('btnAppearanceReportProject');
 
   const captureModal = document.getElementById('captureModal');
   const captureTitle = document.getElementById('captureTitle');
@@ -14015,7 +14020,10 @@
   });
 
   // ---------- composite marked image ----------
-  function buildMarkedImageFor(imageSrc, drawingId){
+  // markersOverride: 기본은 현재 화면의 전역 markers를 쓰지만, 다른 시설물의
+  // 위치도를 그릴 때는(예: 프로젝트 전체 보고서) 그 시설물의 마커 배열을 넘긴다 —
+  // 화면에 실제로 로드하지 않고도(글로벌 상태를 안 건드리고) 안전하게 만들 수 있다.
+  function buildMarkedImageFor(imageSrc, drawingId, markersOverride){
     return new Promise((resolve, reject)=>{
       if(!imageSrc){ resolve(null); return; }
       const img = new Image();
@@ -14026,7 +14034,7 @@
         const ctx = c.getContext('2d');
         ctx.drawImage(img, 0, 0);
         const r = Math.max(9, Math.round(img.width * 0.011));
-        markers.forEach(m=>{
+        (markersOverride || markers).forEach(m=>{
           if(m.xPct == null || m.yPct == null) return;
           if(m.drawingId && m.drawingId !== drawingId) return; // 다른 도면 소속 마커는 이 도면 이미지에 겹쳐 그리지 않음
           const x = (m.xPct/100) * img.width;
@@ -14058,8 +14066,8 @@
 
   // 지도(GPS) 지점들의 전체 위치도 — 실제 지도 타일은 CORS 문제로 캔버스에 담을 수 없어
   // 좌표 기반 상대 배치도(스케일바·방위 포함)로 생성한다.
-  function buildMapOverviewImage(){
-    const mapMarkers = markers.filter(m => m.lat != null && m.lng != null);
+  function buildMapOverviewImage(markersOverride){
+    const mapMarkers = (markersOverride || markers).filter(m => m.lat != null && m.lng != null);
     if(mapMarkers.length === 0) return null;
 
     const W = 900, H = 650, PAD = 70;
@@ -14190,8 +14198,8 @@
     });
   }
 
-  async function buildRealMapImage(){
-    const mapMarkers = markers.filter(m => m.lat != null && m.lng != null);
+  async function buildRealMapImage(markersOverride){
+    const mapMarkers = (markersOverride || markers).filter(m => m.lat != null && m.lng != null);
     if(mapMarkers.length === 0) return null;
     if(!navigator.onLine) return null; // 오프라인이면 시도하지 않고 바로 대체수단 사용
 
@@ -14721,51 +14729,44 @@
     return '(' + n + ')';
   }
 
-  btnAppearanceReport.addEventListener('click', async ()=>{
-    moreModal.style.display = 'none';
-    const site = currentSiteObj();
-    if(!site){ alert('시설물을 먼저 선택해주세요.'); return; }
-    if((markers || []).length === 0 && !baseImageSrc){ alert('내보낼 조사 기록이 없습니다.'); return; }
-    if(typeof docx === 'undefined'){
-      try{ await loadScriptOnce('https://cdn.jsdelivr.net/npm/docx@8.0.4/build/index.js'); }catch(e){}
+  // 시설물 하나의 외관조사 보고서 섹션(제목+가/나/다)을 만든다. 단일 시설물 내보내기와
+  // 프로젝트 전체 내보내기(여러 시설물을 한 파일로)가 이 함수를 공유한다.
+  // site 파라미터를 명시적으로 받는다 — 전역 markers/drawings/baseImageSrc에
+  // 의존하지 않으므로, 화면에 그 시설물을 실제로 불러오지 않고도(다른 시설물을
+  // 보고 있는 동안에도) 안전하게 여러 시설물을 순회하며 만들 수 있다.
+  // (site === currentSiteObj()이고 commitLiveToCurrentSite() 직후라면 site.markers는
+  // 전역 markers와 동일한 배열 참조라 단일 내보내기 동작은 완전히 그대로다.)
+  async function buildAppearanceReportSections(docxLib, site, projectName){
+    const { Paragraph, TextRun, ImageRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType } = docxLib;
+    const siteMarkers = site.markers || [];
+    const siteDrawings = site.drawings || [];
+    const siteName = site.name || '시설물';
+    const today = new Date().toLocaleDateString('ko-KR');
+
+    function imgDims(dataUrl, maxW){
+      return new Promise((resolve)=>{
+        const im = new Image();
+        im.onload = ()=>{
+          const w = Math.min(maxW, im.naturalWidth || maxW);
+          const h = Math.round((im.naturalHeight || maxW*0.75) * (w / (im.naturalWidth || maxW)));
+          resolve({ width: w, height: h });
+        };
+        im.onerror = ()=> resolve({ width:maxW, height:Math.round(maxW*0.75) });
+        im.src = dataUrl;
+      });
     }
-    if(typeof docx === 'undefined'){ alert('문서 생성 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 다시 시도해주세요.'); return; }
+    async function toBytes(dataUrl){
+      const buf = await dataUrlToBlob(dataUrl).arrayBuffer();
+      return new Uint8Array(buf);
+    }
+    const labelCell = (t)=> new TableCell({ width:{size:12,type:WidthType.PERCENTAGE}, shading:{fill:'F2F2F2'}, margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ children:[ new TextRun({text:t, bold:true, size:15}) ] }) ] });
+    const textCell = (paras, size)=> new TableCell({ width:{size:size||88,type:WidthType.PERCENTAGE}, margins:{top:40,bottom:40,left:60,right:60}, children: Array.isArray(paras) ? paras : [ new Paragraph({ children:[ new TextRun({text:String(paras||''), size:15}) ] }) ] });
 
-    btnAppearanceReport.disabled = true;
-    const origLabel = btnAppearanceReport.textContent;
-    btnAppearanceReport.textContent = '문서 생성 중…';
-    commitLiveToCurrentSite();
-    try{
-      const { Document, Packer, Paragraph, TextRun, ImageRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, Header } = docx;
-      const project = projects.find(p => p.id === currentProjectId);
-      const projectName = (project && project.name) || '';
-      const siteName = site.name || currentSiteName() || '시설물';
-      const today = new Date().toLocaleDateString('ko-KR');
+    const children = [];
+    children.push(new Paragraph({ text: siteName + ' 외관조사 보고서', heading: HeadingLevel.TITLE }));
+    children.push(new Paragraph({ children:[ new TextRun({ text:(projectName ? projectName + ' · ' : '') + '작성일 ' + today, size:18, color:'555555' }) ], spacing:{ after:300 } }));
 
-      function imgDims(dataUrl, maxW){
-        return new Promise((resolve)=>{
-          const im = new Image();
-          im.onload = ()=>{
-            const w = Math.min(maxW, im.naturalWidth || maxW);
-            const h = Math.round((im.naturalHeight || maxW*0.75) * (w / (im.naturalWidth || maxW)));
-            resolve({ width: w, height: h });
-          };
-          im.onerror = ()=> resolve({ width:maxW, height:Math.round(maxW*0.75) });
-          im.src = dataUrl;
-        });
-      }
-      async function toBytes(dataUrl){
-        const buf = await dataUrlToBlob(dataUrl).arrayBuffer();
-        return new Uint8Array(buf);
-      }
-      const labelCell = (t)=> new TableCell({ width:{size:12,type:WidthType.PERCENTAGE}, shading:{fill:'F2F2F2'}, margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ children:[ new TextRun({text:t, bold:true, size:15}) ] }) ] });
-      const textCell = (paras, size)=> new TableCell({ width:{size:size||88,type:WidthType.PERCENTAGE}, margins:{top:40,bottom:40,left:60,right:60}, children: Array.isArray(paras) ? paras : [ new Paragraph({ children:[ new TextRun({text:String(paras||''), size:15}) ] }) ] });
-
-      const children = [];
-      children.push(new Paragraph({ text: siteName + ' 외관조사 보고서', heading: HeadingLevel.TITLE }));
-      children.push(new Paragraph({ children:[ new TextRun({ text:(projectName ? projectName + ' · ' : '') + '작성일 ' + today, size:18, color:'555555' }) ], spacing:{ after:300 } }));
-
-      // ---- 가. 단일구간 외관조사 결과 ----
+    // ---- 가. 단일구간 외관조사 결과 ----
       children.push(new Paragraph({ text:'가. 단일구간 외관조사 결과', heading: HeadingLevel.HEADING_1, spacing:{ before:200, after:120 } }));
       children.push(new Paragraph({ children:[ new TextRun({ text:'<표> 단일구간 외관조사 결과', bold:true, size:16 }) ], spacing:{ after:100 } }));
 
@@ -14810,19 +14811,19 @@
       // ---- 나. 조사위치도 ----
       children.push(new Paragraph({ text:'나. 조사위치도', heading: HeadingLevel.HEADING_1, spacing:{ before:200, after:120 } }));
       let anyLocationImg = false;
-      const sortedDrawings = (drawings || []).slice().sort((a,b)=>(a.order||0)-(b.order||0));
+      const sortedDrawings = (siteDrawings || []).slice().sort((a,b)=>(a.order||0)-(b.order||0));
       for(const d of sortedDrawings){
         if(!d.imageSrc) continue;
-        const marked = await buildMarkedImageFor(d.imageSrc, d.id);
+        const marked = await buildMarkedImageFor(d.imageSrc, d.id, siteMarkers);
         if(!marked) continue;
         anyLocationImg = true;
         children.push(new Paragraph({ children:[ new TextRun({ text:'· ' + (d.name || '도면') + (d.type ? ' (' + d.type + ')' : ''), size:15, bold:true }) ], spacing:{ before:120, after:80 } }));
         children.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: await toBytes(marked), transformation: await imgDims(marked, 560) }) ], spacing:{ after:120 } }));
       }
-      if(markers.some(m => m.lat != null && m.lng != null)){
+      if(siteMarkers.some(m => m.lat != null && m.lng != null)){
         let mapImg = null;
-        try{ mapImg = await buildRealMapImage(); }catch(e){ mapImg = null; }
-        if(!mapImg){ try{ mapImg = buildMapOverviewImage(); }catch(e){} }
+        try{ mapImg = await buildRealMapImage(siteMarkers); }catch(e){ mapImg = null; }
+        if(!mapImg){ try{ mapImg = buildMapOverviewImage(siteMarkers); }catch(e){} }
         if(mapImg){
           anyLocationImg = true;
           children.push(new Paragraph({ children:[ new TextRun({ text:'· 지도 위치도', size:15, bold:true }) ], spacing:{ before:120, after:80 } }));
@@ -14837,7 +14838,7 @@
       children.push(new Paragraph({ text:'다. 지점별 세부 조사결과', heading: HeadingLevel.HEADING_1, spacing:{ before:300, after:120 } }));
 
       const photoCells = [];
-      const markersSorted = markers.slice().sort((a,b)=>(a.num||0)-(b.num||0));
+      const markersSorted = siteMarkers.slice().sort((a,b)=>(a.num||0)-(b.num||0));
       for(const m of markersSorted){
         const photos = m.photos || [];
         for(let pi=0; pi<photos.length; pi++){
@@ -14880,23 +14881,99 @@
         children.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows: gridRows }));
       }
 
+    return children;
+  }
+
+  function downloadDocxBlob(blob, filename){
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function ensureDocxLoaded(){
+    if(typeof docx !== 'undefined') return true;
+    try{ await loadScriptOnce('https://cdn.jsdelivr.net/npm/docx@8.0.4/build/index.js'); }catch(e){}
+    return typeof docx !== 'undefined';
+  }
+
+  btnAppearanceReport.addEventListener('click', async ()=>{
+    moreModal.style.display = 'none';
+    const site = currentSiteObj();
+    if(!site){ alert('시설물을 먼저 선택해주세요.'); return; }
+    if((markers || []).length === 0 && !baseImageSrc){ alert('내보낼 조사 기록이 없습니다.'); return; }
+    if(!(await ensureDocxLoaded())){ alert('문서 생성 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 다시 시도해주세요.'); return; }
+
+    btnAppearanceReport.disabled = true;
+    const origLabel = btnAppearanceReport.textContent;
+    btnAppearanceReport.textContent = '문서 생성 중…';
+    commitLiveToCurrentSite();
+    try{
+      const { Document, Packer, Paragraph, TextRun, AlignmentType, Header } = docx;
+      const project = projects.find(p => p.id === currentProjectId);
+      const projectName = (project && project.name) || '';
+      const siteName = site.name || currentSiteName() || '시설물';
+      const children = await buildAppearanceReportSections(docx, site, projectName);
       const headerPara = new Header({ children:[ new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text: [projectName, siteName].filter(Boolean).join('  |  '), size:15, color:'666666' }) ] }) ] });
       const wordDoc = new Document({ sections:[{ headers:{ default: headerPara }, children }] });
       const blob = await Packer.toBlob(wordDoc);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = siteName + '_외관조사보고서.docx';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      downloadDocxBlob(blob, siteName + '_외관조사보고서.docx');
     }catch(e){
       console.error(e);
       alert('문서 생성 중 오류가 발생했습니다.');
     }finally{
       btnAppearanceReport.disabled = false;
       btnAppearanceReport.textContent = origLabel;
+    }
+  });
+
+  // 프로젝트 전체 외관조사 보고서 — 시설물마다 buildAppearanceReportSections를 호출해
+  // 같은 양식을 반복하고, 시설물 사이에 페이지 나누기를 넣어 한 파일로 묶는다.
+  // 화면에 실제로 그 시설물들을 불러오지 않는다(현재 보고 있는 시설물 화면은 안 바뀜) —
+  // 각 시설물의 site.markers/site.drawings를 직접 읽기 때문에 가능하다(6-Word).
+  btnAppearanceReportProject.addEventListener('click', async ()=>{
+    moreModal.style.display = 'none';
+    const project = projects.find(p => p.id === currentProjectId);
+    if(!project){ alert('프로젝트를 먼저 선택해주세요.'); return; }
+    commitLiveToCurrentSite();
+    const psites = sites.filter(s => s.projectId === project.id).slice().sort((a,b)=> (a.name||'').localeCompare(b.name||'', 'ko'));
+    if(psites.length === 0){ alert('이 프로젝트에 시설물이 없습니다.'); return; }
+    if(!(await ensureDocxLoaded())){ alert('문서 생성 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 다시 시도해주세요.'); return; }
+
+    btnAppearanceReportProject.disabled = true;
+    const origLabel = btnAppearanceReportProject.textContent;
+    try{
+      const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Header, PageBreak } = docx;
+      const children = [];
+      children.push(new Paragraph({ text: project.name + ' 외관조사 보고서 (전체)', heading: HeadingLevel.TITLE }));
+      children.push(new Paragraph({ children:[ new TextRun({ text:'작성일 ' + new Date().toLocaleDateString('ko-KR') + ' · 시설물 ' + psites.length + '개', size:18, color:'555555' }) ], spacing:{ after:200 } }));
+      children.push(new Paragraph({ text:'목차', heading: HeadingLevel.HEADING_2, spacing:{ before:150, after:80 } }));
+      psites.forEach((s, i)=>{
+        children.push(new Paragraph({ children:[ new TextRun({ text:(i+1) + '. ' + (s.name || '시설물'), size:17 }) ], spacing:{ after:40 } }));
+      });
+
+      for(let i=0; i<psites.length; i++){
+        btnAppearanceReportProject.textContent = '문서 생성 중… (' + (i+1) + '/' + psites.length + ')';
+        const s = psites[i];
+        children.push(new Paragraph({ children:[ new PageBreak() ] }));
+        const sectionChildren = await buildAppearanceReportSections(docx, s, project.name);
+        children.push(...sectionChildren);
+      }
+
+      const headerPara = new Header({ children:[ new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text: project.name, size:15, color:'666666' }) ] }) ] });
+      const wordDoc = new Document({ sections:[{ headers:{ default: headerPara }, children }] });
+      const blob = await Packer.toBlob(wordDoc);
+      downloadDocxBlob(blob, project.name + '_외관조사보고서_전체.docx');
+    }catch(e){
+      console.error(e);
+      alert('문서 생성 중 오류가 발생했습니다.');
+    }finally{
+      btnAppearanceReportProject.disabled = false;
+      btnAppearanceReportProject.textContent = origLabel;
     }
   });
 
