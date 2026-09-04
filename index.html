@@ -3510,9 +3510,11 @@
   let storageBackend = 'unknown';
   const memoryFallback = {};
 
-  function currentSiteObj(){
-    return (sites && sites.find(s => s.id === currentSiteId)) || { id: currentSiteId || null, projectId: currentProjectId || null };
-  }
+  // currentSiteObj는 아래쪽(약 8842줄)에 실제로 쓰이는 정의가 따로 있다(찾는 시설물이
+  // 없으면 undefined 반환 — 호출부 20여곳이 이미 그 기준으로 널가드하고 있다).
+  // 여기 있던 "못 찾으면 스텁 객체 반환" 버전은 그 정의에 항상 가려져 죽은 코드였다.
+  // 정리 과정에서 제거. (idbPutInspectionPoint 등은 자체적으로 currentProjectId/
+  // currentSiteId로 재차 폴백하므로 undefined가 와도 안전하다.)
 
   function openIDB(){
     if(idbConn) return idbConn;
@@ -3868,20 +3870,9 @@
   }
 
   // ---------- 브라우저 저장공간 사용량 및 영속성 유틸리티 ----------
-  async function checkStorageUsage(){
-    if(navigator.storage && navigator.storage.estimate){
-      try{
-        const est = await navigator.storage.estimate();
-        const usageMb = (est.usage ? est.usage / (1024 * 1024) : 0).toFixed(1);
-        const quotaMb = (est.quota ? est.quota / (1024 * 1024) : 0).toFixed(1);
-        const usagePercent = (est.quota && est.usage) ? ((est.usage / est.quota) * 100).toFixed(1) : '0.0';
-        return { usageMb, quotaMb, usagePercent, usageBytes: est.usage, quotaBytes: est.quota };
-      }catch(e){
-        return null;
-      }
-    }
-    return null;
-  }
+  // checkStorageUsage는 아래쪽(약 6367줄, syncState.storageStats를 채우는 버전)에
+  // 실제로 쓰이는 정의가 따로 있다 — 이 값을 반환하던 초기 버전은 호출부 어디서도
+  // 반환값을 쓰지 않아 죽은 코드였다. 정리 과정에서 제거.
 
   function initStoragePersistence(){
     if(navigator.storage && navigator.storage.persist){
@@ -5570,14 +5561,8 @@
     return initSupabaseClient();
   }
 
-  function blobToDataUrl(blob){
-    return new Promise((resolve, reject)=>{
-      const reader = new FileReader();
-      reader.onload = ()=> resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  }
+  // blobToDataUrl은 위쪽(약 4500줄)에 null 가드가 있는 버전으로 이미 정의돼 있다.
+  // (동일 이유로 가드 없는 중복 정의 제거)
 
   // 시설물(+마커+사진메타)을 클라우드에 올린다. 사진 원본은 Storage에, 나머지는 테이블에.
   // 실패해도 예외를 던지지 않고 {ok:false, reason} 을 돌려준다 — 호출부가 조사 흐름을 막지 않도록.
@@ -14204,14 +14189,9 @@
     }
   }
 
-  function dataUrlToBlob(dataUrl){
-    const parts = dataUrl.split(',');
-    const mime = parts[0].match(/:(.*?);/)[1];
-    const bin = atob(parts[1]);
-    const arr = new Uint8Array(bin.length);
-    for(let i=0;i<bin.length;i++) arr[i] = bin.charCodeAt(i);
-    return new Blob([arr], {type: mime});
-  }
+  // dataUrlToBlob는 위쪽(약 4478줄)에 null/형식 가드가 있는 버전으로 이미 정의돼 있다.
+  // (여기 있던 가드 없는 중복 정의는 나중에 선언된다는 이유만으로 파일 전체에서
+  // 그 버전을 덮어쓰고 있었다 — 정리 과정에서 제거. 동작은 그대로, 안전장치만 복원)
 
   // ---------- ZIP export ----------
   btnZip.addEventListener('click', async ()=>{
