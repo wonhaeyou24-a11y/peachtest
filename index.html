@@ -2097,6 +2097,10 @@
       <button class="close-x" id="closePreview" aria-label="닫기">✕</button>
     </div>
     <div class="modal-body">
+      <div class="damage-field" id="pointSectionField" style="margin-bottom:10px;">
+        <label>구간</label>
+        <div class="damage-type-scroll" id="pointSectionChips"></div>
+      </div>
       <div class="preview-grid" id="previewGrid"></div>
     </div>
     <div class="modal-foot">
@@ -2945,6 +2949,7 @@
   const previewModal = document.getElementById('previewModal');
   const previewTitle = document.getElementById('previewTitle');
   const previewGrid = document.getElementById('previewGrid');
+  const pointSectionChips = document.getElementById('pointSectionChips');
   const closePreview = document.getElementById('closePreview');
   const btnAddMorePhotos = document.getElementById('btnAddMorePhotos');
   const btnRemoveAllPhotos = document.getElementById('btnRemoveAllPhotos');
@@ -7496,7 +7501,7 @@
             ? (detailedCmp.some(r => r.delta > 0) ? '증가' : detailedCmp.some(r => r.delta < 0) ? '감소' : (detailedCmp.every(r => r.delta === 0) ? '동일' : '미확인'))
             : (cmp.unavailable ? '미확인' : (cmp.delta > 0 ? '증가' : cmp.delta < 0 ? '감소' : '동일'));
           rows.push({
-            '구분':'기존', '구간': ed.section || '', '구성요소': d.component || ed.component || '', '위치': ed.drawingPosition || '',
+            '구분':'기존', '구간': ed.section || m.section || '', '구성요소': d.component || ed.component || '', '위치': ed.drawingPosition || '',
             '손상명': ed.damageName || d.damageType || '', '조사지점': '지점 ' + m.num,
             '기존규모': ed.measurement || '', '현재규모': d.measurement || '',
             '증감치수': cmp.unavailable ? '' : (cmp.delta > 0 ? '+' : '') + cmp.delta.toFixed(2),
@@ -7518,7 +7523,7 @@
           if(d.damageOrigin !== 'NEW') return;
           countedDamageIds.add(d.id);
           rows.push({
-            '구분':'신규', '구간':'', '구성요소': d.component || '', '위치':'',
+            '구분':'신규', '구간': m.section || '', '구성요소': d.component || '', '위치':'',
             '손상명': d.damageType || '', '조사지점': '지점 ' + m.num,
             '기존규모':'', '현재규모': d.measurement || '',
             '증감치수':'', '증감률':'', '증감상세':'', '증감여부':'신규',
@@ -7538,7 +7543,7 @@
           if(countedDamageIds.has(d.id)) return;
           if(!d.damageType && !d.measurement && !d.cause) return;
           rows.push({
-            '구분':'미분류', '구간':'', '구성요소': d.component || '', '위치':'',
+            '구분':'미분류', '구간': m.section || '', '구성요소': d.component || '', '위치':'',
             '손상명': d.damageType || '(손상명 미입력)', '조사지점': '지점 ' + m.num,
             '기존규모':'', '현재규모': d.measurement || '',
             '증감치수':'', '증감률':'', '증감상세':'', '증감여부':'미분류(신규/기존 구분 필요)',
@@ -13112,10 +13117,51 @@
     }
   }
 
+  // 구간(예: 1구간/2구간) — 손상이 아니라 "지점" 단위로 딱 한 번만 지정한다.
+  // 같은 지점에서 찍은 사진·손상은 전부 이 구간을 그대로 물려받는다(외관조사
+  // 보고서를 구간별로 나눠 정리할 때 이 값을 기준으로 묶는다). 시설물마다 한 번
+  // 쓴 구간 이름은 site.sectionList에 쌓여서 다음 지점부터는 칩으로 바로 고를 수
+  // 있다 — "1구간"/"1 구간"처럼 표기가 갈려서 안 묶이는 걸 방지.
+  function renderPointSectionChips(m){
+    if(!pointSectionChips) return;
+    pointSectionChips.innerHTML = '';
+    const site = currentSiteObj();
+    if(!site) return;
+    if(!Array.isArray(site.sectionList)) site.sectionList = [];
+    const options = site.sectionList.slice();
+    if(m.section && !options.includes(m.section)) options.push(m.section);
+
+    function selectSection(name){
+      m.section = name || '';
+      if(name && !site.sectionList.includes(name)) site.sectionList.push(name);
+      renderPointSectionChips(m);
+      saveState();
+    }
+
+    options.forEach(name=>{
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'damage-type-btn' + (m.section === name ? ' active' : '');
+      chip.textContent = name;
+      chip.addEventListener('click', ()=> selectSection(m.section === name ? '' : name));
+      pointSectionChips.appendChild(chip);
+    });
+    const otherChip = document.createElement('button');
+    otherChip.type = 'button';
+    otherChip.className = 'damage-type-btn';
+    otherChip.textContent = '＋ 직접입력';
+    otherChip.addEventListener('click', ()=>{
+      const custom = prompt('구간 이름을 입력하세요 (예: 1구간)', m.section || '');
+      if(custom != null) selectSection(custom.trim());
+    });
+    pointSectionChips.appendChild(otherChip);
+  }
+
   function renderPreviewGrid(markerId){
     const m = markers.find(x=>x.id===markerId);
     if(!m) return;
     previewTitle.textContent = '지점 ' + m.num + ' · 사진 ' + (m.photos ? m.photos.length : 0) + '장 · 위치신뢰도 ' + computeLocationTrust(m) + (m.address ? ' · ' + m.address : '');
+    renderPointSectionChips(m);
     previewGrid.innerHTML = '';
     (m.photos || []).forEach((p, idx)=>{
       const card = document.createElement('div');
@@ -14761,7 +14807,7 @@
   // (site === currentSiteObj()이고 commitLiveToCurrentSite() 직후라면 site.markers는
   // 전역 markers와 동일한 배열 참조라 단일 내보내기 동작은 완전히 그대로다.)
   async function buildAppearanceReportSections(docxLib, site, projectName){
-    const { Paragraph, TextRun, ImageRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType } = docxLib;
+    const { Paragraph, TextRun, ImageRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, PageBreak } = docxLib;
     const siteMarkers = site.markers || [];
     const siteDrawings = site.drawings || [];
     const siteName = site.name || '시설물';
@@ -14798,11 +14844,40 @@
     children.push(new Paragraph({ text: siteName + ' 외관조사 보고서', heading: HeadingLevel.TITLE }));
     children.push(new Paragraph({ children:[ new TextRun({ text:(projectName ? projectName + ' · ' : '') + '작성일 ' + today, size:18, color:'555555' }) ], spacing:{ after:300 } }));
 
+    // ---- 구간별로 나눠서 가/나/다를 반복할지 판단 ----
+    // 지점(마커)에 구간이 하나라도 지정돼 있으면, 지정된 구간별로 가/나/다 세트를
+    // 반복해서 만든다(구간이 없는 지점은 "미지정" 묶음으로 따로 모아 빠지지 않게 함).
+    // 구간을 전혀 안 쓰는 시설물은(기존 방식 그대로) 시설물 전체를 한 번만 만든다 —
+    // 기존에 만들어지던 보고서와 완전히 동일한 결과를 유지하기 위한 하위호환 처리.
+    const invAll = buildDamageInventory(site);
+    const usedSections = Array.from(new Set(siteMarkers.map(m => (m.section || '').trim()).filter(Boolean)));
+    const grouped = usedSections.length > 0;
+    const sectionGroups = grouped
+      ? usedSections.map(name => ({ name, markers: siteMarkers.filter(m => (m.section || '').trim() === name) }))
+        .concat(
+          siteMarkers.some(m => !(m.section || '').trim())
+            ? [{ name:'미지정', markers: siteMarkers.filter(m => !(m.section || '').trim()) }]
+            : []
+        )
+      : [{ name:'', markers: siteMarkers }];
+
+    for(let gi=0; gi<sectionGroups.length; gi++){
+      const grp = sectionGroups[gi];
+      const gMarkers = grp.markers;
+      const inv = grouped
+        ? invAll.filter(r => ((r['구간'] || '').trim() || '미지정') === grp.name)
+        : invAll;
+
+      if(grouped){
+        if(gi > 0) children.push(new Paragraph({ children:[ new PageBreak() ] }));
+        // "1구간"처럼 이름 자체에 이미 "구간"이 들어있으면 중복으로 안 붙인다("1구간 구간" 방지).
+        const grpLabel = /구간$/.test(grp.name) ? grp.name : grp.name + ' 구간';
+        children.push(new Paragraph({ text: grpLabel, heading: HeadingLevel.HEADING_1, spacing:{ before:200, after:150 }, thematicBreak:true }));
+      }
+
     // ---- 가. 단일구간 외관조사 결과 ----
       children.push(new Paragraph({ text:'가. 단일구간 외관조사 결과', heading: HeadingLevel.HEADING_1, spacing:{ before:200, after:120 } }));
       children.push(new Paragraph({ children:[ new TextRun({ text:'<표> 단일구간 외관조사 결과', bold:true, size:16 }) ], spacing:{ after:100 } }));
-
-      const inv = buildDamageInventory(site);
 
       // 절토사면 표는 「세부지침」 14장 양식(상부자연비탈면/비탈면부/비탈면하부 및
       // 부대시설물[보호시설·보강·배수처리시설]/기타시설/공중이용하는 부위) 고정 행
@@ -14916,16 +14991,16 @@
       const sortedDrawings = (siteDrawings || []).slice().sort((a,b)=>(a.order||0)-(b.order||0));
       for(const d of sortedDrawings){
         if(!d.imageSrc) continue;
-        const marked = await buildMarkedImageFor(d.imageSrc, d.id, siteMarkers);
+        const marked = await buildMarkedImageFor(d.imageSrc, d.id, gMarkers);
         if(!marked) continue;
         anyLocationImg = true;
         children.push(new Paragraph({ children:[ new TextRun({ text:'· ' + (d.name || '도면') + (d.type ? ' (' + d.type + ')' : ''), size:15, bold:true }) ], spacing:{ before:120, after:80 } }));
         children.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: await toBytes(marked), transformation: await imgDims(marked, 560) }) ], spacing:{ after:120 } }));
       }
-      if(siteMarkers.some(m => m.lat != null && m.lng != null)){
+      if(gMarkers.some(m => m.lat != null && m.lng != null)){
         let mapImg = null;
-        try{ mapImg = await buildRealMapImage(siteMarkers); }catch(e){ mapImg = null; }
-        if(!mapImg){ try{ mapImg = buildMapOverviewImage(siteMarkers); }catch(e){} }
+        try{ mapImg = await buildRealMapImage(gMarkers); }catch(e){ mapImg = null; }
+        if(!mapImg){ try{ mapImg = buildMapOverviewImage(gMarkers); }catch(e){} }
         if(mapImg){
           anyLocationImg = true;
           children.push(new Paragraph({ children:[ new TextRun({ text:'· 지도 위치도', size:15, bold:true }) ], spacing:{ before:120, after:80 } }));
@@ -14940,7 +15015,7 @@
       children.push(new Paragraph({ text:'다. 지점별 세부 조사결과', heading: HeadingLevel.HEADING_1, spacing:{ before:300, after:120 } }));
 
       const photoCells = [];
-      const markersSorted = siteMarkers.slice().sort((a,b)=>(a.num||0)-(b.num||0));
+      const markersSorted = gMarkers.slice().sort((a,b)=>(a.num||0)-(b.num||0));
       for(const m of markersSorted){
         const photos = m.photos || [];
         for(let pi=0; pi<photos.length; pi++){
@@ -14987,6 +15062,7 @@
         }
         children.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows: gridRows }));
       }
+    } // end of per-구간 loop (for(let gi=0; gi<sectionGroups.length; gi++))
 
     return children;
   }
