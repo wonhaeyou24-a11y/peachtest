@@ -8734,6 +8734,35 @@
     }
   }
 
+  // 로컬에 더 이상 존재하지 않는 엔티티(삭제된 프로젝트/시설물/지점)에 대한 충돌
+  // 기록은 정리한다. 테스트하며 프로젝트를 지웠는데 옛 충돌 배지가 계속 남아있던 것 방지.
+  async function pruneStaleConflictRecords(){
+    try{
+      const recs = await loadConflictRecords();
+      if(!recs.length) return;
+      const liveProj = new Set(projects.map(p => p.id));
+      const liveFac = new Set(sites.map(s => s.id));
+      const liveMarker = new Set();
+      const liveEd = new Set();
+      sites.forEach(s=>{
+        (s.markers || []).forEach(m => liveMarker.add(m.id));
+        (s.existingDamages || []).forEach(ed => liveEd.add(ed.id));
+      });
+      const kept = recs.filter(c=>{
+        const t = String(c.entity_type || '').toLowerCase();
+        if(t === 'project') return liveProj.has(c.entity_id);
+        if(t === 'facility') return liveFac.has(c.entity_id);
+        if(t === 'inspection_point' || t === 'inspectionpoint') return liveMarker.has(c.entity_id);
+        if(t === 'existing_damage' || t === 'existingdamage') return liveEd.has(c.entity_id);
+        return true; // 모르는 타입은 남긴다
+      });
+      if(kept.length !== recs.length){
+        await saveConflictRecords(kept);
+        diagLog('sync', '없는 엔티티 충돌기록 정리', { removed: recs.length - kept.length, kept: kept.length });
+      }
+    }catch(e){}
+  }
+
   async function saveConflictRecords(records){
     try{
       await storageSet(CONFLICT_RECORDS_KEY, records);
@@ -16586,6 +16615,7 @@
       await loadState();
       todaysMarkerCount();
       diagLogMemorySnapshot('앱 시작 직후');
+      pruneStaleConflictRecords(); // 삭제된 프로젝트/시설물의 옛 충돌 배지 정리(비동기, 대기 안 함)
     }catch(e){
       console.error('로컬 데이터 복구 실패:', e);
       diagLog('error', 'initPeachShotApp: 로컬 데이터 복구 실패: ' + (e && e.message || String(e)));

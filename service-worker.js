@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-shot-v32-project-not-owner-skip'; // 팀원은 프로젝트 행 자체를 안 올림(소유자만 수정 가능) + v31 조직프로젝트 같은 id
+const CACHE_NAME = 'point-shot-v33-sw-skip-external'; // 서비스워커가 Supabase/외부요청 가로채지 않음(Load failed 노이즈 제거)
 // 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
 // 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
 // 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.
@@ -66,7 +66,18 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // network-first for navigation, cache-first for static assets
+  const url = event.request.url;
+  const isVendor = VENDOR_ASSETS.some((v) => url === v);
+  const sameOrigin = url.startsWith(self.location.origin);
+
+  // ★ Supabase API/스토리지, 지도 타일 등 "우리 앱 자산이 아닌" 요청은
+  //   서비스워커가 아예 손대지 않는다(respondWith 호출 안 함). 예전엔 이걸
+  //   가로채서 네트워크가 잠깐 끊기면 catch에서 그대로 throw → 진단로그에
+  //   "FetchEvent.respondWith received an error: Load failed"가 계속 찍히고
+  //   동기화 요청이 실패로 처리됐다. 벤더 라이브러리(CDN)만 예외로 캐싱한다.
+  if (!sameOrigin && !isVendor) return;
+
+  // network-first for navigation
   if (event.request.mode === 'navigate') {
     event.respondWith(
       fetch(event.request).catch(() => caches.match('./index.html'))
@@ -74,21 +85,16 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // cache-first for static assets (+ 벤더 라이브러리는 받으면 캐시에 채움)
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;
       return fetch(event.request).then((res) => {
-        // 외부 라이브러리(Leaflet/JSZip/docx)는 응답이 오면 캐시에도 채워 넣어
-        // 다음 오프라인 실행을 대비한다. 지도 타일(openstreetmap 등)은 대상이 아님.
-        const url = event.request.url;
-        const isVendor = VENDOR_ASSETS.some((v) => url === v);
         if (isVendor && res && res.ok) {
           const resClone = res.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, resClone));
         }
         return res;
-      }).catch((err) => {
-        throw err;
       });
     })
   );
