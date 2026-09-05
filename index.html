@@ -2524,6 +2524,7 @@
     </div>
     <div class="modal-foot">
       <button class="primary" id="btnDashboardBackup" style="display:none;">📦 지금 백업</button>
+      <button class="ghost" id="btnPullTeamChanges" style="display:none;" title="다른 팀원이 같은 프로젝트에 올린 최신 지점·손상·사진을 지금 이 프로젝트에 바로 반영합니다(온라인 상태일 때만).">🔄 팀원 최신자료 가져오기</button>
       <button class="primary" id="btnSyncDashboardRetry" style="display:none;">⚡ 지금 전체 동기화 / 재시도</button>
     </div>
   </div>
@@ -6703,6 +6704,41 @@
     });
   }
 
+  // 팀원이 같은 프로젝트에 새로 올린 지점·손상·사진을 지금 이 프로젝트에 바로
+  // 반영하는 버튼. pullCloudChanges()는 기존에도 있었지만 온라인 복귀
+  // 이벤트에서만 자동으로 돌아서(계속 온라인 상태로 같이 작업 중이면 아예 안 돎),
+  // 사용자가 "지금 팀원 자료를 당겨오고 싶을 때" 직접 누를 방법이 없었다.
+  // pullProjectFromCloud(더보기의 다른 버튼)는 이것과 다르게 새 프로젝트로
+  // 통째로 복제하는 최초-불러오기용이라 이 용도에는 안 맞는다.
+  const btnPullTeamChanges = document.getElementById('btnPullTeamChanges');
+  if(btnPullTeamChanges){
+    btnPullTeamChanges.addEventListener('click', async ()=>{
+      if(!navigator.onLine){ alert('오프라인 상태입니다. 온라인 연결 후 다시 시도해주세요.'); return; }
+      if(!supabaseClient || !supabaseSession){ alert('로그인 후 이용할 수 있습니다.'); return; }
+      if(!currentProjectId){ alert('프로젝트를 먼저 선택해주세요.'); return; }
+      btnPullTeamChanges.disabled = true;
+      btnPullTeamChanges.textContent = '가져오는 중…';
+      try{
+        const res = await pullCloudChanges(currentProjectId);
+        if(res.ok){
+          if(currentSiteId){
+            const site = sites.find(s=>s.id===currentSiteId);
+            if(site) await loadSite(site); // 지금 보고 있는 시설물이 갱신됐을 수 있으니 화면도 다시 로드
+          }
+          if(typeof renderSiteList === 'function') renderSiteList();
+          alert(res.mergedCount > 0 ? `팀원 자료 ${res.mergedCount}건을 반영했습니다.` : '새로 반영할 팀원 자료가 없습니다(이미 최신 상태입니다).');
+        } else {
+          alert('팀원 자료를 가져오지 못했습니다: ' + (res.reason || '알 수 없는 오류'));
+        }
+      }catch(e){
+        alert('팀원 자료를 가져오는 중 오류가 발생했습니다.');
+      }
+      btnPullTeamChanges.disabled = false;
+      btnPullTeamChanges.textContent = '🔄 팀원 최신자료 가져오기';
+      renderSyncDashboard();
+    });
+  }
+
   window.addEventListener('online', ()=>{
     syncState.status = 'synced';
     updateSyncStatusBar();
@@ -7417,6 +7453,7 @@
     });
     if(btnDashboardBackup) btnDashboardBackup.style.display = (tab === 'safety') ? '' : 'none';
     if(btnSyncDashboardRetry) btnSyncDashboardRetry.style.display = (tab === 'sync') ? '' : 'none';
+    if(btnPullTeamChanges) btnPullTeamChanges.style.display = (tab === 'sync') ? '' : 'none';
     if(tab === 'safety') renderSafetyDashboard();
     else if(tab === 'sync') renderSyncDashboard();
     else if(tab === 'diag') renderDiagnosticsModal();
