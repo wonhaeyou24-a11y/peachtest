@@ -96,12 +96,14 @@ WHERE o.name = 'The Avengers';
 -- [B] 멤버십 수정 — A-1 / A-4 에서 user_id 누락 또는 status 문제일 때
 -- ============================================================================
 
+-- (주의: 배포된 organization_members 테이블에는 updated_at 컬럼이 없어서
+--        아래 UPDATE 들은 updated_at 을 건드리지 않는다.)
+
 -- B-1. 이메일은 맞는데 user_id 가 NULL 인 멤버 행에 auth.users 의 id 를 백필 +
 --      status 를 active 로. (이메일 대소문자/공백 정규화해서 매칭)
 UPDATE public.organization_members om
 SET user_id = au.id,
-    status  = 'active',
-    updated_at = now()
+    status  = 'active'
 FROM auth.users au
 WHERE om.user_id IS NULL
   AND lower(trim(om.email)) = lower(trim(au.email))
@@ -110,7 +112,7 @@ WHERE om.user_id IS NULL
 -- B-2. status 가 invited/suspended 인데 실제로 가입시킬 사람이면 active 로
 --      (원하는 이메일만 골라서)
 UPDATE public.organization_members
-SET status = 'active', updated_at = now()
+SET status = 'active'
 WHERE status <> 'active'
   AND lower(trim(email)) IN ('wonki@gmail.com','hyun@naver.com','kim@gmail.com')
   AND organization_id IN (SELECT id FROM public.organizations WHERE name = 'The Avengers');
@@ -128,35 +130,62 @@ WHERE status <> 'active'
 --     조직 id 를 채워 넣는다.
 -- ============================================================================
 
+-- 배포된 스키마가 파일과 조금 다를 수 있어(organization_members에 updated_at 없음
+-- 등), 각 테이블에 organization_id / updated_at 컬럼이 실제로 있는지 확인한 뒤
+-- 동적 SQL 로 실행한다.
 DO $$
 DECLARE
   v_proj  TEXT;
   v_org   TEXT;
+  t       TEXT;
+  key_col TEXT;
+  has_updated BOOLEAN;
+  has_orgcol  BOOLEAN;
+  sql_txt TEXT;
+  n       INT;
 BEGIN
   SELECT id INTO v_proj FROM public.ps_projects WHERE name = '테스트' LIMIT 1;
   IF v_proj IS NULL THEN RAISE NOTICE '프로젝트 "테스트" 없음 — 중단'; RETURN; END IF;
 
-  -- 조직 id 결정: 프로젝트에 이미 있으면 그걸, 없으면 "The Avengers" 로
   SELECT organization_id INTO v_org FROM public.ps_projects WHERE id = v_proj;
   IF v_org IS NULL THEN
     SELECT id INTO v_org FROM public.organizations WHERE name = 'The Avengers' LIMIT 1;
   END IF;
   IF v_org IS NULL THEN RAISE NOTICE '조직 "The Avengers" 없음 — 중단'; RETURN; END IF;
 
-  UPDATE public.ps_projects          SET organization_id = v_org, updated_at = now()
-    WHERE id = v_proj AND organization_id IS DISTINCT FROM v_org;
-  UPDATE public.ps_facilities        SET organization_id = v_org, updated_at = now()
-    WHERE project_id = v_proj AND organization_id IS DISTINCT FROM v_org;
-  UPDATE public.ps_drawings          SET organization_id = v_org, updated_at = now()
-    WHERE project_id = v_proj AND organization_id IS DISTINCT FROM v_org;
-  UPDATE public.ps_inspection_points SET organization_id = v_org, updated_at = now()
-    WHERE project_id = v_proj AND organization_id IS DISTINCT FROM v_org;
-  UPDATE public.ps_existing_damages  SET organization_id = v_org, updated_at = now()
-    WHERE project_id = v_proj AND organization_id IS DISTINCT FROM v_org;
-  UPDATE public.ps_damages           SET organization_id = v_org, updated_at = now()
-    WHERE project_id = v_proj AND organization_id IS DISTINCT FROM v_org;
+  FOR t, key_col IN
+    SELECT * FROM (VALUES
+      ('ps_projects','id'),
+      ('ps_facilities','project_id'),
+      ('ps_drawings','project_id'),
+      ('ps_inspection_points','project_id'),
+      ('ps_existing_damages','project_id'),
+      ('ps_damages','project_id')
+    ) AS x(tbl, kc)
+  LOOP
+    SELECT EXISTS (SELECT 1 FROM information_schema.tables
+                   WHERE table_schema='public' AND table_name=t) INTO has_orgcol;
+    CONTINUE WHEN NOT has_orgcol;  -- 테이블 자체가 없으면 skip
 
-  RAISE NOTICE '완료: 프로젝트 % 의 모든 하위 행에 조직 % 백필', v_proj, v_org;
+    SELECT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_schema='public' AND table_name=t AND column_name='organization_id') INTO has_orgcol;
+    CONTINUE WHEN NOT has_orgcol;
+
+    SELECT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_schema='public' AND table_name=t AND column_name='updated_at') INTO has_updated;
+
+    sql_txt := format(
+      'UPDATE public.%I SET organization_id = %L %s WHERE %I = %L AND organization_id IS DISTINCT FROM %L',
+      t, v_org,
+      CASE WHEN has_updated THEN ', updated_at = now()' ELSE '' END,
+      key_col, v_proj, v_org
+    );
+    EXECUTE sql_txt;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RAISE NOTICE '%: % 행에 organization_id 백필', t, n;
+  END LOOP;
+
+  RAISE NOTICE '완료: 프로젝트 % → 조직 %', v_proj, v_org;
 END $$;
 
 
@@ -166,7 +195,15 @@ END $$;
 --     하위 행 전부 읽고 쓸 수 있다"를 더 분명히 하고 organization_id 가
 --     비어 있어도 프로젝트 경로로 통과되게 한다.
 --     [C] 를 실행했다면 [D] 는 없어도 됨. 그래도 넣어두면 방어적.
+--     정책은 permissive(OR 결합)라, 아래를 추가해도 접근이 넓어질 뿐 좁아지지 않음.
 -- ============================================================================
+
+-- D-0. 현재 걸려 있는 정책 이름 먼저 확인 (아래 DROP 이름이 안 맞으면 여기서 실제 이름 확인)
+SELECT tablename, policyname, cmd
+FROM pg_policies
+WHERE schemaname='public'
+  AND tablename IN ('ps_inspection_points','ps_facilities','ps_existing_damages','ps_drawings','ps_damages')
+ORDER BY tablename, policyname;
 
 -- 공통 헬퍼: 이 프로젝트에 내가 접근 가능한가
 CREATE OR REPLACE FUNCTION public.can_access_project(p_project_id TEXT)
