@@ -5236,12 +5236,16 @@
     }
   }
 
+  // user_id -> email 캐시. 조사자별 색상 구분(범례·기록목록)에서 UUID 대신
+  // 사람이 읽을 수 있는 이메일을 보여주기 위해, 멤버 목록을 불러올 때마다 채운다.
+  const orgMemberEmailById = {};
   async function fetchOrganizationMembers(organizationId){
     if(!supabaseClient || !supabaseSession) return [];
     try{
       const { data, error } = await supabaseClient.from('organization_members')
         .select('*').eq('organization_id', organizationId).order('created_at');
       if(error) throw error;
+      (data || []).forEach(m => { if(m.user_id && m.email) orgMemberEmailById[m.user_id] = m.email; });
       return data || [];
     }catch(e){
       console.warn('멤버 목록 불러오기 실패', e);
@@ -6620,6 +6624,43 @@
     `;
     body.appendChild(grid);
 
+    // 2-2. 팀원 자료 가져오기 카드 — 온라인 복귀 시 자동 pull을 없앤 대신, 여기서
+    // "언제 마지막으로 가져왔는지 / 새 자료가 있는지"를 보여주고 직접 누르게 한다.
+    {
+      const teamCard = document.createElement('div');
+      teamCard.style.cssText = 'background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:14px;';
+      let lastPulled = '기록 없음';
+      try{
+        const cur = currentProjectId ? await getSyncCursor(currentProjectId) : null;
+        if(cur) lastPulled = new Date(cur).toLocaleString('ko-KR');
+      }catch(e){}
+      teamCard.innerHTML = `
+        <div style="font-weight:700; font-size:13px; margin-bottom:4px;">👥 팀원 조사자료</div>
+        <div style="font-size:12px; color:var(--text);">마지막으로 가져온 시각: <strong>${lastPulled}</strong></div>
+        <div id="teamUpdatesHint" style="font-size:12px; color:var(--muted); margin-top:4px;">새 자료 확인 중…</div>
+        <button class="card-btn primary" id="btnPullTeamInBody" style="margin-top:10px; width:100%;">🔄 팀원 최신자료 가져오기</button>
+        <div style="font-size:11px; color:var(--muted); margin-top:6px; line-height:1.4;">내 조사자료는 온라인이면 자동으로 클라우드에 올라갑니다. 팀원 자료는 이 버튼을 누를 때만 내 화면에 반영됩니다.</div>
+      `;
+      body.appendChild(teamCard);
+      setTimeout(()=>{
+        const b = document.getElementById('btnPullTeamInBody');
+        if(b) b.onclick = ()=> doPullTeamChanges(b);
+        checkTeamUpdatesAvailable(currentProjectId).then(r=>{
+          const h = document.getElementById('teamUpdatesHint');
+          if(!h) return;
+          if(r == null){ h.textContent = ''; return; }
+          if(r.available){
+            h.textContent = '🟢 팀원이 올린 새 자료가 있습니다 — 위 버튼으로 가져오세요.';
+            h.style.color = '#1F8A4C';
+            h.style.fontWeight = '600';
+          } else {
+            h.textContent = '이미 최신 상태입니다.';
+            h.style.color = 'var(--muted)';
+          }
+        });
+      }, 10);
+    }
+
     // 3. 충돌(Conflict) 해결 섹션 (충돌이 있을 때 최우선 노출)
     if(conflicts.length > 0){
       const confSec = document.createElement('div');
@@ -6748,39 +6789,47 @@
     });
   }
 
-  // 팀원이 같은 프로젝트에 새로 올린 지점·손상·사진을 지금 이 프로젝트에 바로
-  // 반영하는 버튼. pullCloudChanges()는 기존에도 있었지만 온라인 복귀
-  // 이벤트에서만 자동으로 돌아서(계속 온라인 상태로 같이 작업 중이면 아예 안 돎),
-  // 사용자가 "지금 팀원 자료를 당겨오고 싶을 때" 직접 누를 방법이 없었다.
-  // pullProjectFromCloud(더보기의 다른 버튼)는 이것과 다르게 새 프로젝트로
-  // 통째로 복제하는 최초-불러오기용이라 이 용도에는 안 맞는다.
+  // 팀원이 같은 프로젝트에 올린 지점·손상·사진을 지금 이 프로젝트에 반영한다.
+  // 온라인 복귀 시 자동으로 돌지 않고(조사 도중 원격 데이터 끼어들기 방지),
+  // 사용자가 이 버튼을 누를 때만 실행한다. pullProjectFromCloud(더보기)는
+  // 새 프로젝트로 통째 복제하는 최초-불러오기용이라 이 용도엔 안 맞는다.
+  async function doPullTeamChanges(btnEl){
+    if(!navigator.onLine){ alert('오프라인 상태입니다. 온라인 연결 후 다시 시도해주세요.'); return; }
+    if(!supabaseClient || !supabaseSession){ alert('로그인 후 이용할 수 있습니다.'); return; }
+    if(!currentProjectId){ alert('프로젝트를 먼저 선택해주세요.'); return; }
+    const restore = btnEl ? btnEl.textContent : null;
+    if(btnEl){ btnEl.disabled = true; btnEl.textContent = '가져오는 중…'; }
+    try{
+      const res = await pullCloudChanges(currentProjectId);
+      if(res.ok){
+        if(currentSiteId){
+          const site = sites.find(s=>s.id===currentSiteId);
+          if(site) await loadSite(site);
+        }
+        if(typeof renderSiteList === 'function') renderSiteList();
+        if(res.mergedCount > 0){
+          const b = res.breakdown || {};
+          const parts = [];
+          if(b.points) parts.push(`지점 ${b.points}건${b.newPoints ? ` (새 지점 ${b.newPoints})` : ''}`);
+          if(b.damages) parts.push(`기존손상 ${b.damages}건`);
+          if(b.facilities) parts.push(`시설물 ${b.facilities}건`);
+          alert('팀원 자료를 반영했습니다.\n' + (parts.length ? parts.join(' · ') : `${res.mergedCount}건`) +
+            '\n\n※ 팀원이 새 도면에 찍은 지점은 도면이 함께 공유되기 전까지 지도에 안 보일 수 있습니다.');
+        } else {
+          alert('새로 반영할 팀원 자료가 없습니다 (이미 최신 상태입니다).');
+        }
+      } else {
+        alert('팀원 자료를 가져오지 못했습니다: ' + (res.reason || '알 수 없는 오류'));
+      }
+    }catch(e){
+      alert('팀원 자료를 가져오는 중 오류가 발생했습니다.');
+    }
+    if(btnEl){ btnEl.disabled = false; btnEl.textContent = restore || '🔄 팀원 최신자료 가져오기'; }
+    if(typeof renderSyncDashboard === 'function') renderSyncDashboard();
+  }
   const btnPullTeamChanges = document.getElementById('btnPullTeamChanges');
   if(btnPullTeamChanges){
-    btnPullTeamChanges.addEventListener('click', async ()=>{
-      if(!navigator.onLine){ alert('오프라인 상태입니다. 온라인 연결 후 다시 시도해주세요.'); return; }
-      if(!supabaseClient || !supabaseSession){ alert('로그인 후 이용할 수 있습니다.'); return; }
-      if(!currentProjectId){ alert('프로젝트를 먼저 선택해주세요.'); return; }
-      btnPullTeamChanges.disabled = true;
-      btnPullTeamChanges.textContent = '가져오는 중…';
-      try{
-        const res = await pullCloudChanges(currentProjectId);
-        if(res.ok){
-          if(currentSiteId){
-            const site = sites.find(s=>s.id===currentSiteId);
-            if(site) await loadSite(site); // 지금 보고 있는 시설물이 갱신됐을 수 있으니 화면도 다시 로드
-          }
-          if(typeof renderSiteList === 'function') renderSiteList();
-          alert(res.mergedCount > 0 ? `팀원 자료 ${res.mergedCount}건을 반영했습니다.` : '새로 반영할 팀원 자료가 없습니다(이미 최신 상태입니다).');
-        } else {
-          alert('팀원 자료를 가져오지 못했습니다: ' + (res.reason || '알 수 없는 오류'));
-        }
-      }catch(e){
-        alert('팀원 자료를 가져오는 중 오류가 발생했습니다.');
-      }
-      btnPullTeamChanges.disabled = false;
-      btnPullTeamChanges.textContent = '🔄 팀원 최신자료 가져오기';
-      renderSyncDashboard();
-    });
+    btnPullTeamChanges.addEventListener('click', ()=> doPullTeamChanges(btnPullTeamChanges));
   }
 
   window.addEventListener('online', ()=>{
@@ -8493,7 +8542,7 @@
   function entityContentSignature(obj){
     try{
       const copy = { ...obj };
-      delete copy.revision;
+      delete copy.revision; delete copy.createdBy; // createdBy는 조사자 표시용 메타 — 내용 변경으로 안 침
       if(Array.isArray(copy.photos)) copy.photos = copy.photos.map(stripPhotoHeavyFields);
       return JSON.stringify(copy);
     }catch(e){
@@ -8510,7 +8559,7 @@
   const SYNC_VOLATILE_KEYS = new Set([
     'revision','updatedAt','updated_at','syncedAt','cloudSyncedAt','savedAt','lastSavedAt',
     'cloudRef','blobExtracted','blobSize','mimeType','pendingCloudDownload','pendingCloudUpload',
-    'src','original','_localOnly','_dirty','deviceId','device_id','updated_by'
+    'src','original','_localOnly','_dirty','deviceId','device_id','updated_by','createdBy'
   ]);
   function stableSyncStringify(v){
     if(v === null || typeof v !== 'object') return JSON.stringify(v);
@@ -9418,6 +9467,7 @@
       }
 
       let mergedCount = 0;
+      let pulledFacilities = 0, pulledPoints = 0, pulledDamages = 0, pulledNewPoints = 0;
 
       // 1. Facilities Pull
       // 예전엔 원격 시설물 blob(rf.data)으로 로컬 시설물을 통째로 덮어써서, 그
@@ -9440,11 +9490,11 @@
             const merged = Object.assign({}, sites[idx], rf.data);
             FACILITY_ARRAY_FIELDS.forEach(f => { merged[f] = sites[idx][f]; }); // 로컬 배열 유지
             sites[idx] = merged;
-            mergedCount++;
+            mergedCount++; pulledFacilities++;
           } else if(rf.data){
             // 로컬에 아예 없던 시설물(팀원이 새로 만든 것) — 통째로 받는다. 소실 위험 없음.
             sites.push(rf.data);
-            mergedCount++;
+            mergedCount++; pulledFacilities++;
           }
         });
       }
@@ -9469,6 +9519,11 @@
               if(markerData.yPct == null && rp.y != null) markerData.yPct = rp.y;
               if(markerData.num == null && rp.num != null) markerData.num = rp.num;
               if(!markerData.drawingId && rp.drawing_id) markerData.drawingId = rp.drawing_id;
+              // 조사자별 색상 구분용 "최초 작성자". rp.data.createdBy(작성 시 도장)가
+              // 정본이고, 없으면 rp.user_id(행의 마지막 수정자)로 대체. mIdx>=0에서는
+              // 로컬이 이미 알고 있던 createdBy를 우선한다(팀원이 내 지점을 수정해도
+              // 원 작성자가 안 바뀌도록).
+              const originalCreator = (rp.data && rp.data.createdBy) || null;
               // 리비전은 ps_inspection_points.revision(최상위 컬럼)이 정본이다. data
               // 블롭 안의 revision은 팀원 기기가 옛 버전이면 비어있을 수 있으므로
               // 항상 이 컬럼 값으로 로컬을 맞춘다 — 이게 없으면 pull을 해도 로컬
@@ -9485,14 +9540,17 @@
                   merged.locationHistory = localMarker.locationHistory;
                 }
                 if(authoritativeRev !== null) merged.revision = Math.max(authoritativeRev, (typeof localMarker.revision === 'number' ? localMarker.revision : 1));
+                merged.createdBy = localMarker.createdBy || originalCreator || rp.user_id || null;
                 site.markers[mIdx] = merged;
                 try{ lastQueuedEntitySignatures.set('inspection_point:' + rp.id, entityContentSignature(merged)); }catch(e){}
               } else {
                 if(authoritativeRev !== null) markerData.revision = authoritativeRev;
+                markerData.createdBy = originalCreator || rp.user_id || null;
                 site.markers.push(markerData);
                 try{ lastQueuedEntitySignatures.set('inspection_point:' + rp.id, entityContentSignature(markerData)); }catch(e){}
+                pulledNewPoints++;
               }
-              mergedCount++;
+              mergedCount++; pulledPoints++;
             }
           });
         }
@@ -9520,7 +9578,7 @@
                 if(authoritativeRev !== null) edData.revision = authoritativeRev;
                 site.existingDamages.push(edData);
               }
-              mergedCount++;
+              mergedCount++; pulledDamages++;
             }
           });
         }
@@ -9540,7 +9598,7 @@
 
       await setSyncCursor(targetProjId, new Date().toISOString());
       console.log(`[Sync] pull completed: ${mergedCount} items merged`);
-      return { ok: true, mergedCount };
+      return { ok: true, mergedCount, breakdown: { facilities: pulledFacilities, points: pulledPoints, newPoints: pulledNewPoints, damages: pulledDamages } };
     }catch(err){
       console.warn('[Sync] pull failed', err);
       return { ok: false, reason: err.message };
@@ -9549,6 +9607,31 @@
 
   async function pullEntityChanges(opts){
     return await pullCloudChanges(opts && opts.projectId);
+  }
+
+  // 팀원이 마지막 "가져오기" 이후 새 자료를 올렸는지 가볍게 확인한다(테이블당
+  // 최신 updated_at 1건씩만, 나 자신의 업로드는 제외). 강제로 pull하지 않고
+  // "새 자료 있음" 힌트만 띄우는 용도.
+  async function checkTeamUpdatesAvailable(projectId){
+    try{
+      if(!supabaseClient || !supabaseSession || !navigator.onLine) return null;
+      const pid = projectId || currentProjectId;
+      if(!pid) return null;
+      const cursor = await getSyncCursor(pid);
+      if(!cursor) return { available: true, since: null };
+      const myId = supabaseSession.user.id;
+      for(const t of ['ps_inspection_points', 'ps_facilities', 'ps_existing_damages']){
+        const { data, error } = await supabaseClient.from(t)
+          .select('updated_at, updated_by')
+          .eq('project_id', pid)
+          .order('updated_at', { ascending: false })
+          .limit(5);
+        if(error || !Array.isArray(data)) continue;
+        const fromOthers = data.find(r => r.updated_at && r.updated_at > cursor && r.updated_by && r.updated_by !== myId);
+        if(fromOthers) return { available: true, since: cursor, latest: fromOthers.updated_at };
+      }
+      return { available: false, since: cursor };
+    }catch(e){ return null; }
   }
 
   // 상태줄 동기화 표시기
@@ -9575,13 +9658,16 @@
     }catch(e){ sbSync.style.display = 'none'; }
   }
 
-  // 오프라인 → 온라인 복귀 시 자동 동기화 리스너
+  // 오프라인 → 온라인 복귀 시: 내 자료를 클라우드에 올리는 것(processSyncQueue)만
+  // 자동으로 한다. 팀원 자료를 내 화면에 끌어오는 pull은 자동으로 하지 않는다 —
+  // 조사 도중에 원격 데이터가 끼어들면 병합 경합·혼란이 생기고(예전 버그의 주원인),
+  // "언제 팀원 자료가 들어왔는지" 사용자가 알 수 없게 된다. pull은 사용자가
+  // "팀원 최신자료 가져오기"를 직접 누를 때만 실행한다.
   window.addEventListener('online', async ()=>{
     diagLog('net', 'online 전환', { saveInProgress, syncProcessing });
     updateNet();
     try{
       await processSyncQueue();
-      await pullCloudChanges();
     }catch(error){
       console.warn('[Sync] online recovery failed', error);
       diagLog('sync', 'online 복귀 처리 실패: ' + (error && error.message || String(error)));
@@ -12697,6 +12783,7 @@
       num: nextNum++,
       photos: [],
       createdAt: new Date().toISOString(),
+      createdBy: (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null, // 조사자별 색상 구분용
       gps: lastGps ? Object.assign({}, lastGps) : null,
       locationSource: locationSource || 'manual',
       locationHistory: []
@@ -12919,6 +13006,53 @@
     commitNewMarker(newMarkerBase({ xPct, yPct, drawingId: currentDrawingId }));
   }
 
+  // ---------- 조사자별 색상 구분 ----------
+  // 같은 시설물을 여러 명이 나눠 조사하고 나중에 취합할 때, 어느 지점을 누가
+  // 찍었는지 지도·기록목록에서 색으로 구분한다. "나"는 항상 파랑, 팀원은 등장
+  // 순서대로 팔레트 색을 배정한다(캐시).
+  const SURVEYOR_PALETTE = ['#2E7D32','#E65100','#6A1B9A','#00838F','#AD1457','#558B2F','#4527A0','#EF6C00'];
+  const SURVEYOR_ME_COLOR = '#1565C0';
+  const _surveyorColorCache = new Map();
+  function myUserId(){
+    return (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null;
+  }
+  function surveyorColorFor(uid){
+    if(!uid || uid === myUserId()) return SURVEYOR_ME_COLOR;
+    if(_surveyorColorCache.has(uid)) return _surveyorColorCache.get(uid);
+    const c = SURVEYOR_PALETTE[_surveyorColorCache.size % SURVEYOR_PALETTE.length];
+    _surveyorColorCache.set(uid, c);
+    return c;
+  }
+  function surveyorLabelFor(uid){
+    if(!uid || uid === myUserId()) return '나';
+    return orgMemberEmailById[uid] || ('조사자 ' + String(uid).slice(0, 6));
+  }
+  // 현재 마커들 중 "나 아닌" 조사자가 있는지 → 있으면 지도/도면에 범례를 띄운다.
+  function renderSurveyorLegend(){
+    const others = new Map();
+    (markers || []).forEach(m => {
+      if(m.createdBy && m.createdBy !== myUserId()) others.set(m.createdBy, true);
+    });
+    ['stage', 'mapStage'].forEach(hostId => {
+      const host = document.getElementById(hostId);
+      if(!host) return;
+      if(getComputedStyle(host).position === 'static') host.style.position = 'relative';
+      let legend = host.querySelector('.surveyor-legend');
+      if(others.size === 0){ if(legend) legend.remove(); return; }
+      if(!legend){
+        legend = document.createElement('div');
+        legend.className = 'surveyor-legend';
+        legend.style.cssText = 'position:absolute; left:8px; bottom:8px; z-index:600; background:rgba(255,255,255,0.94); border:1px solid rgba(0,0,0,0.15); border-radius:8px; padding:6px 9px; font-size:11px; line-height:1.7; box-shadow:0 1px 4px rgba(0,0,0,0.2); pointer-events:none; max-width:60%;';
+        host.appendChild(legend);
+      }
+      const rows = ['<span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:50%;background:' + SURVEYOR_ME_COLOR + ';display:inline-block;"></span>나</span>'];
+      others.forEach((_, uid) => {
+        rows.push('<span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:50%;background:' + surveyorColorFor(uid) + ';display:inline-block;"></span>' + escapeHtml(surveyorLabelFor(uid)) + '</span>');
+      });
+      legend.innerHTML = rows.join('<br>');
+    });
+  }
+
   function renderMarkers(){
     const frame = document.getElementById('imgFrame');
     if(!frame) return;
@@ -12933,10 +13067,16 @@
       el.style.top = m.yPct + '%';
       el.textContent = m.num;
       el.dataset.id = m.id;
-      el.title = '지점 ' + m.num + (hasPhotos ? ' · 사진 ' + m.photos.length + '장' : ' · 미촬영');
+      // 팀원이 찍은 지점은 그 조사자 색으로 칠해 "누가 어디를" 한눈에 구분
+      if(m.createdBy && m.createdBy !== myUserId()){
+        el.style.background = surveyorColorFor(m.createdBy);
+        el.style.borderColor = surveyorColorFor(m.createdBy);
+      }
+      el.title = '지점 ' + m.num + ' · ' + surveyorLabelFor(m.createdBy) + (hasPhotos ? ' · 사진 ' + m.photos.length + '장' : ' · 미촬영');
       frame.appendChild(el);
     });
     updateMarkerScale();
+    renderSurveyorLegend();
   }
 
   function updateCounts(){
@@ -13013,9 +13153,11 @@
       const arrowHtml = dir != null
         ? '<div class="map-marker-arrow" style="transform:rotate(' + dir + 'deg);"></div>'
         : '';
+      const otherColor = (m.createdBy && m.createdBy !== myUserId()) ? surveyorColorFor(m.createdBy) : '';
+      const colorStyle = otherColor ? (' style="background:' + otherColor + ';border-color:' + otherColor + ';"') : '';
       const icon = L.divIcon({
         className: '',
-        html: arrowHtml + '<div class="map-marker' + (hasPhotos ? ' done' : '') + (activeMarkerId === m.id ? ' selected' : '') + '"><span>' + m.num + '</span></div>',
+        html: arrowHtml + '<div class="map-marker' + (hasPhotos ? ' done' : '') + (activeMarkerId === m.id ? ' selected' : '') + '"' + colorStyle + '><span>' + m.num + '</span></div>',
         iconSize: [26,26],
         iconAnchor: [13,26]
       });
@@ -13026,6 +13168,7 @@
         if(hasPhotos){ openPreview(m.id); } else { openCapture(m.id); }
       });
     });
+    renderSurveyorLegend();
   }
 
   function markerDirection(m){
@@ -13231,6 +13374,10 @@
 
     const item = document.createElement('div');
     item.className = 'log-item-mobile';
+    if(m.createdBy && m.createdBy !== myUserId()){
+      item.style.borderLeft = '4px solid ' + surveyorColorFor(m.createdBy);
+      item.title = '조사자: ' + surveyorLabelFor(m.createdBy);
+    }
     item.addEventListener('click', ()=> openPreview(m.id));
 
     const numEl = document.createElement('span');
@@ -13332,6 +13479,10 @@
   function renderLogItemDesktop(m){
     const item = document.createElement('div');
     item.className = 'log-item';
+    if(m.createdBy && m.createdBy !== myUserId()){
+      item.style.borderLeft = '4px solid ' + surveyorColorFor(m.createdBy);
+      item.title = '조사자: ' + surveyorLabelFor(m.createdBy);
+    }
     item.addEventListener('click', ()=>{
       focusRecordPoint(m.id);
       openPreview(m.id);
