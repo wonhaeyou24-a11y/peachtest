@@ -3661,6 +3661,12 @@
           locationSource: point.locationSource || 'manual',
           locationHistory: point.locationHistory || [],
           section: point.section || null,
+          // ★ revision을 durable 레코드에도 저장한다. 예전엔 안 담아서, 앱을 껐다
+          // 켜면 restoreInspectionPointsFromDurableStore가 복원한 마커의 revision이
+          // 항상 1로 돌아갔고(클라우드는 2 이상), 재시작할 때마다 같은 지점이 거짓
+          // 충돌로 떴다("충돌이 또 나온다"의 주원인).
+          revision: (typeof point.revision === 'number' ? point.revision : 1),
+          createdBy: point.createdBy || null,
           photos: (point.photos || []).map(p => ({
             id: p.id || null,
             photoRef: p.photoRef || null,
@@ -3716,6 +3722,8 @@
             locationSource: point.locationSource || 'manual',
             locationHistory: point.locationHistory || [],
             section: point.section || null,
+            revision: (typeof point.revision === 'number' ? point.revision : 1), // 재시작 후 거짓 충돌 방지(idbPutInspectionPoint 주석 참고)
+            createdBy: point.createdBy || null,
             photos: (point.photos || []).map(p => ({
               id: p.id || null,
               photoRef: p.photoRef || null,
@@ -8099,11 +8107,15 @@
             locationSource: p.locationSource || 'manual',
             locationHistory: p.locationHistory || [],
             section: p.section || '',
+            revision: (typeof p.revision === 'number' ? p.revision : 1), // durable에 저장된 revision 유지 → 재시작 후 거짓 충돌 방지
+            createdBy: p.createdBy || null,
             photos: (p.photos || []).map(ph => ({ ...ph })),
             createdAt: p.createdAt || new Date().toISOString()
           });
         } else {
           // durable store가 더 최신 데이터인 경우 안전하게 병합
+          if(typeof p.revision === 'number' && p.revision > (typeof existing.revision === 'number' ? existing.revision : 1)) existing.revision = p.revision;
+          if(p.createdBy && !existing.createdBy) existing.createdBy = p.createdBy;
           if(p.xPct != null && existing.xPct !== p.xPct) existing.xPct = p.xPct;
           if(p.yPct != null && existing.yPct !== p.yPct) existing.yPct = p.yPct;
           if(p.drawingId && existing.drawingId !== p.drawingId){
@@ -8319,6 +8331,7 @@
         num: m.num, xPct: m.xPct, yPct: m.yPct, drawingId: m.drawingId,
         lat: m.lat, lng: m.lng, gps: m.gps, locationSource: m.locationSource,
         locationHistory: m.locationHistory, section: m.section,
+        revision: m.revision, createdBy: m.createdBy, // 동기화로 revision이 바뀌면 durable도 다시 써서 재시작 후 유지
         photos: (m.photos || []).map(p => ({ id: p.id, photoRef: p.photoRef, note: p.note, damages: p.damages, exif: p.exif, createdAt: p.createdAt })),
         deletedAt: m.deletedAt
       });
@@ -9220,6 +9233,16 @@
             diagLog('sync', 'auto-reconcile: inspection_point ' + entityId, { adopted_revision: existing.revision });
             return { ok: true, reconciled: true };
           }
+          // 내가 만든 내 지점인데 revision만 어긋난 경우(재시작으로 로컬 revision이
+          // 1로 돌아갔다든지) — 남이 편집할 일이 거의 없는 내 소유 행이므로 진짜
+          // 충돌로 쌓지 말고 "내 로컬 버전"으로 밀어올린다(revision을 클라우드보다
+          // 높여서 재업로드). 이게 "재시작할 때마다 충돌이 또 뜬다"의 핵심 완화책.
+          const iOwnIt = (existing.user_id && existing.user_id === userId) || (point && point.createdBy === userId);
+          if(point && iOwnIt){
+            diagLog('sync', 'self-heal: inspection_point ' + entityId + ' (내 지점, 로컬 우선)', { local: ipBaseRevision, cloud: existing.revision });
+            // 아래 정상 업로드 경로로 흘려보내되, revision을 클라우드+1로 맞춘다
+            point.revision = existing.revision;
+          } else {
           await detectAndRecordConflict({
             organization_id: orgId,
             project_id: projId,
@@ -9232,9 +9255,12 @@
             cloud_data: existing.data || existing
           });
           return { ok: false, conflict: true, reason: `Revision mismatch: Local ${ipBaseRevision} vs Cloud ${existing.revision}` };
+          }
         }
 
-        const pointRevision = ipBaseRevision + 1;
+        // self-heal 분기에서 point.revision을 클라우드값으로 맞춰뒀을 수 있으니,
+        // 그보다 확실히 높은 값으로 올린다.
+        const pointRevision = Math.max(ipBaseRevision, (point && typeof point.revision === 'number') ? point.revision : 1) + 1;
         if(point) point.revision = pointRevision;
 
         // ★ FK 사전충족: 이 지점이 도면(drawing_id)을 참조하면, ps_inspection_points
