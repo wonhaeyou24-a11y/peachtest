@@ -9702,10 +9702,13 @@
       }
 
       // 2. Inspection Points Pull (마커 — ID 기준 합집합)
+      const remotePointIds = new Set();
+      const remotePointFacility = new Map(); // id -> facility_id (진단용)
       try{
         const { data: remotePts } = await supabaseClient.from('ps_inspection_points').select('*').eq('project_id', targetProjId);
         if(Array.isArray(remotePts)){
           remotePts.forEach(rp => {
+            remotePointIds.add(rp.id); remotePointFacility.set(rp.id, rp.facility_id);
             const site = sites.find(s => s.id === rp.facility_id);
             if(site){
               if(!site.markers) site.markers = [];
@@ -9851,9 +9854,15 @@
           name: s.name, id: s.id, 지점수: (s.markers||[]).length, 도면수: (s.drawings||[]).length,
           현재보는중: s.id===currentSiteId
         }));
+        // 로컬-온리 / 클라우드-온리 지점 id (이 프로젝트 전체 기준) — "1개 안 맞음"의 정체 추적용
+        const localIds = new Set();
+        (sites || []).filter(s=>s.projectId===targetProjId).forEach(s=>(s.markers||[]).forEach(m=>localIds.add(m.id)));
+        const localOnly = [...localIds].filter(id=>!remotePointIds.has(id));
+        const cloudOnly = [...remotePointIds].filter(id=>!localIds.has(id));
         diagLog('sync', 'pull 병합 결과', {
           merged: mergedCount, points: pulledPoints, newPoints: pulledNewPoints, damages: pulledDamages, facilities: pulledFacilities,
           전체_도면좌표지점: planPts, 전체_지도좌표지점: mapPts, 좌표없는지점: noCoordPts,
+          로컬만_있는지점: localOnly.slice(0,8), 클라우드만_있는지점: cloudOnly.slice(0,8),
           지점들의_도면id: Array.from(drawingIds).slice(0,5),
           현재도면id: (typeof currentDrawingId !== 'undefined') ? currentDrawingId : null,
           현재시설물_지점수: curSite ? (curSite.markers || []).length : 0,
@@ -13301,10 +13310,12 @@
 
   // ---------- 조사자별 색상 구분 ----------
   // 같은 시설물을 여러 명이 나눠 조사하고 나중에 취합할 때, 어느 지점을 누가
-  // 찍었는지 지도·기록목록에서 색으로 구분한다. "나"는 항상 파랑, 팀원은 등장
-  // 순서대로 팔레트 색을 배정한다(캐시).
-  const SURVEYOR_PALETTE = ['#2E7D32','#E65100','#6A1B9A','#00838F','#AD1457','#558B2F','#4527A0','#EF6C00'];
-  const SURVEYOR_ME_COLOR = '#1565C0';
+  // 찍었는지 지도·기록목록에서 색으로 구분한다.
+  //  - "나"는 무조건 노랑(도면 마커 기본색과 동일 — 범례와 실제 마커 색이 항상 일치).
+  //  - 팀원은 등장 순서대로 파랑 → 초록 → … 팔레트 색(캐시).
+  //  - 번호 글자는 배경 밝기에 따라 보색(어두우면 흰색, 밝으면 진한 갈색)으로.
+  const SURVEYOR_ME_COLOR = '#F2A93B'; // = CSS var(--amber). 나 = 노랑.
+  const SURVEYOR_PALETTE = ['#1565C0','#2E7D32','#6A1B9A','#C62828','#00838F','#EF6C00','#4527A0','#AD1457'];
   const _surveyorColorCache = new Map();
   function myUserId(){
     return (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null;
@@ -13315,6 +13326,15 @@
     const c = SURVEYOR_PALETTE[_surveyorColorCache.size % SURVEYOR_PALETTE.length];
     _surveyorColorCache.set(uid, c);
     return c;
+  }
+  // 배경색 위에서 잘 보이는 글자색(보색 계열): 밝은 배경 → 진한 갈색, 어두운 배경 → 흰색.
+  function surveyorTextColor(bgHex){
+    try{
+      const h = String(bgHex).replace('#','');
+      const r = parseInt(h.substr(0,2),16), g = parseInt(h.substr(2,2),16), b = parseInt(h.substr(4,2),16);
+      const lum = 0.299*r + 0.587*g + 0.114*b;
+      return lum > 150 ? '#1a1206' : '#ffffff';
+    }catch(e){ return '#ffffff'; }
   }
   function surveyorLabelFor(uid){
     if(!uid || uid === myUserId()) return '나';
@@ -13360,11 +13380,12 @@
       el.style.top = m.yPct + '%';
       el.textContent = m.num;
       el.dataset.id = m.id;
-      // 팀원이 찍은 지점은 그 조사자 색으로 칠해 "누가 어디를" 한눈에 구분
-      if(m.createdBy && m.createdBy !== myUserId()){
-        el.style.background = surveyorColorFor(m.createdBy);
-        el.style.borderColor = surveyorColorFor(m.createdBy);
-      }
+      // 조사자 색으로 칠한다. 나 = 노랑(기본), 팀원 = 파랑/초록/…. 번호는 보색으로.
+      const sc = surveyorColorFor(m.createdBy);
+      const tc = surveyorTextColor(sc);
+      el.style.background = sc;
+      el.style.color = tc;
+      el.style.borderColor = tc === '#ffffff' ? 'rgba(255,255,255,0.85)' : '#1a1206';
       el.title = '지점 ' + m.num + ' · ' + surveyorLabelFor(m.createdBy) + (hasPhotos ? ' · 사진 ' + m.photos.length + '장' : ' · 미촬영');
       frame.appendChild(el);
     });
@@ -13446,8 +13467,9 @@
       const arrowHtml = dir != null
         ? '<div class="map-marker-arrow" style="transform:rotate(' + dir + 'deg);"></div>'
         : '';
-      const otherColor = (m.createdBy && m.createdBy !== myUserId()) ? surveyorColorFor(m.createdBy) : '';
-      const colorStyle = otherColor ? (' style="background:' + otherColor + ';border-color:' + otherColor + ';"') : '';
+      const sc = surveyorColorFor(m.createdBy);
+      const tc = surveyorTextColor(sc);
+      const colorStyle = ' style="background:' + sc + ';color:' + tc + ';border-color:' + (tc === '#ffffff' ? 'rgba(255,255,255,0.85)' : '#1a1206') + ';"';
       const icon = L.divIcon({
         className: '',
         html: arrowHtml + '<div class="map-marker' + (hasPhotos ? ' done' : '') + (activeMarkerId === m.id ? ' selected' : '') + '"' + colorStyle + '><span>' + m.num + '</span></div>',
