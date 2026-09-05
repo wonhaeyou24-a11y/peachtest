@@ -24,8 +24,8 @@ UNION ALL SELECT 'damages', count(*) FROM public.ps_damages
 UNION ALL SELECT 'sync_conflicts', count(*) FROM public.ps_sync_conflicts
 UNION ALL SELECT 'photo_index', count(*) FROM public.ps_photo_index;
 
-SELECT id, name, organization_id, user_id, created_at
-FROM public.ps_projects ORDER BY created_at;
+SELECT id, name, organization_id, user_id, updated_at
+FROM public.ps_projects ORDER BY updated_at;
 
 
 -- [B] 전체 삭제 — "The Avengers" 조직/멤버십/초대는 남기고, 조사 데이터만 전부.
