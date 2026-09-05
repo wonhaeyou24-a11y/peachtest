@@ -6413,10 +6413,36 @@
     const target = list.find(c => c.id === conflictId);
     if(!target) return { ok:false, reason:'해당 충돌 기록을 찾을 수 없습니다.' };
 
+    // inspection_point/existing_damage 충돌은 project/facility와 달리 pushProjectToCloud
+    // (force)로는 전혀 안 고쳐진다 — 그 함수는 ps_projects/ps_facilities만 강제 덮어쓰고
+    // 마커·기존손상이 각자 갖는 별도 리비전(ps_inspection_points.revision 등)은 손대지
+    // 않아서, "로컬 버전 유지"를 눌러도 그 지점은 계속 옛 리비전에 갇힌 채 다음 저장마다
+    // 똑같은 충돌이 재발생했다(위 [[queueEntitySyncForFacility]] 재큐잉 버그와 맞물려서
+    // 팀원 지점이 계속 충돌로 뜨던 원인). "클라우드 버전 수용"도 이 두 타입은 아예
+    // 분기 자체가 없어 버튼을 눌러도 조용히 아무 일도 안 일어났다. 아래에서 두 타입
+    // 모두 실제 마커/기존손상 객체를 찾아 리비전을 직접 맞춰준다.
+    function findMarkerById(id){
+      for(const s of sites){ const m = (s.markers || []).find(mm => mm.id === id); if(m) return { site: s, marker: m }; }
+      return null;
+    }
+    function findExistingDamageById(id){
+      for(const s of sites){ const ed = (s.existingDamages || []).find(e => e.id === id); if(ed) return { site: s, damage: ed }; }
+      return null;
+    }
+
     if(resolutionType === 'keep_local'){
-      // 로컬 버전 유지: 클라우드로 강제 푸시
-      const curProj = projects.find(p => p.id === target.project_id);
-      if(curProj) await pushProjectToCloud(curProj, { silent:true, force:true });
+      if(target.entity_type === 'inspection_point' || target.entity_type === 'inspectionpoint'){
+        const found = findMarkerById(target.entity_id);
+        if(found) found.marker.revision = Math.max(found.marker.revision || 1, target.cloud_revision || 1);
+      } else if(target.entity_type === 'existing_damage' || target.entity_type === 'existingdamage'){
+        const found = findExistingDamageById(target.entity_id);
+        if(found) found.damage.revision = Math.max(found.damage.revision || 1, target.cloud_revision || 1);
+      } else {
+        // project/facility: 클라우드로 강제 푸시
+        const curProj = projects.find(p => p.id === target.project_id);
+        if(curProj) await pushProjectToCloud(curProj, { silent:true, force:true });
+      }
+      await saveState();
     } else if(resolutionType === 'accept_cloud'){
       // 클라우드 버전 수용: 로컬에 클라우드 데이터 적용
       if(target.entity_type === 'project' && target.cloud_data){
@@ -6425,6 +6451,24 @@
       } else if(target.entity_type === 'facility' && target.cloud_data){
         const sIdx = sites.findIndex(s => s.id === target.entity_id);
         if(sIdx >= 0) sites[sIdx] = Object.assign(sites[sIdx], target.cloud_data);
+      } else if((target.entity_type === 'inspection_point' || target.entity_type === 'inspectionpoint') && target.cloud_data){
+        const found = findMarkerById(target.entity_id);
+        if(found){
+          Object.assign(found.marker, target.cloud_data, { revision: target.cloud_revision || 1 });
+        } else if(target.project_id && typeof pullCloudChanges === 'function'){
+          // 로컬엔 아예 없던 지점(팀원이 새로 만든 것) — 어느 시설물 소속인지 이
+          // 충돌기록만으론 알 수 없으므로(project_id만 있고 facility_id가 없음),
+          // 자리를 추측해서 엉뚱한 시설물에 넣는 대신 ps_inspection_points의
+          // facility_id 컬럼까지 정확히 아는 pullCloudChanges로 정식으로 받아온다.
+          await pullCloudChanges(target.project_id);
+        }
+      } else if((target.entity_type === 'existing_damage' || target.entity_type === 'existingdamage') && target.cloud_data){
+        const found = findExistingDamageById(target.entity_id);
+        if(found){
+          Object.assign(found.damage, target.cloud_data, { revision: target.cloud_revision || 1 });
+        } else if(target.project_id && typeof pullCloudChanges === 'function'){
+          await pullCloudChanges(target.project_id);
+        }
       }
       await saveState();
     } else if(resolutionType === 'save_copy'){
@@ -8434,28 +8478,76 @@
   // pullCloudChanges(아래, 4번 안전화와 짝)가 이걸 ID 기준으로 합쳐서 병합한다.
   // 도면(drawings)은 아직 포함하지 않는다 — 이미지가 커서 큐 항목으로 담기엔
   // 부담이 크다. 도면은 기존처럼 수동 버튼으로만 올린다.
+  //
+  // ★ 내용이 안 바뀐 항목은 다시 큐에 안 넣는다 — 예전엔 저장할 때마다 이 시설물의
+  // 마커·기존손상을 "전부" 무조건 다시 큐잉했다. 지점이 70~80개인 시설물에서
+  // 마커 1개만 고쳐도 나머지 전부(팀원이 만든, 내가 손도 안 댄 지점 포함)가 매번
+  // 재큐잉되면서 (1) 대기열이 계속 부풀고(진단로그 queuePendingCount 급증의 원인),
+  // (2) 아직 한 번도 성공 동기화를 못 한 항목(예: 충돌 중인 팀원 지점)은
+  // revision 스냅샷이 계속 옛값(1)으로 다시 찍혀 리비전이 영원히 못 올라가고
+  // 매번 같은 충돌이 재발생했다(팀원 지점 2개가 계속 충돌로 뜨던 원인) —
+  // 그리고 그렇게 "대기 중"으로 큐에 계속 남아있으니 pullCloudChanges의
+  // pendingKeys 보호로직이 "로컬에 손댄 게 있다"고 착각해 그 지점은 영원히
+  // 다시 못 당겨왔다("팀원 최신자료 가져오기"가 매번 "최신조사 없음"으로 뜨던 원인).
+  const lastQueuedEntitySignatures = new Map(); // `${entityType}:${entityId}` -> 마지막으로 큐에 넣은 내용의 서명
+  function entityContentSignature(obj){
+    try{
+      const copy = { ...obj };
+      delete copy.revision;
+      if(Array.isArray(copy.photos)) copy.photos = copy.photos.map(stripPhotoHeavyFields);
+      return JSON.stringify(copy);
+    }catch(e){
+      return null; // 직렬화 실패시 캐시를 못 믿으니 매번 큐잉(=항상 불일치) 되도록 null 반환
+    }
+  }
+  function facilityMetaSignature(site){
+    try{
+      const copy = { ...site };
+      delete copy.markers; delete copy.existingDamages; delete copy.drawings; delete copy.trash; delete copy.revision;
+      return JSON.stringify(copy);
+    }catch(e){
+      return null;
+    }
+  }
   function queueEntitySyncForFacility(site){
     if(!site || !site.id) return;
-    const items = [{
-      entityType: 'facility', entityId: site.id, projectId: site.projectId, facilityId: site.id,
-      revision: (typeof site.revision === 'number' ? site.revision : 1),
-      payload: { id: site.id }
-    }];
+    const items = [];
+
+    const facKey = 'facility:' + site.id;
+    const facSig = facilityMetaSignature(site);
+    if(facSig === null || lastQueuedEntitySignatures.get(facKey) !== facSig){
+      items.push({
+        entityType: 'facility', entityId: site.id, projectId: site.projectId, facilityId: site.id,
+        revision: (typeof site.revision === 'number' ? site.revision : 1),
+        payload: { id: site.id }
+      });
+      if(facSig !== null) lastQueuedEntitySignatures.set(facKey, facSig);
+    }
+
     (site.markers || []).forEach(m=>{
+      const key = 'inspection_point:' + m.id;
+      const sig = entityContentSignature(m);
+      if(sig !== null && lastQueuedEntitySignatures.get(key) === sig) return; // 내용 그대로면 재큐잉 안 함
       items.push({
         entityType: 'inspection_point', entityId: m.id, projectId: site.projectId, facilityId: site.id,
         revision: (typeof m.revision === 'number' ? m.revision : 1),
         payload: { id: m.id }
       });
+      if(sig !== null) lastQueuedEntitySignatures.set(key, sig);
     });
     // isDeleted 항목도 포함 — 팀원의 소프트삭제 상태 자체가 동기화돼야 하는 데이터다.
     (site.existingDamages || []).forEach(ed=>{
+      const key = 'existing_damage:' + ed.id;
+      const sig = entityContentSignature(ed);
+      if(sig !== null && lastQueuedEntitySignatures.get(key) === sig) return;
       items.push({
         entityType: 'existing_damage', entityId: ed.id, projectId: site.projectId, facilityId: site.id,
         revision: (typeof ed.revision === 'number' ? ed.revision : 1),
         payload: { id: ed.id }
       });
+      if(sig !== null) lastQueuedEntitySignatures.set(key, sig);
     });
+    if(items.length === 0) return;
     enqueueEntitySyncBatch(items).catch(()=>{});
   }
 
@@ -8922,6 +9014,12 @@
 
         const pointRevision = expectedRevision + 1;
         if(point) point.revision = pointRevision;
+        // 사진 원본(base64)은 이미 ps-photos 스토리지에 별도 업로드되고(cloudRef로
+        // 참조), 여기 data 컬럼엔 필요 없다 — 스트리핑 없이 그대로 올리면 저장할
+        // 때마다(이 엔티티가 재큐잉될 때마다) 이미 올라간 사진을 통째로 다시
+        // 업로드하는 셈이라 동기화가 느려지고 클라우드 저장공간도 계속 낭비된다
+        // (deletedSites/site.trash/충돌기록에 이어 네 번째로 발견된 동일 누수).
+        const lightPoint = point ? { ...point, photos: (point.photos || []).map(stripPhotoHeavyFields) } : {};
 
         const { error: upErr } = await supabaseClient.from('ps_inspection_points').upsert({
           id: entityId,
@@ -8933,7 +9031,7 @@
           num: (point && point.num) || 1,
           x: point ? (point.xPct != null ? point.xPct : (point.x != null ? point.x : null)) : null,
           y: point ? (point.yPct != null ? point.yPct : (point.y != null ? point.y : null)) : null,
-          data: point || {},
+          data: lightPoint,
           revision: pointRevision,
           schema_version: 8,
           device_id: (point && point.deviceId) || devId,
@@ -9027,13 +9125,14 @@
 
         const exRevision = expectedRevision + 1;
         if(exDmg) exDmg.revision = exRevision; // 실제 site.existingDamages 안의 객체이므로 이제 정말로 반영됨
+        const lightExDmg = { ...exDmg, photos: (exDmg.photos || []).map(stripPhotoHeavyFields) }; // 사진 원본은 ps-photos에 별도 업로드됨(위 inspection_point와 동일한 이유)
         const { error: upErr } = await supabaseClient.from('ps_existing_damages').upsert({
           id: entityId,
           facility_id: facId,
           project_id: projId,
           user_id: userId,
           organization_id: orgId,
-          data: exDmg,
+          data: lightExDmg,
           revision: exRevision,
           schema_version: 8,
           device_id: exDmg.deviceId || devId,
