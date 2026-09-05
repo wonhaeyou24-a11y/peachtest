@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-shot-v25-manual-pull-surveyor-colors'; // 자동 pull 제거(수동만) + 팀원자료 카드(마지막시각/새자료힌트/요약) + 조사자별 색상 구분
+const CACHE_NAME = 'point-shot-v26-no-push-others-pull-render-diag'; // 팀원 지점은 push 안 함(RLS 거부 근절) + pull 후 강제 재렌더 + pull 병합 진단로그 + 중복버튼 제거
 // 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
 // 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
 // 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.

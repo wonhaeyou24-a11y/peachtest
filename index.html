@@ -2524,7 +2524,6 @@
     </div>
     <div class="modal-foot">
       <button class="primary" id="btnDashboardBackup" style="display:none;">📦 지금 백업</button>
-      <button class="ghost" id="btnPullTeamChanges" style="display:none;" title="다른 팀원이 같은 프로젝트에 올린 최신 지점·손상·사진을 지금 이 프로젝트에 바로 반영합니다(온라인 상태일 때만).">🔄 팀원 최신자료 가져오기</button>
       <button class="primary" id="btnSyncDashboardRetry" style="display:none;">⚡ 지금 전체 동기화 / 재시도</button>
     </div>
   </div>
@@ -6827,10 +6826,8 @@
     if(btnEl){ btnEl.disabled = false; btnEl.textContent = restore || '🔄 팀원 최신자료 가져오기'; }
     if(typeof renderSyncDashboard === 'function') renderSyncDashboard();
   }
-  const btnPullTeamChanges = document.getElementById('btnPullTeamChanges');
-  if(btnPullTeamChanges){
-    btnPullTeamChanges.addEventListener('click', ()=> doPullTeamChanges(btnPullTeamChanges));
-  }
+  // (footer의 "팀원 최신자료 가져오기" 버튼은 제거됨 — 동기화 탭 본문의
+  //  "👥 팀원 조사자료" 카드 버튼(#btnPullTeamInBody)으로 일원화)
 
   window.addEventListener('online', ()=>{
     syncState.status = 'synced';
@@ -7546,7 +7543,6 @@
     });
     if(btnDashboardBackup) btnDashboardBackup.style.display = (tab === 'safety') ? '' : 'none';
     if(btnSyncDashboardRetry) btnSyncDashboardRetry.style.display = (tab === 'sync') ? '' : 'none';
-    if(btnPullTeamChanges) btnPullTeamChanges.style.display = (tab === 'sync') ? '' : 'none';
     if(tab === 'safety') renderSafetyDashboard();
     else if(tab === 'sync') renderSyncDashboard();
     else if(tab === 'diag') renderDiagnosticsModal();
@@ -8599,7 +8595,16 @@
       if(facSig !== null) lastQueuedEntitySignatures.set(facKey, facSig);
     }
 
+    // 팀원이 만든 항목(createdBy가 나 아님)은 애초에 큐에 안 넣는다. 이 기기는
+    // 그 행을 클라우드에서 수정할 RLS 권한이 없어(남의 지점) 업로드가 매번
+    // 거부되고 무한 재시도되며 대기열이 부풀었다(진단로그의 "row-level security
+    // policy" 대량 실패). "취합"은 pull(가져오기)로만 하고, push(올리기)는 내
+    // 항목만 한다.
+    const meId = (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null;
+    const notMine = (obj)=> obj && obj.createdBy && meId && obj.createdBy !== meId;
+
     (site.markers || []).forEach(m=>{
+      if(notMine(m)) return; // 팀원 지점은 내가 올리지 않음
       const key = 'inspection_point:' + m.id;
       const sig = entityContentSignature(m);
       if(sig !== null && lastQueuedEntitySignatures.get(key) === sig) return; // 내용 그대로면 재큐잉 안 함
@@ -8612,6 +8617,7 @@
     });
     // isDeleted 항목도 포함 — 팀원의 소프트삭제 상태 자체가 동기화돼야 하는 데이터다.
     (site.existingDamages || []).forEach(ed=>{
+      if(notMine(ed)) return;
       const key = 'existing_damage:' + ed.id;
       const sig = entityContentSignature(ed);
       if(sig !== null && lastQueuedEntitySignatures.get(key) === sig) return;
@@ -8880,7 +8886,7 @@
       const now = Date.now();
       let changed = false;
       let syncedCount = 0;
-      let conflictCount = 0, failedCount = 0, reconciledCount = 0;
+      let conflictCount = 0, failedCount = 0, reconciledCount = 0, skippedCount = 0;
       const failReasons = {}; // 실패 사유별 집계 — 진단로그로 "왜 86건이 안 빠지는지" 확인용
 
       const totalPendingBefore = queue.filter(q => q.status === 'pending' || q.status === 'failed').length;
@@ -8895,6 +8901,7 @@
           item.syncedAt = new Date().toISOString();
           syncedCount++;
           if(result.reconciled) reconciledCount++;
+          if(result.skipped) skippedCount++;
           changed = true;
           console.log(`[Sync] success: ${item.entityType} (${item.entityId})`);
         } else if(result && result.conflict){
@@ -8930,10 +8937,10 @@
       }
 
       // 큐가 안 빠지는 원인을 진단로그로 남긴다 — 성공만 있거나 아무것도 안 했으면 조용히.
-      if(failedCount > 0 || conflictCount > 0){
+      if(failedCount > 0 || conflictCount > 0 || skippedCount > 0){
         diagLog('sync', 'queue 처리 결과', {
           totalPendingBefore, batchSize: batch.length,
-          synced: syncedCount, reconciled: reconciledCount, conflict: conflictCount, failed: failedCount,
+          synced: syncedCount, reconciled: reconciledCount, skipped: skippedCount, conflict: conflictCount, failed: failedCount,
           failReasons
         });
       }
@@ -9151,10 +9158,17 @@
         // 수 있으므로 둘 중 큰 값을 기준으로 삼는다(project 브랜치와 동일한 처리 —
         // 이게 없으면 pull로 최신 revision을 받아와도 큐에 남은 옛 스냅샷 때문에 계속 충돌).
         const ipBaseRevision = Math.max(expectedRevision, (point && typeof point.revision === 'number') ? point.revision : 1);
-        const { data: existing, error: checkErr } = await supabaseClient.from('ps_inspection_points').select('revision, data').eq('id', entityId).maybeSingle();
+        const { data: existing, error: checkErr } = await supabaseClient.from('ps_inspection_points').select('revision, data, user_id').eq('id', entityId).maybeSingle();
+        // 팀원이 만든 지점(클라우드 행의 주인이 내가 아님)은 내가 올리지 않는다.
+        // RLS상 남의 행은 수정 권한이 없어 어차피 거부되고, 이 기기가 그걸 계속
+        // 재시도하며 대기열을 부풀렸다. 내가 만든 로컬 표시(createdBy)가 없고
+        // 클라우드 주인도 남이면 확실히 남의 것 — 큐에서 제외.
+        if(!checkErr && existing && op !== 'delete' && existing.user_id && existing.user_id !== userId
+           && !(point && point.createdBy === userId)){
+          if(point && typeof existing.revision === 'number') point.revision = Math.max(point.revision || 1, existing.revision);
+          return { ok: true, skipped: true, reason: 'not-owner' };
+        }
         // 클라우드에 이미 있고 내용이 로컬과 같으면 올릴 게 없다 — 넘어간다.
-        // (팀원이 만든 지점을 pull만 해온 경우 RLS상 수정 권한이 없어 업로드가 계속
-        // 거부돼 큐에 영영 남던 문제 — 진단로그의 "row-level security policy" 대량 실패.)
         if(!checkErr && existing && point && op !== 'delete' && sameSyncedContent(point, existing.data || existing)){
           if(typeof existing.revision === 'number') point.revision = Math.max(point.revision || 1, existing.revision);
           return { ok: true, skipped: true };
@@ -9276,7 +9290,12 @@
         const orgId = (pObj && pObj.organizationId) || null;
 
         const edBaseRevision = Math.max(expectedRevision, (exDmg && typeof exDmg.revision === 'number') ? exDmg.revision : 1);
-        const { data: existing, error: checkErr } = await supabaseClient.from('ps_existing_damages').select('revision, data').eq('id', entityId).maybeSingle();
+        const { data: existing, error: checkErr } = await supabaseClient.from('ps_existing_damages').select('revision, data, user_id').eq('id', entityId).maybeSingle();
+        if(!checkErr && existing && op !== 'delete' && existing.user_id && existing.user_id !== userId
+           && !(exDmg && exDmg.createdBy === userId)){
+          if(exDmg && typeof existing.revision === 'number') exDmg.revision = Math.max(exDmg.revision || 1, existing.revision);
+          return { ok: true, skipped: true, reason: 'not-owner' };
+        }
         if(!checkErr && existing && exDmg && Object.keys(exDmg).length && op !== 'delete' && sameSyncedContent(exDmg, existing.data || existing)){
           if(typeof existing.revision === 'number') exDmg.revision = Math.max(exDmg.revision || 1, existing.revision);
           return { ok: true, skipped: true };
@@ -9584,6 +9603,31 @@
         }
       }catch(e){}
 
+      // "가져왔다는데 화면에 안 뜬다"의 원인을 좁히기 위한 진단: 받은 지점들이
+      // 어떤 종류인지(도면 좌표 xPct/yPct vs 지도 좌표 lat/lng), 지금 보고 있는
+      // 시설물/도면과 맞는지, 지금 어느 모드인지 기록한다.
+      try{
+        let planPts = 0, mapPts = 0, noCoordPts = 0;
+        const drawingIds = new Set();
+        (sites || []).forEach(s=>{
+          if(s.id !== currentSiteId && targetProjId) { /* 다른 시설물 지점도 셈에 포함 */ }
+          (s.markers || []).forEach(m=>{
+            if(m.xPct != null && m.yPct != null){ planPts++; if(m.drawingId) drawingIds.add(m.drawingId); }
+            else if(m.lat != null && m.lng != null) mapPts++;
+            else noCoordPts++;
+          });
+        });
+        const curSite = sites.find(s=>s.id===currentSiteId);
+        diagLog('sync', 'pull 병합 결과', {
+          merged: mergedCount, points: pulledPoints, newPoints: pulledNewPoints, damages: pulledDamages, facilities: pulledFacilities,
+          전체_도면좌표지점: planPts, 전체_지도좌표지점: mapPts, 좌표없는지점: noCoordPts,
+          지점들의_도면id: Array.from(drawingIds).slice(0,5),
+          현재도면id: (typeof currentDrawingId !== 'undefined') ? currentDrawingId : null,
+          현재시설물_지점수: curSite ? (curSite.markers || []).length : 0,
+          현재모드: (document.getElementById('mapStage') && document.getElementById('mapStage').style.display !== 'none') ? '지도모드' : '도면모드'
+        });
+      }catch(e){}
+
       if(mergedCount > 0){
         await storageSet(STORAGE_KEY, {
           schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -9591,8 +9635,21 @@
           currentSiteId, projects, currentProjectId,
           deletedSites: lightweightDeletedSitesFor(deletedSites)
         });
+        // 현재 보고 있는 시설물의 라이브 markers 배열도 갱신된 site.markers로 다시 맞춘다
+        // (안 그러면 pull이 site.markers는 채웠는데 화면이 참조하는 markers는 옛것이라 안 보임).
+        try{
+          const curSite = sites.find(s=>s.id===currentSiteId);
+          if(curSite && Array.isArray(curSite.markers) && typeof markers !== 'undefined'){
+            markers.length = 0;
+            curSite.markers.forEach(m=> markers.push(m));
+            if(typeof normalizePhotos === 'function'){ markers.forEach(m=>{ try{ normalizePhotos(m); }catch(e){} }); }
+          }
+        }catch(e){}
         refreshStageHeader();
         renderMarkers();
+        if(typeof renderMapMarkers === 'function'){ try{ renderMapMarkers(); }catch(e){} }
+        if(typeof renderLog === 'function'){ try{ renderLog(); }catch(e){} }
+        if(typeof updateCounts === 'function'){ try{ updateCounts(); }catch(e){} }
         if(typeof renderExistingDamages === 'function'){ try{ renderExistingDamages(); }catch(e){} }
       }
 
