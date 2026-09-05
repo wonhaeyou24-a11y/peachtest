@@ -8071,18 +8071,34 @@
   // 써서, 5분마다(+ 백업 3개 보관) 사진 원본을 통째로 다시 저장하고 있었다.
   // 사진 원본은 어차피 photoBlobs 스토어에 별도로 안전하게 있으므로, 나중에
   // 다시 불러올 때 hydratePhotoBlobs()가 채워준다 — 스냅샷/백업에는 필요 없다.
+  function stripPhotoHeavyFields(p){
+    const pCopy = { ...p };
+    delete pCopy.src;
+    delete pCopy.original;
+    return pCopy;
+  }
   function stripHeavyPhotoFields(siteObj){
     return {
       ...siteObj,
       markers: (siteObj.markers || []).map(m => ({
         ...m,
-        photos: (m.photos || []).map(p => {
-          const pCopy = { ...p };
-          delete pCopy.src;
-          delete pCopy.original;
-          return pCopy;
-        })
-      }))
+        photos: (m.photos || []).map(stripPhotoHeavyFields)
+      })),
+      // site.trash(지점/사진 단위 휴지통)도 markers와 완전히 같은 문제를 갖고
+      // 있었다 — 지점을 삭제하면 그 마커 전체가(사진 원본 포함) trash 배열로
+      // 옮겨지고, 사진 1장만 지워도 그 사진 원본이 통째로 trash에 들어가는데,
+      // 이 배열은 지금까지 한 번도 경량화 대상이 아니어서 "완전삭제"를 누르기
+      // 전까지 저장할 때마다 그 사진 원본들이 계속 다시 기록되고 있었다
+      // (deletedSites와 동일한 버그, 같은 방식으로 수정).
+      trash: (siteObj.trash || []).map(item=>{
+        if(item.type === 'marker' && item.data){
+          return { ...item, data: { ...item.data, photos: (item.data.photos || []).map(stripPhotoHeavyFields) } };
+        }
+        if(item.type === 'photo' && item.data){
+          return { ...item, data: stripPhotoHeavyFields(item.data) };
+        }
+        return item;
+      })
     };
   }
   function lightweightSitesFor(sitesArr){
@@ -8764,12 +8780,20 @@
 
       // 3. ps_inspection_points Sync
       else if(entityType === 'inspection_point' || entityType === 'inspectionpoint'){
-        let point = payload;
-        if(!point){
-          for(const s of sites){
-            const found = (s.markers || []).find(m => m.id === entityId);
-            if(found){ point = found; if(!item.facilityId) item.facilityId = s.id; if(!item.projectId) item.projectId = s.projectId; break; }
-          }
+        // payload는 큐 항목에 { id }만 담긴 가벼운 표시자다(마커 전체를 큐에 매번
+        // 복사하면 무거워지므로) — 그런데 payload가 이미 참(truthy)이라 "point가
+        // 없을 때만 실제 객체를 찾는다"는 원래 조건이 한 번도 실행되지 않고,
+        // 이 빈 표시자를 실제 데이터인 것처럼 그대로 업로드하고 있었다(xPct/yPct/
+        // photos 등 전부 비어서 올라감). 게다가 이 표시자에 revision을 기록해봐야
+        // 곧바로 버려지는 임시 객체라 실제 마커의 revision이 전혀 갱신되지 않았고,
+        // 그래서 다음 저장마다 "이미 지나간" 낮은 revision을 다시 보내 클라우드와
+        // 계속 충돌 처리되고 있었다(팀원 없이 혼자 써도 충돌이 계속 쌓이던 원인).
+        // facility 브랜치(sites.find(...) || payload)와 동일하게 "항상 실제 객체를
+        // 먼저 찾는다" 방식으로 통일한다.
+        let point = null;
+        for(const s of sites){
+          const found = (s.markers || []).find(m => m.id === entityId);
+          if(found){ point = found; if(!item.facilityId) item.facilityId = s.id; if(!item.projectId) item.projectId = s.projectId; break; }
         }
         if(!point && op !== 'delete') return { ok: true };
         const projId = item.projectId || currentProjectId;
@@ -8868,7 +8892,15 @@
 
       // 5. ps_existing_damages Sync
       else if(entityType === 'existing_damage' || entityType === 'existingdamage'){
-        const exDmg = payload || {};
+        // inspection_point와 동일한 문제 — payload는 { id }뿐인 표시자인데 그걸
+        // 그대로 실데이터처럼 썼다. 실제 객체를 site.existingDamages에서 먼저 찾는다.
+        let exDmg = null;
+        for(const s of sites){
+          const found = (s.existingDamages || []).find(ed => ed.id === entityId);
+          if(found){ exDmg = found; if(!item.facilityId) item.facilityId = s.id; if(!item.projectId) item.projectId = s.projectId; break; }
+        }
+        if(!exDmg && op !== 'delete') return { ok: true };
+        exDmg = exDmg || {};
         const projId = item.projectId || currentProjectId;
         const facId = item.facilityId || currentSiteId;
         const pObj = projects.find(p => p.id === projId);
@@ -8891,6 +8923,7 @@
         }
 
         const exRevision = expectedRevision + 1;
+        if(exDmg) exDmg.revision = exRevision; // 실제 site.existingDamages 안의 객체이므로 이제 정말로 반영됨
         const { error: upErr } = await supabaseClient.from('ps_existing_damages').upsert({
           id: entityId,
           facility_id: facId,
@@ -11132,11 +11165,18 @@
       purgeBtn.textContent = '완전삭제';
       purgeBtn.addEventListener('click', async ()=>{
         if(!confirm('완전히 삭제하면 되돌릴 수 없습니다. 계속할까요?')) return;
-        if(item.type === 'marker'){ await deleteOrphanedPhotoBlobs([item.data]); }
+        await diagLogMemorySnapshot('휴지통 항목 완전삭제 전');
+        if(item.type === 'marker'){
+          await deleteOrphanedPhotoBlobs([item.data]);
+          // deleteMarker()가 지점을 휴지통으로 옮길 때는 durable 기록을 소프트삭제만
+          // 해뒀다(복원 가능하게) — 여기서 완전삭제를 누르면 그 기록도 진짜로 지운다.
+          try{ await idbDeleteInspectionPoint(item.data.id, true); }catch(e){}
+        }
         else if(item.type === 'photo'){ await deleteOrphanedPhotoBlobs([item.data]); }
         trash = trash.filter(x=>x!==item);
         renderTrash();
-        saveState();
+        await saveState();
+        await diagLogMemorySnapshot('휴지통 항목 완전삭제 후');
       });
       actions.appendChild(restoreBtn);
       actions.appendChild(purgeBtn);
@@ -11185,10 +11225,18 @@
       purgeBtn.textContent = '완전삭제';
       purgeBtn.addEventListener('click', async ()=>{
         if(!confirm('"' + s.name + '"을(를) 완전히 삭제하면 되돌릴 수 없습니다.\n(조사점 ' + pointCount + '개, 사진 ' + photoCount + '장이 모두 사라집니다)\n계속할까요?')) return;
+        await diagLogMemorySnapshot('시설물 완전삭제 전 (' + s.name + ')');
         await deleteOrphanedPhotoBlobs(s.markers || []);
+        // photoBlobs만 지우고 durable inspectionPoints 스토어의 지점 기록은 지금까지
+        // 그대로 남아있었다 — 사진 원본만큼 크진 않지만(사진 메타데이터만) 완전삭제라는
+        // 이름에 안 맞고, 계속 쌓이면 이것도 무시 못할 크기가 된다. 같이 정리한다.
+        for(const m of (s.markers || [])){
+          try{ await idbDeleteInspectionPoint(m.id, true); }catch(e){}
+        }
         deletedSites = deletedSites.filter(x => x !== item);
         renderSiteTrash();
-        saveState();
+        await saveState();
+        await diagLogMemorySnapshot('시설물 완전삭제 후 (' + s.name + ')');
       });
       actions.appendChild(restoreBtn);
       actions.appendChild(purgeBtn);
