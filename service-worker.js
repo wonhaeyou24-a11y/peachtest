@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-shot-v15-batch-tx-fix'; // 지점 저장 트랜잭션 일괄화(실기기 5~14초 저장지연 수정) + 구간 복구 누락 수정
+const CACHE_NAME = 'point-shot-v16-section-per-damage'; // 구간(section)을 지점단위→손상단위 칩선택으로 재설계
 // 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
 // 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
 // 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.

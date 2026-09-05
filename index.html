@@ -2097,10 +2097,6 @@
       <button class="close-x" id="closePreview" aria-label="닫기">✕</button>
     </div>
     <div class="modal-body">
-      <div class="damage-field" id="pointSectionField" style="margin-bottom:10px;">
-        <label>구간</label>
-        <div class="damage-type-scroll" id="pointSectionChips"></div>
-      </div>
       <div class="preview-grid" id="previewGrid"></div>
     </div>
     <div class="modal-foot">
@@ -2950,7 +2946,6 @@
   const previewModal = document.getElementById('previewModal');
   const previewTitle = document.getElementById('previewTitle');
   const previewGrid = document.getElementById('previewGrid');
-  const pointSectionChips = document.getElementById('pointSectionChips');
   const closePreview = document.getElementById('closePreview');
   const btnAddMorePhotos = document.getElementById('btnAddMorePhotos');
   const btnRemoveAllPhotos = document.getElementById('btnRemoveAllPhotos');
@@ -7726,7 +7721,7 @@
             ? (detailedCmp.some(r => r.delta > 0) ? '증가' : detailedCmp.some(r => r.delta < 0) ? '감소' : (detailedCmp.every(r => r.delta === 0) ? '동일' : '미확인'))
             : (cmp.unavailable ? '미확인' : (cmp.delta > 0 ? '증가' : cmp.delta < 0 ? '감소' : '동일'));
           rows.push({
-            '구분':'기존', '구간': ed.section || m.section || '', '구성요소': d.component || ed.component || '', '위치': ed.drawingPosition || '',
+            '구분':'기존', '구간': d.section || ed.section || m.section || '', '구성요소': d.component || ed.component || '', '위치': ed.drawingPosition || '',
             '손상명': ed.damageName || d.damageType || '', '조사지점': '지점 ' + m.num,
             '기존규모': ed.measurement || '', '현재규모': d.measurement || '',
             '증감치수': cmp.unavailable ? '' : (cmp.delta > 0 ? '+' : '') + cmp.delta.toFixed(2),
@@ -7748,7 +7743,7 @@
           if(d.damageOrigin !== 'NEW') return;
           countedDamageIds.add(d.id);
           rows.push({
-            '구분':'신규', '구간': m.section || '', '구성요소': d.component || '', '위치':'',
+            '구분':'신규', '구간': d.section || m.section || '', '구성요소': d.component || '', '위치':'',
             '손상명': d.damageType || '', '조사지점': '지점 ' + m.num,
             '기존규모':'', '현재규모': d.measurement || '',
             '증감치수':'', '증감률':'', '증감상세':'', '증감여부':'신규',
@@ -7768,7 +7763,7 @@
           if(countedDamageIds.has(d.id)) return;
           if(!d.damageType && !d.measurement && !d.cause) return;
           rows.push({
-            '구분':'미분류', '구간': m.section || '', '구성요소': d.component || '', '위치':'',
+            '구분':'미분류', '구간': d.section || m.section || '', '구성요소': d.component || '', '위치':'',
             '손상명': d.damageType || '(손상명 미입력)', '조사지점': '지점 ' + m.num,
             '기존규모':'', '현재규모': d.measurement || '',
             '증감치수':'', '증감률':'', '증감상세':'', '증감여부':'미분류(신규/기존 구분 필요)',
@@ -7807,6 +7802,21 @@
           delete p.damage;
         }
       });
+      // 구간(section)을 "지점(마커) 단위 한 번"에서 "손상마다 직접 선택"으로 바꿨다
+      // — 현장 조사 동선이 항상 순서대로 진행되지 않아, 한 지점에 여러 구간의
+      // 손상이 섞여 있을 수 있다는 피드백에 따른 변경. 예전 방식으로 이미
+      // 지점에 입력해뒀던 구간값은 그 지점의 손상들 중 아직 구간이 없는 것에
+      // 딱 한 번만 물려주고(데이터 유실 방지), 그 다음부터는 손상마다 독립
+      // 관리한다 — 플래그 없이 매번 다시 물려주면 사용자가 나중에 일부러
+      // 지운 값을 재실행할 때마다 되살리는 사고가 난다.
+      if(m.section && !m.sectionMigratedToDamages){
+        m.photos.forEach(p=>{
+          (p.damages || []).forEach(d=>{
+            if(!d.section) d.section = m.section;
+          });
+        });
+        m.sectionMigratedToDamages = true;
+      }
     }
   }
 
@@ -13530,51 +13540,10 @@
     }
   }
 
-  // 구간(예: 1구간/2구간) — 손상이 아니라 "지점" 단위로 딱 한 번만 지정한다.
-  // 같은 지점에서 찍은 사진·손상은 전부 이 구간을 그대로 물려받는다(외관조사
-  // 보고서를 구간별로 나눠 정리할 때 이 값을 기준으로 묶는다). 시설물마다 한 번
-  // 쓴 구간 이름은 site.sectionList에 쌓여서 다음 지점부터는 칩으로 바로 고를 수
-  // 있다 — "1구간"/"1 구간"처럼 표기가 갈려서 안 묶이는 걸 방지.
-  function renderPointSectionChips(m){
-    if(!pointSectionChips) return;
-    pointSectionChips.innerHTML = '';
-    const site = currentSiteObj();
-    if(!site) return;
-    if(!Array.isArray(site.sectionList)) site.sectionList = [];
-    const options = site.sectionList.slice();
-    if(m.section && !options.includes(m.section)) options.push(m.section);
-
-    function selectSection(name){
-      m.section = name || '';
-      if(name && !site.sectionList.includes(name)) site.sectionList.push(name);
-      renderPointSectionChips(m);
-      saveState();
-    }
-
-    options.forEach(name=>{
-      const chip = document.createElement('button');
-      chip.type = 'button';
-      chip.className = 'damage-type-btn' + (m.section === name ? ' active' : '');
-      chip.textContent = name;
-      chip.addEventListener('click', ()=> selectSection(m.section === name ? '' : name));
-      pointSectionChips.appendChild(chip);
-    });
-    const otherChip = document.createElement('button');
-    otherChip.type = 'button';
-    otherChip.className = 'damage-type-btn';
-    otherChip.textContent = '＋ 직접입력';
-    otherChip.addEventListener('click', ()=>{
-      const custom = prompt('구간 이름을 입력하세요 (예: 1구간)', m.section || '');
-      if(custom != null) selectSection(custom.trim());
-    });
-    pointSectionChips.appendChild(otherChip);
-  }
-
   function renderPreviewGrid(markerId){
     const m = markers.find(x=>x.id===markerId);
     if(!m) return;
     previewTitle.textContent = '지점 ' + m.num + ' · 사진 ' + (m.photos ? m.photos.length : 0) + '장 · 위치신뢰도 ' + computeLocationTrust(m) + (m.address ? ' · ' + m.address : '');
-    renderPointSectionChips(m);
     previewGrid.innerHTML = '';
     (m.photos || []).forEach((p, idx)=>{
       const card = document.createElement('div');
@@ -13720,6 +13689,51 @@
           originWrap.appendChild(originLab);
           originWrap.appendChild(originRow);
           rec.appendChild(originWrap);
+
+          // ---- 구간(예: 1구간/2구간) — 손상마다 직접 선택 ----
+          // 예전엔 지점(마커) 하나에 구간을 딱 한 번만 지정해서 그 지점의 모든
+          // 손상·사진이 물려받는 방식이었는데, 현장 조사 동선이 항상 순서대로
+          // 진행되지 않아(지점을 나중에 다시 방문하거나, 한 지점 근처에 여러
+          // 구간의 손상이 섞여 있는 경우 등) 실제 현장과 안 맞았다 — 손상을
+          // 등록하는 바로 이 자리에서 그때그때 고르는 것으로 변경.
+          const sectionWrap = document.createElement('div');
+          sectionWrap.className = 'damage-field';
+          const sectionLab = document.createElement('label'); sectionLab.textContent = '구간';
+          const sectionRow = document.createElement('div');
+          sectionRow.className = 'damage-type-scroll';
+
+          if(!Array.isArray(site.sectionList)) site.sectionList = [];
+          const sectionOptions = site.sectionList.slice();
+          if(d.section && !sectionOptions.includes(d.section)) sectionOptions.push(d.section);
+
+          function selectDamageSection(name){
+            d.section = name || '';
+            if(name && !site.sectionList.includes(name)) site.sectionList.push(name);
+            renderDamageRecords();
+            saveState();
+          }
+
+          sectionOptions.forEach(name=>{
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'damage-type-btn' + (d.section === name ? ' active' : '');
+            chip.textContent = name;
+            chip.addEventListener('click', ()=> selectDamageSection(d.section === name ? '' : name));
+            sectionRow.appendChild(chip);
+          });
+          const sectionOtherBtn = document.createElement('button');
+          sectionOtherBtn.type = 'button';
+          sectionOtherBtn.className = 'damage-type-btn';
+          sectionOtherBtn.textContent = '＋ 직접입력';
+          sectionOtherBtn.addEventListener('click', ()=>{
+            const custom = prompt('구간 이름을 입력하세요 (예: 1구간)', d.section || '');
+            if(custom != null) selectDamageSection(custom.trim());
+          });
+          sectionRow.appendChild(sectionOtherBtn);
+
+          sectionWrap.appendChild(sectionLab);
+          sectionWrap.appendChild(sectionRow);
+          rec.appendChild(sectionWrap);
 
           // 기존손상을 선택하면, 이 시설물의 ExistingDamage 목록에서 어떤 기록과
           // 연결되는지 고를 수 있다. 이건 추천/자동매칭이 아니라 조사자가 직접
@@ -14224,7 +14238,11 @@
       addDamageBtn.className = 'log-btn role-gated';
       addDamageBtn.textContent = '+ 손상 추가';
       addDamageBtn.addEventListener('click', ()=>{
-        p.damages.push({ id:genId(), damageOrigin:null, existingDamageId:null, component:'', damageType:'', damageDetail:'', measurement:'', cause:'', failureFactor:'', evaluation:'', repairMethod:'', reinforcementMethod:'', investigatorComment:'', standardReference:'' });
+        // 같은 사진에서 방금 등록한 손상과 같은 구간일 때가 많으므로, 새 손상의
+        // 구간 칩을 마지막 손상과 같은 값으로 미리 골라둔다(그대로 두거나 눌러서
+        // 바꾸면 됨 — 강제가 아니라 반복 입력을 줄이기 위한 기본값일 뿐).
+        const lastSection = (p.damages.length ? p.damages[p.damages.length - 1].section : '') || '';
+        p.damages.push({ id:genId(), damageOrigin:null, existingDamageId:null, component:'', damageType:'', damageDetail:'', measurement:'', cause:'', failureFactor:'', evaluation:'', repairMethod:'', reinforcementMethod:'', investigatorComment:'', standardReference:'', section: lastSection });
         logActivity('손상기록 추가', '지점 ' + m.num);
         renderDamageRecords();
         saveState();
@@ -15260,18 +15278,28 @@
     children.push(new Paragraph({ children:[ new TextRun({ text:(projectName ? projectName + ' · ' : '') + '작성일 ' + today, size:18, color:'555555' }) ], spacing:{ after:300 } }));
 
     // ---- 구간별로 나눠서 가/나/다를 반복할지 판단 ----
-    // 지점(마커)에 구간이 하나라도 지정돼 있으면, 지정된 구간별로 가/나/다 세트를
-    // 반복해서 만든다(구간이 없는 지점은 "미지정" 묶음으로 따로 모아 빠지지 않게 함).
-    // 구간을 전혀 안 쓰는 시설물은(기존 방식 그대로) 시설물 전체를 한 번만 만든다 —
-    // 기존에 만들어지던 보고서와 완전히 동일한 결과를 유지하기 위한 하위호환 처리.
+    // 구간은 지점(마커) 단위가 아니라 손상 하나하나마다 직접 고르는 값이다(조사
+    // 동선이 항상 순서대로 진행되지 않아, 한 지점에 여러 구간의 손상이 섞일 수
+    // 있기 때문). 그래서 지점 하나가 서로 다른 구간에 동시에 걸쳐 있을 수 있고,
+    // 그런 지점은 해당되는 구간 각각의 "나/다" 섹션에 전부 나온다(중복 게재 — 그
+    // 지점에서 그 구간에 해당하는 손상이 실제로 있으므로 의도된 동작).
+    // 구간을 전혀 안 쓰는 시설물은(기존 방식 그대로) 시설물 전체를 한 번만 만든다.
     const invAll = buildDamageInventory(site);
-    const usedSections = Array.from(new Set(siteMarkers.map(m => (m.section || '').trim()).filter(Boolean)));
+    function markerSectionSet(m){
+      const set = new Set();
+      (m.photos || []).forEach(p => (p.damages || []).forEach(d=>{
+        const s = (d.section || '').trim();
+        if(s) set.add(s);
+      }));
+      return set;
+    }
+    const usedSections = Array.from(new Set(invAll.map(r => (r['구간'] || '').trim()).filter(Boolean)));
     const grouped = usedSections.length > 0;
     const sectionGroups = grouped
-      ? usedSections.map(name => ({ name, markers: siteMarkers.filter(m => (m.section || '').trim() === name) }))
+      ? usedSections.map(name => ({ name, markers: siteMarkers.filter(m => markerSectionSet(m).has(name)) }))
         .concat(
-          siteMarkers.some(m => !(m.section || '').trim())
-            ? [{ name:'미지정', markers: siteMarkers.filter(m => !(m.section || '').trim()) }]
+          siteMarkers.some(m => markerSectionSet(m).size === 0)
+            ? [{ name:'미지정', markers: siteMarkers.filter(m => markerSectionSet(m).size === 0) }]
             : []
         )
       : [{ name:'', markers: siteMarkers }];
