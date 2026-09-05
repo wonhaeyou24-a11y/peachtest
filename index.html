@@ -2027,8 +2027,10 @@
     </div>
     <div class="map-stage" id="mapStage" style="display:none;">
       <div id="mapView"></div>
-      <div class="map-hint" id="mapHint">지도를 눌러 조사 지점을 표시하세요</div>
-      <button class="gps-quickadd" id="btnAddAtGps" title="지도가 안 보여도 GPS로 바로 지점을 추가합니다">📍 현재 위치에 지점 추가</button>
+      <!-- 하단 모바일 액션바의 "사진촬영" 버튼(mbtnPhoto)이 이 버튼을 그대로
+           .click()으로 재사용하므로 완전히 지우지 않고 화면에서만 숨긴다
+           (지도를 가리는 중복 버튼이라는 피드백 반영 — 기능은 하단 버튼으로 대체됨). -->
+      <button class="gps-quickadd" id="btnAddAtGps" title="지도가 안 보여도 GPS로 바로 지점을 추가합니다" style="display:none;">📍 현재 위치에 지점 추가</button>
       <button class="btn-recenter" id="btnRecenterMap" title="내 위치로 지도 이동">🎯</button>
     </div>
     <div class="move-banner" id="moveBanner" style="display:none;">
@@ -2969,7 +2971,6 @@
   const btnRecenterMap = document.getElementById('btnRecenterMap');
   const mapStage = document.getElementById('mapStage');
   const mapView = document.getElementById('mapView');
-  const mapHint = document.getElementById('mapHint');
 
   let baseImageSrc = null;   // dataURL of loaded base image
   let markers = [];          // {id, num, xPct, yPct, drawingId | lat, lng, photos: [{src, note}, ...], createdAt, gps}
@@ -6579,11 +6580,26 @@
       const confSec = document.createElement('div');
       confSec.style.cssText = 'background:rgba(231,76,60,0.08); border:1px solid #e74c3c; border-radius:8px; padding:12px; margin-bottom:14px;';
       confSec.innerHTML = `
-        <div style="font-weight:700; color:#e74c3c; font-size:13px; margin-bottom:6px;">⚠️ 충돌 해결 대기열 (Zero Data Loss 보장)</div>
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px;">
+          <span style="font-weight:700; color:#e74c3c; font-size:13px;">⚠️ 충돌 해결 대기열 (Zero Data Loss 보장) — ${conflicts.length}건</span>
+          <button class="card-btn" id="btnClearAllConflicts" style="font-size:11px; padding:4px 8px; white-space:nowrap;">전체 지우기</button>
+        </div>
         <div style="font-size:11px; color:var(--text); line-height:1.4; margin-bottom:10px;">다른 팀원이 동일한 대상을 수정하여 충돌이 감지되었습니다. 사용자가 선택하기 전까지 양측 데이터를 모두 안전하게 보존합니다.</div>
       `;
+      setTimeout(()=>{
+        const clearAllBtn = document.getElementById('btnClearAllConflicts');
+        if(clearAllBtn) clearAllBtn.onclick = async ()=>{
+          if(!confirm(conflicts.length + '건의 충돌 기록을 전부 지울까요?\n(현재 조사 데이터에는 전혀 영향이 없습니다 — 충돌 "기록"만 지웁니다)')) return;
+          await saveConflictRecords([]);
+          renderSyncDashboard();
+        };
+      }, 10);
 
-      conflicts.forEach(c => {
+      // 쌓인 기록이 아주 많을 때(예: 과거 버그로 대량 누적된 경우) 전부 그리면
+      // 대시보드가 느려지므로, 개별 항목은 일부만 보여주고 "전체 지우기"로
+      // 한 번에 정리하도록 안내한다.
+      const MAX_CONFLICT_ITEMS_SHOWN = 20;
+      conflicts.slice(0, MAX_CONFLICT_ITEMS_SHOWN).forEach(c => {
         const itemBox = document.createElement('div');
         itemBox.style.cssText = 'background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-bottom:8px;';
         const eName = (c.local_data && c.local_data.name) || c.entity_id;
@@ -6609,6 +6625,13 @@
           if(b3) b3.onclick = () => resolveOccConflict(c.id, 'save_copy');
         }, 10);
       });
+
+      if(conflicts.length > MAX_CONFLICT_ITEMS_SHOWN){
+        const moreNote = document.createElement('div');
+        moreNote.style.cssText = 'font-size:11px; color:var(--muted); text-align:center; padding:6px;';
+        moreNote.textContent = `+ ${conflicts.length - MAX_CONFLICT_ITEMS_SHOWN}건 더 있습니다 — 위 "전체 지우기"로 한 번에 정리할 수 있습니다.`;
+        confSec.appendChild(moreNote);
+      }
 
       body.appendChild(confSec);
     }
