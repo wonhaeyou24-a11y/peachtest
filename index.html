@@ -5212,6 +5212,12 @@
       }
       if(activeOrganizationId){
         try{ localStorage.setItem(ACTIVE_ORG_KEY, activeOrganizationId); }catch(e){}
+        // 조사자별 색상 범례가 UUID 대신 이메일을 보여줄 수 있도록 멤버 목록을 미리
+        // 받아 orgMemberEmailById 캐시를 채운다(패널을 안 열어도). 받은 뒤 범례 갱신.
+        fetchOrganizationMembers(activeOrganizationId).then(()=>{
+          if(typeof renderSurveyorLegend === 'function'){ try{ renderSurveyorLegend(); }catch(e){} }
+          if(typeof renderLog === 'function' && (markers || []).length){ try{ renderLog(); }catch(e){} }
+        }).catch(()=>{});
       }
 
       try{ await storageSet(ROLE_CACHE_KEY, myRoleByOrg); }catch(e){}
@@ -9675,12 +9681,13 @@
       const { data: remoteFacs, error: facErr } = await supabaseClient.from('ps_facilities').select('*').eq('project_id', targetProjId);
       if(!facErr && Array.isArray(remoteFacs)){
         remoteFacs.forEach(rf => {
-          const rfCloudRev = (rf.data && typeof rf.data.revision === 'number') ? rf.data.revision : undefined;
-          if(pullProtected(`facility:${rf.id}`, rfCloudRev)){
-            console.log(`[Sync] pull protection: Facility(${rf.id}) 로컬 수정본 보호`);
-            return;
-          }
           const idx = sites.findIndex(s => s.id === rf.id);
+          // 보호는 "로컬에 있고 + 큐 대기 중이고 + 메타데이터가 실제로 다를 때"만.
+          if(idx >= 0 && rf.data && pendingRev.has(`facility:${rf.id}`)){
+            const lm = { ...sites[idx] }; FACILITY_ARRAY_FIELDS.forEach(f=>delete lm[f]); delete lm.trash;
+            const cm = { ...rf.data }; FACILITY_ARRAY_FIELDS.forEach(f=>delete cm[f]); delete cm.trash;
+            if(!sameSyncedContent(lm, cm)){ console.log(`[Sync] pull protection: Facility(${rf.id})`); return; }
+          }
           if(idx >= 0 && rf.data){
             const merged = Object.assign({}, sites[idx], rf.data);
             FACILITY_ARRAY_FIELDS.forEach(f => { merged[f] = sites[idx][f]; }); // 로컬 배열 유지
@@ -9699,11 +9706,20 @@
         const { data: remotePts } = await supabaseClient.from('ps_inspection_points').select('*').eq('project_id', targetProjId);
         if(Array.isArray(remotePts)){
           remotePts.forEach(rp => {
-            if(pullProtected(`inspection_point:${rp.id}`, (typeof rp.revision === 'number') ? rp.revision : undefined)) return;
             const site = sites.find(s => s.id === rp.facility_id);
             if(site){
               if(!site.markers) site.markers = [];
               const mIdx = site.markers.findIndex(m => m.id === rp.id);
+              // 보호(pull 스킵)는 "로컬에 이 지점이 있고 + 큐에 대기 중이고 + 로컬
+              // 내용이 클라우드와 실제로 다를 때"만. 예전엔 큐에 있기만 하면 무조건
+              // 스킵이라, 앱 재시작 시 전체 재큐잉되면 그 뒤로 팀원 수정분을 영원히
+              // 못 받았다(두 기기 지점수가 안 맞던 원인). 로컬에 없는 지점(mIdx<0)은
+              // 보호할 게 없으니 항상 받는다.
+              if(mIdx >= 0 && pendingRev.has(`inspection_point:${rp.id}`)){
+                const lm = site.markers[mIdx];
+                const cloudPeek = (rp.data && typeof rp.data === 'object' && Object.keys(rp.data).length) ? rp.data : { id: rp.id, num: rp.num, xPct: rp.x, yPct: rp.y };
+                if(!sameSyncedContent(lm, cloudPeek)) return; // 진짜 로컬 미저장 수정 — 이번엔 건드리지 않음
+              }
               const markerData = (rp.data && typeof rp.data === 'object' && Object.keys(rp.data).length) ? { ...rp.data } : {};
               // 지도에 찍히려면 id·위치·번호가 있어야 하는데, 팀원 기기가 옛 버전이면
               // data 블롭이 비어있거나 xPct/yPct가 없을 수 있다. 최상위 컬럼(x/y/num/
@@ -9756,12 +9772,14 @@
         const { data: remoteEds } = await supabaseClient.from('ps_existing_damages').select('*').eq('project_id', targetProjId);
         if(Array.isArray(remoteEds)){
           remoteEds.forEach(re => {
-            if(pullProtected(`existing_damage:${re.id}`, (typeof re.revision === 'number') ? re.revision : undefined)) return;
             const site = sites.find(s => s.id === re.facility_id);
             if(site){
               if(!site.existingDamages) site.existingDamages = [];
               const eIdx = site.existingDamages.findIndex(ed => ed.id === re.id);
               const edData = re.data || { id: re.id };
+              if(eIdx >= 0 && pendingRev.has(`existing_damage:${re.id}`)){
+                if(!sameSyncedContent(site.existingDamages[eIdx], edData)) return; // 로컬 미저장 수정 보호
+              }
               const authoritativeRev = (typeof re.revision === 'number') ? re.revision : null;
               if(eIdx >= 0){
                 const localEd = site.existingDamages[eIdx];
