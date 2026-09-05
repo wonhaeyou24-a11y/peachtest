@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-shot-v31-team-project-same-id'; // 조직 프로젝트 불러오기 시 원본 id 유지(팀원끼리 같은 프로젝트 참조)
+const CACHE_NAME = 'point-shot-v32-project-not-owner-skip'; // 팀원은 프로젝트 행 자체를 안 올림(소유자만 수정 가능) + v31 조직프로젝트 같은 id
 // 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
 // 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
 // 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.

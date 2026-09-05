@@ -9098,7 +9098,14 @@
           expectedRevision
         );
 
-        const { data: existing, error: fetchErr } = await supabaseClient.from('ps_projects').select('data, updated_at').eq('id', entityId).maybeSingle();
+        const { data: existing, error: fetchErr } = await supabaseClient.from('ps_projects').select('data, updated_at, user_id').eq('id', entityId).maybeSingle();
+        // 조직 프로젝트의 프로젝트 "행" 자체는 소유자(만든 사람)만 수정 가능하다
+        // (ps_projects_update 정책: is_org_member AND user_id = auth.uid()). 팀원은
+        // 이 행을 못 고치니 아예 시도하지 않는다 — 시설물·지점은 각자 올리면 된다.
+        if(!fetchErr && existing && op !== 'delete' && existing.user_id && existing.user_id !== userId){
+          if(existing.data && typeof existing.data.revision === 'number') proj.revision = Math.max(proj.revision || 1, existing.data.revision);
+          return { ok: true, skipped: true, reason: 'not-owner' };
+        }
         const cloudRevision = (existing && existing.data && typeof existing.data.revision === 'number') ? existing.data.revision : 0;
         if(!fetchErr && cloudRevision > baseRevision){
           if(sameSyncedContent(proj, existing.data)){
