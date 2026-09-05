@@ -8549,6 +8549,7 @@
   // pendingKeys 보호로직이 "로컬에 손댄 게 있다"고 착각해 그 지점은 영원히
   // 다시 못 당겨왔다("팀원 최신자료 가져오기"가 매번 "최신조사 없음"으로 뜨던 원인).
   const lastQueuedEntitySignatures = new Map(); // `${entityType}:${entityId}` -> 마지막으로 큐에 넣은 내용의 서명
+  const syncedDrawingIds = new Set(); // 클라우드 ps_drawings 에 행이 있는 게 확인된 도면 id (지점 FK 사전충족용)
   function entityContentSignature(obj){
     try{
       const copy = { ...obj };
@@ -9107,25 +9108,32 @@
         const pObj = projects.find(p => p.id === projId);
         const orgId = site.organizationId || (pObj && pObj.organizationId) || null;
 
+        // 시설물 "본문" 비교용: 개별 동기화되는 배열들 + 뷰 상태 + 큰 이미지 필드 제외.
+        // currentDrawingId/baseImageSrc 같은 건 기기별 화면 상태·레거시 필드라
+        // 이게 다르다고 시설물 충돌로 잡으면 안 된다(팀원 없이도 계속 충돌 나던 원인).
+        const facMetaOnly = (o)=>{
+          const c = { ...(o || {}) };
+          ['markers','existingDamages','drawings','trash','currentDrawingId','currentSiteId',
+           'baseImageSrc','baseImage','deletedSites','sectionCollapsed','uiState','_view'].forEach(k=>delete c[k]);
+          return c;
+        };
         const facBaseRevision = Math.max(expectedRevision, (site && typeof site.revision === 'number') ? site.revision : 1);
-        const { data: existing, error: fetchErr } = await supabaseClient.from('ps_facilities').select('data, updated_at').eq('id', entityId).maybeSingle();
-        // 클라우드에 이미 있고 내용이 로컬과 같으면 업로드할 게 없다 — 그냥 넘어간다.
-        // (팀원이 만든 시설물을 이 기기가 pull만 해온 경우, 이 기기는 RLS상 그 행을
-        // 수정할 권한이 없어 업로드가 계속 거부돼 큐에 영영 남았다. 애초에 안 바뀌었으면
-        // 올릴 필요가 없다.)
+        const { data: existing, error: fetchErr } = await supabaseClient.from('ps_facilities').select('data, updated_at, user_id').eq('id', entityId).maybeSingle();
+        // 팀원이 만든 시설물을 pull만 해온 경우: 내가 그 행을 수정할 게 없으면 skip.
+        if(!fetchErr && existing && op !== 'delete' && existing.user_id && existing.user_id !== userId){
+          if(existing.data && typeof existing.data.revision === 'number') site.revision = Math.max(site.revision || 1, existing.data.revision);
+          return { ok: true, skipped: true, reason: 'not-owner' };
+        }
+        // 클라우드에 이미 있고 본문이 로컬과 같으면 업로드할 게 없다 — 그냥 넘어간다.
         if(!fetchErr && existing && existing.data){
-          const lm = { ...site }; delete lm.markers; delete lm.existingDamages; delete lm.drawings; delete lm.trash;
-          const cm = { ...existing.data }; delete cm.markers; delete cm.existingDamages; delete cm.drawings; delete cm.trash;
-          if(sameSyncedContent(lm, cm)){
+          if(sameSyncedContent(facMetaOnly(site), facMetaOnly(existing.data))){
             if(typeof existing.data.revision === 'number') site.revision = Math.max(site.revision || 1, existing.data.revision);
             return { ok: true, skipped: true };
           }
         }
         if(!fetchErr && existing && existing.data && existing.data.revision && existing.data.revision > facBaseRevision){
-          // 시설물 메타데이터(이름·종류·형식 등)만 비교 — markers/existingDamages/drawings는
-          // 각자 개별 엔티티로 동기화되므로 시설물 충돌 판단에서는 제외한다.
-          const localMeta = { ...site }; delete localMeta.markers; delete localMeta.existingDamages; delete localMeta.drawings; delete localMeta.trash;
-          const cloudMeta = { ...existing.data }; delete cloudMeta.markers; delete cloudMeta.existingDamages; delete cloudMeta.drawings; delete cloudMeta.trash;
+          const localMeta = facMetaOnly(site);
+          const cloudMeta = facMetaOnly(existing.data);
           if(sameSyncedContent(localMeta, cloudMeta)){
             site.revision = existing.data.revision;
             diagLog('sync', 'auto-reconcile: facility ' + entityId, { adopted_revision: existing.data.revision });
@@ -9228,6 +9236,43 @@
 
         const pointRevision = ipBaseRevision + 1;
         if(point) point.revision = pointRevision;
+
+        // ★ FK 사전충족: 이 지점이 도면(drawing_id)을 참조하면, ps_inspection_points
+        //   의 drawing_id → ps_drawings(id) 외래키 때문에 그 도면 행이 클라우드에
+        //   먼저 있어야 한다. 도면 동기화는 현재 시설물을 볼 때만 큐잉되므로,
+        //   "다른 시설물의 도면 위 지점"을 올릴 때는 도면 행이 없어 업로드가 통째로
+        //   거부됐다(진단로그의 "violates foreign key constraint" 대량 실패).
+        //   여기서 그 도면의 메타데이터 행(이미지 제외)을 즉석에서 upsert 한다.
+        const dwId = point && point.drawingId;
+        if(dwId && op !== 'delete' && !syncedDrawingIds.has(dwId)){
+          try{
+            let dwObj = null, dwFacId = facId;
+            for(const s of sites){
+              const f = (s.drawings || []).find(d => d.id === dwId);
+              if(f){ dwObj = f; dwFacId = s.id; break; }
+            }
+            const lightDw = dwObj ? { ...dwObj } : { id: dwId, name: '도면' };
+            delete lightDw.imageSrc; delete lightDw.svgData; delete lightDw.svg; delete lightDw.original;
+            const { error: dwErr } = await supabaseClient.from('ps_drawings').upsert({
+              id: dwId,
+              facility_id: dwFacId,
+              project_id: projId,
+              user_id: userId,
+              organization_id: orgId,
+              name: (dwObj && dwObj.name) || '도면',
+              svg_data: null,
+              data: lightDw,
+              revision: (dwObj && typeof dwObj.revision === 'number') ? dwObj.revision : 1,
+              schema_version: 8,
+              device_id: devId,
+              created_at: (dwObj && dwObj.createdAt) || new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              updated_by: userId
+            }, { onConflict: 'id', ignoreDuplicates: false });
+            if(!dwErr) syncedDrawingIds.add(dwId);
+          }catch(e){ /* 도면 upsert 실패해도 아래 지점 upsert 시도는 해본다 */ }
+        }
+
         // 사진 원본(base64)은 이미 ps-photos 스토리지에 별도 업로드되고(cloudRef로
         // 참조), 여기 data 컬럼엔 필요 없다 — 스트리핑 없이 그대로 올리면 저장할
         // 때마다(이 엔티티가 재큐잉될 때마다) 이미 올라간 사진을 통째로 다시
@@ -9430,6 +9475,7 @@
           updated_by: userId
         }, { onConflict: 'id' });
         if(upErr) return { ok: false, reason: upErr.message };
+        syncedDrawingIds.add(entityId);
         return { ok: true };
       }
 
@@ -9677,6 +9723,7 @@
               site.drawings.push(dData);
             }
             try{ lastQueuedEntitySignatures.set('drawing:' + rd.id, entityContentSignature({ ...site.drawings[dIdx >= 0 ? dIdx : site.drawings.length - 1], imageSrc: undefined })); }catch(e){}
+            syncedDrawingIds.add(rd.id); // 클라우드에 도면 행이 있음이 확인됨 → 이 도면 위 지점 FK 통과
             mergedCount++;
           });
         }
