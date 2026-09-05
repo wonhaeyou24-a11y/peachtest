@@ -5869,7 +5869,13 @@
     }
   }
 
-  // 클라우드 프로젝트를 "새 프로젝트로" 불러온다 — 기존 로컬 데이터를 덮어쓰지 않는 안전한 방식
+  // 클라우드 프로젝트를 이 기기에 불러온다.
+  //  - 조직 공유 프로젝트(organization_id 있음): 원본과 "같은 id"로 붙인다. 팀원들이
+  //    모두 동일한 프로젝트/시설물 id를 참조해야 pull(팀원 최신자료 가져오기)이
+  //    ID 기준으로 병합된다. 예전엔 무조건 새 id로 복제해서, 팀원이 "불러오기"를
+  //    하면 조직과 끊긴 별개 프로젝트가 생겨 서로 자료가 절대 안 합쳐졌다.
+  //  - 개인 프로젝트(organization_id 없음): 예전처럼 새 id로 복제(남의 개인 프로젝트를
+  //    내 사본으로 가져오는 용도).
   async function pullProjectFromCloud(cloudProjectId){
     if(!supabaseClient || !supabaseSession) return;
     const { data: projRow, error: projErr } = await supabaseClient
@@ -5880,14 +5886,31 @@
     if(facErr){ alert('시설물을 불러오지 못했습니다.'); return; }
 
     commitLiveToCurrentSite();
+    const isTeamProject = !!projRow.organization_id;
+    const projId = isTeamProject ? cloudProjectId : genId();
+
+    // 조직 프로젝트인데 이미 이 기기에 같은 id로 있으면(재-불러오기) 중복 생성하지 않는다.
+    if(isTeamProject && projects.find(p => p.id === projId)){
+      switchToProject(projId);
+      cloudSyncBody.innerHTML = '<div class="hint">이미 이 기기에 있는 프로젝트입니다. 최신 자료를 가져옵니다…</div>';
+      await pullCloudChanges(projId);
+      renderCloudSyncBody();
+      alert('이미 불러온 프로젝트입니다. "팀원 최신자료 가져오기"로 갱신했습니다.');
+      return;
+    }
+
     const newProject = Object.assign({}, projRow.data, {
-      id: genId(),
-      name: (projRow.name || (projRow.data && projRow.data.name) || '프로젝트') + ' (클라우드에서 불러옴)',
+      id: projId,
+      name: (projRow.name || (projRow.data && projRow.data.name) || '프로젝트') + (isTeamProject ? '' : ' (클라우드에서 불러옴)'),
       organizationId: projRow.organization_id || null,
       savedAt: new Date().toISOString()
     });
     const newSites = (facRows || []).map(row=>{
-      const s = Object.assign({}, row.data, { id: genId(), projectId: newProject.id });
+      const s = Object.assign({}, row.data, {
+        id: isTeamProject ? row.id : genId(),   // 조직 프로젝트면 시설물도 원본 id 유지
+        projectId: newProject.id,
+        organizationId: projRow.organization_id || row.organization_id || null
+      });
       s.markers = (s.markers || []).map(m => Object.assign({}, m));
       s.markers.forEach(m=>{
         m.photos = (m.photos || []).map(p=>{
