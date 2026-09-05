@@ -3659,6 +3659,7 @@
           gps: point.gps || null,
           locationSource: point.locationSource || 'manual',
           locationHistory: point.locationHistory || [],
+          section: point.section || null,
           photos: (point.photos || []).map(p => ({
             id: p.id || null,
             photoRef: p.photoRef || null,
@@ -3675,6 +3676,61 @@
         tx.oncomplete = ()=> resolve(true);
         tx.onerror = ()=> reject(tx.error || new Error('inspectionPoints 저장 실패'));
         tx.onabort = ()=> reject(tx.error || new Error('inspectionPoints transaction 중단'));
+      }catch(e){
+        reject(e);
+      }
+    });
+  }
+
+  // idbPutInspectionPoint를 그대로 두고(단일 지점 저장이 필요한 다른 호출부— 새 지점
+  // 생성 직후, 사진 추가 직후 — 는 계속 그것을 그대로 씀), 시설물의 마커 여러 개를
+  // 한 번에 저장해야 하는 performSaveState 전용으로 "트랜잭션 하나에 여러 건"을
+  // 추가했다. 실기기 진단로그에서 마커 41개짜리 시설물의 저장 한 번이 5~14초씩
+  // 걸리는 게 확인됐는데, 원인은 idbPutInspectionPoint가 매번 자기 트랜잭션을 새로
+  // 열고 커밋하기 때문 — 마커가 바뀐 개수만큼 트랜잭션을 41번 여닫는 셈이라
+  // (특히 트랜잭션 하나 여닫는 오버헤드가 데스크톱보다 훨씬 큰 iOS Safari에서)
+  // 그 오버헤드만 다 더해진다. 레코드 구성 로직은 idbPutInspectionPoint와 완전히
+  // 동일하게 맞춰서 저장 형식은 전혀 안 바뀐다 — 트랜잭션을 묶는 것만 다르다.
+  async function idbPutInspectionPointsBatch(items){
+    if(!items || !items.length) return true;
+    const db = await openIDB();
+    return new Promise((resolve, reject)=>{
+      try{
+        const tx = db.transaction(IDB_INSPECTION_STORE, 'readwrite');
+        const store = tx.objectStore(IDB_INSPECTION_STORE);
+        const now = new Date().toISOString();
+        items.forEach(({ point, site })=>{
+          const siteObj = site || currentSiteObj();
+          store.put({
+            id: point.id,
+            projectId: (siteObj && siteObj.projectId) || currentProjectId || null,
+            facilityId: (siteObj && siteObj.id) || currentSiteId || null,
+            num: point.num,
+            xPct: point.xPct ?? null,
+            yPct: point.yPct ?? null,
+            drawingId: point.drawingId || null,
+            lat: point.lat ?? null,
+            lng: point.lng ?? null,
+            gps: point.gps || null,
+            locationSource: point.locationSource || 'manual',
+            locationHistory: point.locationHistory || [],
+            section: point.section || null,
+            photos: (point.photos || []).map(p => ({
+              id: p.id || null,
+              photoRef: p.photoRef || null,
+              note: p.note || '',
+              damages: p.damages || [],
+              exif: p.exif || null,
+              createdAt: p.createdAt || null
+            })),
+            createdAt: point.createdAt || now,
+            updatedAt: now,
+            deletedAt: point.deletedAt || null
+          });
+        });
+        tx.oncomplete = ()=> resolve(true);
+        tx.onerror = ()=> reject(tx.error || new Error('inspectionPoints 일괄 저장 실패'));
+        tx.onabort = ()=> reject(tx.error || new Error('inspectionPoints 일괄 저장 트랜잭션 중단'));
       }catch(e){
         reject(e);
       }
@@ -7858,6 +7914,7 @@
             gps: p.gps,
             locationSource: p.locationSource || 'manual',
             locationHistory: p.locationHistory || [],
+            section: p.section || '',
             photos: (p.photos || []).map(ph => ({ ...ph })),
             createdAt: p.createdAt || new Date().toISOString()
           });
@@ -7877,6 +7934,10 @@
           if(p.locationHistory && (!existing.locationHistory || existing.locationHistory.length < p.locationHistory.length)){
             existing.locationHistory = p.locationHistory;
           }
+          // 구간(section)은 지점 미리보기에서 칩으로 바로 지정하는 값이라, KV 스냅샷
+          // 저장이 한 번 실패해도(예: 대용량 프로젝트에서 저장소 압박) 여기서
+          // 복구되도록 durable store 쪽 값이 있으면 채워 넣는다.
+          if(p.section && !existing.section) existing.section = p.section;
           // 사진 배열 병합: 기존 메모리에 src가 있으면 온전히 보존하고 메타데이터 보강
           if(p.photos && p.photos.length > 0){
             if(!existing.photos || existing.photos.length === 0){
@@ -8033,16 +8094,22 @@
       }
     }
 
-    // 2. inspectionPoints Durable 스토어에 현재 마커들 보존 — 실제로 바뀐 마커만 쓴다
-    // (마커가 많은 시설물에서 저장 지연/부분소실 위험을 줄이기 위함, 위 주석 참고)
+    // 2. inspectionPoints Durable 스토어에 현재 마커들 보존 — 실제로 바뀐 마커만,
+    // 트랜잭션 하나에 몰아서 쓴다(마커 개수만큼 트랜잭션을 따로 여닫으면 iOS
+    // Safari에서 그 여닫는 오버헤드만으로도 저장이 몇 초~십수 초씩 걸릴 수 있음 —
+    // 실기기 진단로그로 확인됨).
     let durablePointsOk = true;
     try{
       const currentSite = currentSiteObj();
+      const changedItems = [];
       for(const m of (markers || [])){
         const sig = markerDurableSignature(m);
         if(sig !== null && lastWrittenMarkerSignatures.get(m.id) === sig) continue;
-        await idbPutInspectionPoint(m, currentSite);
-        if(sig !== null) lastWrittenMarkerSignatures.set(m.id, sig);
+        changedItems.push({ point: m, site: currentSite, sig });
+      }
+      if(changedItems.length){
+        await idbPutInspectionPointsBatch(changedItems.map(it => ({ point: it.point, site: it.site })));
+        changedItems.forEach(it => { if(it.sig !== null) lastWrittenMarkerSignatures.set(it.point.id, it.sig); });
       }
     }catch(e){
       console.warn('performSaveState: inspectionPoints durable write 경고', e);
@@ -15664,6 +15731,16 @@
       }catch(e){
         console.warn('visibilitychange 저장 실패', e);
       }
+    } else if(document.visibilityState === 'visible'){
+      // 실기기 진단로그에서 확인된 패턴: 앱이 백그라운드로 넘어간 동안 iOS가 저장
+      // 작업(IndexedDB 트랜잭션)을 몇 분씩 멈춰뒀다가 실패로 끝내는 경우가 있었다
+      // (진짜로 몇 분씩 걸린 게 아니라, 그 사이 브라우저가 자바스크립트 실행 자체를
+      // 멈췄다가 화면에 돌아왔을 때 이어서 실패 처리된 것으로 보임). 이런 경우
+      // 사용자가 다시 뭔가를 편집하기 전까지는 재시도가 안 걸렸는데, 화면에
+      // 돌아오는 시점에 한 번 더 저장을 시도해두면 그 사이 못 끝낸 저장을 최대한
+      // 빨리 만회할 수 있다.
+      diagLog('lifecycle', 'visibilitychange: visible', { saveInProgress });
+      try{ saveState(); }catch(e){ console.warn('visible 복귀 저장 재시도 실패', e); }
     }
   });
 
