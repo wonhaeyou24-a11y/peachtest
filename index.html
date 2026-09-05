@@ -8500,6 +8500,32 @@
       return null; // 직렬화 실패시 캐시를 못 믿으니 매번 큐잉(=항상 불일치) 되도록 null 반환
     }
   }
+
+  // 동기화 리비전만 어긋나고 "조사 내용"은 사실 같은지 판단한다. 팀원이 만든
+  // 지점을 이 기기가 pull 해왔는데 리비전 숫자만 뒤처진 경우(로컬 내용 == 클라우드
+  // 내용)를 "진짜 충돌"로 잘못 기록해 충돌 대기열이 계속 쌓이고, 리비전이 영원히
+  // 못 따라잡던 문제를 막기 위한 것. 진짜로 양쪽 내용이 다르면 그대로 충돌로 남긴다.
+  // 로컬 전용/휘발성 필드(사진 원본, blob 캐시 플래그, 각종 타임스탬프, revision 등)는
+  // 비교에서 제외한다.
+  const SYNC_VOLATILE_KEYS = new Set([
+    'revision','updatedAt','updated_at','syncedAt','cloudSyncedAt','savedAt','lastSavedAt',
+    'cloudRef','blobExtracted','blobSize','mimeType','pendingCloudDownload','pendingCloudUpload',
+    'src','original','_localOnly','_dirty','deviceId','device_id','updated_by'
+  ]);
+  function stableSyncStringify(v){
+    if(v === null || typeof v !== 'object') return JSON.stringify(v);
+    if(Array.isArray(v)) return '[' + v.map(stableSyncStringify).join(',') + ']';
+    const keys = Object.keys(v).filter(k => !SYNC_VOLATILE_KEYS.has(k)).sort();
+    return '{' + keys.map(k => JSON.stringify(k) + ':' + stableSyncStringify(v[k])).join(',') + '}';
+  }
+  function sameSyncedContent(localObj, cloudObj){
+    if(!localObj || !cloudObj) return false;
+    try{
+      return stableSyncStringify(localObj) === stableSyncStringify(cloudObj);
+    }catch(e){
+      return false; // 판단 불가면 안전하게 "다르다"로 — 충돌로 남긴다
+    }
+  }
   function facilityMetaSignature(site){
     try{
       const copy = { ...site };
@@ -8805,7 +8831,10 @@
       const now = Date.now();
       let changed = false;
       let syncedCount = 0;
+      let conflictCount = 0, failedCount = 0, reconciledCount = 0;
+      const failReasons = {}; // 실패 사유별 집계 — 진단로그로 "왜 86건이 안 빠지는지" 확인용
 
+      const totalPendingBefore = queue.filter(q => q.status === 'pending' || q.status === 'failed').length;
       const batch = queue.filter(q => (q.status === 'pending' || q.status === 'failed') && (q.nextRetryAt || 0) <= now).slice(0, 50);
 
       for(const item of batch){
@@ -8816,11 +8845,13 @@
           item.status = 'synced';
           item.syncedAt = new Date().toISOString();
           syncedCount++;
+          if(result.reconciled) reconciledCount++;
           changed = true;
           console.log(`[Sync] success: ${item.entityType} (${item.entityId})`);
         } else if(result && result.conflict){
           item.status = 'conflict';
           item.lastError = result.reason;
+          conflictCount++;
           changed = true;
         } else {
           item.retryCount = (item.retryCount || 0) + 1;
@@ -8828,9 +8859,21 @@
           item.lastError = (result && result.reason) || '알 수 없는 동기화 오류';
           const delay = getRetryDelay(item.retryCount);
           item.nextRetryAt = Date.now() + delay;
+          failedCount++;
+          const rk = String(item.lastError).slice(0, 80);
+          failReasons[rk] = (failReasons[rk] || 0) + 1;
           changed = true;
           console.warn(`[Sync] retry (#${item.retryCount} in ${delay}ms): ${item.entityType} (${item.entityId}) - ${item.lastError}`);
         }
+      }
+
+      // 큐가 안 빠지는 원인을 진단로그로 남긴다 — 성공만 있거나 아무것도 안 했으면 조용히.
+      if(failedCount > 0 || conflictCount > 0){
+        diagLog('sync', 'queue 처리 결과', {
+          totalPendingBefore, batchSize: batch.length,
+          synced: syncedCount, reconciled: reconciledCount, conflict: conflictCount, failed: failedCount,
+          failReasons
+        });
       }
 
       if(changed){
@@ -8840,6 +8883,15 @@
         // 락을 잡고 최신 큐를 다시 읽어 이번에 처리한 항목(queueId 기준)만 결과를
         // 반영하고, 나머지(새로 들어온 것 포함)는 그대로 둔다.
         const statusById = new Map(batch.map(item => [item.queueId, item]));
+        // conflict 상태 항목은 processSyncQueue가 다시 처리하지 않아(batch 필터가
+        // pending/failed만) 큐에 영영 남는 좀비가 된다. 이미 해결됐거나 사용자가
+        // "전체 지우기"로 지운 충돌(= 열린 충돌 기록에 없음)에 대응하는 좀비는 정리한다.
+        let openConflictKeys = new Set();
+        try{
+          const recs = (await loadConflictRecords()) || [];
+          openConflictKeys = new Set(recs.filter(c => c.status === 'open')
+            .map(c => `${String(c.entity_type).toLowerCase()}:${c.entity_id}`));
+        }catch(e){}
         await runEntityQueueOp(async ()=>{
           const latest = await loadEntitySyncQueue();
           const merged = latest.map(q=>{
@@ -8851,7 +8903,14 @@
             if(q.enqueuedAt && updated.enqueuedAt && q.enqueuedAt > updated.enqueuedAt) return q;
             return updated;
           });
-          const remaining = merged.filter(q => q.status !== 'synced');
+          const remaining = merged.filter(q => {
+            if(q.status === 'synced') return false;
+            if(q.status === 'conflict'){
+              const k = `${String(q.entityType).toLowerCase()}:${q.entityId}`;
+              if(!openConflictKeys.has(k)) return false; // 대응하는 열린 충돌 없음 = 좀비, 제거
+            }
+            return true;
+          });
           await saveEntitySyncQueue(remaining);
         });
       }
@@ -8903,6 +8962,13 @@
         const { data: existing, error: fetchErr } = await supabaseClient.from('ps_projects').select('data, updated_at').eq('id', entityId).maybeSingle();
         const cloudRevision = (existing && existing.data && typeof existing.data.revision === 'number') ? existing.data.revision : 0;
         if(!fetchErr && cloudRevision > baseRevision){
+          if(sameSyncedContent(proj, existing.data)){
+            // 리비전만 뒤처졌을 뿐 내용은 동일 — 충돌 아님. 클라우드 리비전을 그대로
+            // 수용하고 넘어간다(다음 저장 때 로컬에 반영됨).
+            proj.revision = cloudRevision;
+            diagLog('sync', 'auto-reconcile: project ' + entityId, { adopted_revision: cloudRevision });
+            return { ok: true, reconciled: true };
+          }
           await detectAndRecordConflict({
             organization_id: orgId,
             project_id: entityId,
@@ -8939,23 +9005,33 @@
         const pObj = projects.find(p => p.id === projId);
         const orgId = site.organizationId || (pObj && pObj.organizationId) || null;
 
+        const facBaseRevision = Math.max(expectedRevision, (site && typeof site.revision === 'number') ? site.revision : 1);
         const { data: existing, error: fetchErr } = await supabaseClient.from('ps_facilities').select('data, updated_at').eq('id', entityId).maybeSingle();
-        if(!fetchErr && existing && existing.data && existing.data.revision && existing.data.revision > expectedRevision){
+        if(!fetchErr && existing && existing.data && existing.data.revision && existing.data.revision > facBaseRevision){
+          // 시설물 메타데이터(이름·종류·형식 등)만 비교 — markers/existingDamages/drawings는
+          // 각자 개별 엔티티로 동기화되므로 시설물 충돌 판단에서는 제외한다.
+          const localMeta = { ...site }; delete localMeta.markers; delete localMeta.existingDamages; delete localMeta.drawings; delete localMeta.trash;
+          const cloudMeta = { ...existing.data }; delete cloudMeta.markers; delete cloudMeta.existingDamages; delete cloudMeta.drawings; delete cloudMeta.trash;
+          if(sameSyncedContent(localMeta, cloudMeta)){
+            site.revision = existing.data.revision;
+            diagLog('sync', 'auto-reconcile: facility ' + entityId, { adopted_revision: existing.data.revision });
+            return { ok: true, reconciled: true };
+          }
           await detectAndRecordConflict({
             organization_id: orgId,
             project_id: projId,
             entity_type: 'facility',
             entity_id: entityId,
             user_id: userId,
-            local_revision: expectedRevision,
+            local_revision: facBaseRevision,
             cloud_revision: existing.data.revision,
             local_data: site,
             cloud_data: existing.data
           });
-          return { ok: false, conflict: true, reason: `Revision mismatch: Local ${expectedRevision} vs Cloud ${existing.data.revision}` };
+          return { ok: false, conflict: true, reason: `Revision mismatch: Local ${facBaseRevision} vs Cloud ${existing.data.revision}` };
         }
 
-        site.revision = expectedRevision + 1;
+        site.revision = facBaseRevision + 1;
         const lightSite = JSON.parse(JSON.stringify(site));
         (lightSite.markers || []).forEach(m => (m.photos || []).forEach(p => { if(p.cloudRef) delete p.src; delete p.original; }));
 
@@ -8996,23 +9072,33 @@
         const pObj = projects.find(p => p.id === projId);
         const orgId = (pObj && pObj.organizationId) || null;
 
+        // 큐 항목의 revision(담길 때 스냅샷)이 로컬 마커의 현재 revision보다 뒤처졌을
+        // 수 있으므로 둘 중 큰 값을 기준으로 삼는다(project 브랜치와 동일한 처리 —
+        // 이게 없으면 pull로 최신 revision을 받아와도 큐에 남은 옛 스냅샷 때문에 계속 충돌).
+        const ipBaseRevision = Math.max(expectedRevision, (point && typeof point.revision === 'number') ? point.revision : 1);
         const { data: existing, error: checkErr } = await supabaseClient.from('ps_inspection_points').select('revision, data').eq('id', entityId).maybeSingle();
-        if(!checkErr && existing && existing.revision && existing.revision > expectedRevision){
+        if(!checkErr && existing && existing.revision && existing.revision > ipBaseRevision){
+          if(point && sameSyncedContent(point, existing.data || existing)){
+            // 리비전만 뒤처졌을 뿐 조사 내용은 동일 — 충돌 아님. 클라우드 리비전 수용.
+            point.revision = existing.revision;
+            diagLog('sync', 'auto-reconcile: inspection_point ' + entityId, { adopted_revision: existing.revision });
+            return { ok: true, reconciled: true };
+          }
           await detectAndRecordConflict({
             organization_id: orgId,
             project_id: projId,
             entity_type: 'inspection_point',
             entity_id: entityId,
             user_id: userId,
-            local_revision: expectedRevision,
+            local_revision: ipBaseRevision,
             cloud_revision: existing.revision,
             local_data: point,
             cloud_data: existing.data || existing
           });
-          return { ok: false, conflict: true, reason: `Revision mismatch: Local ${expectedRevision} vs Cloud ${existing.revision}` };
+          return { ok: false, conflict: true, reason: `Revision mismatch: Local ${ipBaseRevision} vs Cloud ${existing.revision}` };
         }
 
-        const pointRevision = expectedRevision + 1;
+        const pointRevision = ipBaseRevision + 1;
         if(point) point.revision = pointRevision;
         // 사진 원본(base64)은 이미 ps-photos 스토리지에 별도 업로드되고(cloudRef로
         // 참조), 여기 data 컬럼엔 필요 없다 — 스트리핑 없이 그대로 올리면 저장할
@@ -9107,23 +9193,29 @@
         const pObj = projects.find(p => p.id === projId);
         const orgId = (pObj && pObj.organizationId) || null;
 
+        const edBaseRevision = Math.max(expectedRevision, (exDmg && typeof exDmg.revision === 'number') ? exDmg.revision : 1);
         const { data: existing, error: checkErr } = await supabaseClient.from('ps_existing_damages').select('revision, data').eq('id', entityId).maybeSingle();
-        if(!checkErr && existing && existing.revision && existing.revision > expectedRevision){
+        if(!checkErr && existing && existing.revision && existing.revision > edBaseRevision){
+          if(exDmg && Object.keys(exDmg).length && sameSyncedContent(exDmg, existing.data || existing)){
+            exDmg.revision = existing.revision;
+            diagLog('sync', 'auto-reconcile: existing_damage ' + entityId, { adopted_revision: existing.revision });
+            return { ok: true, reconciled: true };
+          }
           await detectAndRecordConflict({
             organization_id: orgId,
             project_id: projId,
             entity_type: 'existing_damage',
             entity_id: entityId,
             user_id: userId,
-            local_revision: expectedRevision,
+            local_revision: edBaseRevision,
             cloud_revision: existing.revision,
             local_data: exDmg,
             cloud_data: existing.data || existing
           });
-          return { ok: false, conflict: true, reason: `Revision mismatch: Local ${expectedRevision} vs Cloud ${existing.revision}` };
+          return { ok: false, conflict: true, reason: `Revision mismatch: Local ${edBaseRevision} vs Cloud ${existing.revision}` };
         }
 
-        const exRevision = expectedRevision + 1;
+        const exRevision = edBaseRevision + 1;
         if(exDmg) exDmg.revision = exRevision; // 실제 site.existingDamages 안의 객체이므로 이제 정말로 반영됨
         const lightExDmg = { ...exDmg, photos: (exDmg.photos || []).map(stripPhotoHeavyFields) }; // 사진 원본은 ps-photos에 별도 업로드됨(위 inspection_point와 동일한 이유)
         const { error: upErr } = await supabaseClient.from('ps_existing_damages').upsert({
@@ -9269,7 +9361,24 @@
     console.log(`[Sync] pull starting for project: ${targetProjId}`);
     try{
       const queue = await loadEntitySyncQueue();
-      const pendingKeys = new Set(queue.filter(q => q.status === 'pending' || q.status === 'failed').map(q => `${String(q.entityType).toLowerCase()}:${q.entityId}`));
+      // key -> 이 기기가 큐에 담아둔 최대 리비전. 예전엔 단순 Set이라 "큐에 있으면
+      // 무조건 pull 스킵"이었는데, 그러면 큐에 옛 스냅샷 하나만 남아있어도 그 엔티티는
+      // 영원히 다시 못 당겨왔다("팀원 최신자료 가져오기"가 계속 "최신조사 없음"으로
+      // 뜨던 원인). 이제 클라우드 리비전이 이 값보다 크면(= 팀원이 더 최근에 수정)
+      // pull을 허용한다. 로컬 큐 항목이 클라우드보다 앞서거나 같을 때만 보호(스킵).
+      const pendingRev = new Map();
+      queue.filter(q => q.status === 'pending' || q.status === 'failed').forEach(q => {
+        const k = `${String(q.entityType).toLowerCase()}:${q.entityId}`;
+        const r = typeof q.revision === 'number' ? q.revision : 1;
+        pendingRev.set(k, Math.max(pendingRev.get(k) || 0, r));
+      });
+      function pullProtected(key, cloudRevision){
+        if(!pendingRev.has(key)) return false;
+        const localQueued = pendingRev.get(key);
+        // 클라우드가 로컬 큐 스냅샷보다 확실히 앞서면 보호하지 않는다(로컬 항목이 낡음).
+        if(typeof cloudRevision === 'number' && cloudRevision > localQueued) return false;
+        return true;
+      }
 
       let mergedCount = 0;
 
@@ -9284,7 +9393,8 @@
       const { data: remoteFacs, error: facErr } = await supabaseClient.from('ps_facilities').select('*').eq('project_id', targetProjId);
       if(!facErr && Array.isArray(remoteFacs)){
         remoteFacs.forEach(rf => {
-          if(pendingKeys.has(`facility:${rf.id}`)){
+          const rfCloudRev = (rf.data && typeof rf.data.revision === 'number') ? rf.data.revision : undefined;
+          if(pullProtected(`facility:${rf.id}`, rfCloudRev)){
             console.log(`[Sync] pull protection: Facility(${rf.id}) 로컬 수정본 보호`);
             return;
           }
@@ -9307,12 +9417,17 @@
         const { data: remotePts } = await supabaseClient.from('ps_inspection_points').select('*').eq('project_id', targetProjId);
         if(Array.isArray(remotePts)){
           remotePts.forEach(rp => {
-            if(pendingKeys.has(`inspection_point:${rp.id}`)) return;
+            if(pullProtected(`inspection_point:${rp.id}`, (typeof rp.revision === 'number') ? rp.revision : undefined)) return;
             const site = sites.find(s => s.id === rp.facility_id);
             if(site){
               if(!site.markers) site.markers = [];
               const mIdx = site.markers.findIndex(m => m.id === rp.id);
               const markerData = rp.data || { id: rp.id, num: rp.num, xPct: rp.x, yPct: rp.y };
+              // 리비전은 ps_inspection_points.revision(최상위 컬럼)이 정본이다. data
+              // 블롭 안의 revision은 팀원 기기가 옛 버전이면 비어있을 수 있으므로
+              // 항상 이 컬럼 값으로 로컬을 맞춘다 — 이게 없으면 pull을 해도 로컬
+              // 리비전이 못 따라잡아 큐에 남은 항목이 계속 거짓 충돌을 낸다.
+              const authoritativeRev = (typeof rp.revision === 'number') ? rp.revision : null;
               if(mIdx >= 0){
                 const localMarker = site.markers[mIdx];
                 const merged = Object.assign({}, localMarker, markerData);
@@ -9323,8 +9438,10 @@
                 if(localMarker.locationHistory && localMarker.locationHistory.length >= (markerData.locationHistory || []).length){
                   merged.locationHistory = localMarker.locationHistory;
                 }
+                if(authoritativeRev !== null) merged.revision = Math.max(authoritativeRev, (typeof localMarker.revision === 'number' ? localMarker.revision : 1));
                 site.markers[mIdx] = merged;
               } else {
+                if(authoritativeRev !== null) markerData.revision = authoritativeRev;
                 site.markers.push(markerData);
               }
               mergedCount++;
@@ -9338,18 +9455,21 @@
         const { data: remoteEds } = await supabaseClient.from('ps_existing_damages').select('*').eq('project_id', targetProjId);
         if(Array.isArray(remoteEds)){
           remoteEds.forEach(re => {
-            if(pendingKeys.has(`existing_damage:${re.id}`)) return;
+            if(pullProtected(`existing_damage:${re.id}`, (typeof re.revision === 'number') ? re.revision : undefined)) return;
             const site = sites.find(s => s.id === re.facility_id);
             if(site){
               if(!site.existingDamages) site.existingDamages = [];
               const eIdx = site.existingDamages.findIndex(ed => ed.id === re.id);
               const edData = re.data || { id: re.id };
+              const authoritativeRev = (typeof re.revision === 'number') ? re.revision : null;
               if(eIdx >= 0){
                 const localEd = site.existingDamages[eIdx];
                 const merged = Object.assign({}, localEd, edData);
                 merged.photos = mergePhotosUnion(localEd.photos, edData.photos);
+                if(authoritativeRev !== null) merged.revision = Math.max(authoritativeRev, (typeof localEd.revision === 'number' ? localEd.revision : 1));
                 site.existingDamages[eIdx] = merged;
               } else {
+                if(authoritativeRev !== null) edData.revision = authoritativeRev;
                 site.existingDamages.push(edData);
               }
               mergedCount++;
