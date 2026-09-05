@@ -3065,7 +3065,12 @@
       (sites || []).forEach(s => (s.markers || []).forEach(m => (m.photos || []).forEach(p => {
         if(p.src){ hydratedPhotoCount++; hydratedPhotoCharsApprox += (p.src.length || 0); }
       })));
-      diagLog('memory', label, { mem, storage, hydratedPhotoCount, hydratedPhotoMbApprox: (hydratedPhotoCharsApprox / 1048576).toFixed(1), siteCount: (sites || []).length });
+      // 충돌/동기화큐 건수도 같이 남긴다 — "충돌 개수가 계속 올라간다"를 실제
+      // 수치 추이로 확인할 수 있게(중복 충돌 기록 방지 수정이 실제로 먹혔는지 등).
+      let conflictOpenCount = null, queuePendingCount = null;
+      try{ conflictOpenCount = ((await loadConflictRecords()) || []).filter(c=>c.status==='open').length; }catch(e){}
+      try{ queuePendingCount = ((await loadEntitySyncQueue()) || []).filter(q=>q.status==='pending' || q.status==='failed').length; }catch(e){}
+      diagLog('memory', label, { mem, storage, hydratedPhotoCount, hydratedPhotoMbApprox: (hydratedPhotoCharsApprox / 1048576).toFixed(1), siteCount: (sites || []).length, conflictOpenCount, queuePendingCount });
     }catch(e){}
   }
 
@@ -8110,6 +8115,24 @@
       site: entry.site ? stripHeavyPhotoFields(entry.site) : entry.site
     }));
   }
+  // 충돌 기록에 담기는 local_data/cloud_data는 엔티티 종류에 따라 모양이 다르다
+  // (시설물이면 markers[].photos[], 마커/기존손상이면 자기 자신이 photos[]를
+  // 직접 가짐) — 어떤 모양이든 사진 원본만 골라서 뺀다. 안 그러면 충돌
+  // 기록마다 사진 데이터 사본이 그대로 쌓여 저장공간을 계속 갉아먹는다.
+  function stripHeavyDataForConflictLog(data){
+    if(!data || typeof data !== 'object') return data;
+    const copy = { ...data };
+    if(Array.isArray(copy.markers)){
+      copy.markers = copy.markers.map(m => ({
+        ...m,
+        photos: Array.isArray(m.photos) ? m.photos.map(stripPhotoHeavyFields) : m.photos
+      }));
+    }
+    if(Array.isArray(copy.photos)){
+      copy.photos = copy.photos.map(stripPhotoHeavyFields);
+    }
+    return copy;
+  }
 
   // ---------- saveState 동시 실행 안정화 (Last-State-Wins Queue) ----------
   // 여러 이벤트(사진 추가, 손상 수정, 위치 변경 등)에서 saveState()가 짧은 간격으로
@@ -8532,24 +8555,44 @@
   // 충돌 감지 및 ps_sync_conflicts 안전 기록
   async function detectAndRecordConflict({ organization_id, project_id, entity_type, entity_id, user_id, local_revision, cloud_revision, local_data, cloud_data }){
     console.warn(`[Sync] conflict: ${entity_type} (${entity_id}) Local Rev ${local_revision} vs Cloud Rev ${cloud_revision}`);
+    diagLog('sync', 'conflict: ' + entity_type + ' ' + entity_id, { local_revision, cloud_revision });
     const records = await loadConflictRecords();
-    const conflictId = genId();
-    const conflictItem = {
-      id: conflictId,
-      organization_id: organization_id || null,
-      project_id: project_id || currentProjectId || '',
-      entity_type: entity_type,
-      entity_id: entity_id,
-      user_id: user_id || (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null,
-      local_revision: local_revision || 1,
-      cloud_revision: cloud_revision || 1,
-      local_data: local_data ? JSON.parse(JSON.stringify(local_data)) : null,
-      cloud_data: cloud_data ? JSON.parse(JSON.stringify(cloud_data)) : null,
-      status: 'open',
-      detectedAt: new Date().toISOString(),
-      resolved: false
-    };
-    records.push(conflictItem);
+    const strippedLocal = local_data ? stripHeavyDataForConflictLog(JSON.parse(JSON.stringify(local_data))) : null;
+    const strippedCloud = cloud_data ? stripHeavyDataForConflictLog(JSON.parse(JSON.stringify(cloud_data))) : null;
+
+    // 같은 항목(entity_type+entity_id)에 이미 "미해결"(open) 충돌 기록이 있으면
+    // 새로 하나 더 쌓지 않고 최신 정보로 갱신만 한다. 이게 없으면 같은 원인이
+    // 반복될 때마다(예: 리비전이 계속 안 맞던 버그) 매번 새 기록이 쌓여
+    // "충돌 개수가 끝없이 올라가는" 것처럼 보였고, 각 기록마다 사진이 포함된
+    // 데이터 사본까지 통째로 들어있어 저장공간도 같이 계속 불어났다.
+    const existingIdx = records.findIndex(c => c.entity_type === entity_type && c.entity_id === entity_id && c.status === 'open');
+    let conflictItem;
+    if(existingIdx >= 0){
+      conflictItem = records[existingIdx];
+      conflictItem.local_revision = local_revision || 1;
+      conflictItem.cloud_revision = cloud_revision || 1;
+      conflictItem.local_data = strippedLocal;
+      conflictItem.cloud_data = strippedCloud;
+      conflictItem.detectedAt = new Date().toISOString();
+    } else {
+      conflictItem = {
+        id: genId(),
+        organization_id: organization_id || null,
+        project_id: project_id || currentProjectId || '',
+        entity_type: entity_type,
+        entity_id: entity_id,
+        user_id: user_id || (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null,
+        local_revision: local_revision || 1,
+        cloud_revision: cloud_revision || 1,
+        local_data: strippedLocal,
+        cloud_data: strippedCloud,
+        status: 'open',
+        detectedAt: new Date().toISOString(),
+        resolved: false
+      };
+      records.push(conflictItem);
+    }
+    const conflictId = conflictItem.id;
     await saveConflictRecords(records);
 
     // 원격 ps_sync_conflicts 테이블에도 백업 기록 (실패해도 로컬 조사는 안전 유지)
@@ -8564,8 +8607,8 @@
           user_id: user_id || supabaseSession.user.id,
           local_revision: local_revision || 1,
           cloud_revision: cloud_revision || 1,
-          local_data: local_data || {},
-          cloud_data: cloud_data || {},
+          local_data: strippedLocal || {},
+          cloud_data: strippedCloud || {},
           status: 'open',
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString()
