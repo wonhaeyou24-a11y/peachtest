@@ -14481,7 +14481,7 @@
           usingStandard ? stdList.filter(x=>x.enabled===false).map(x=>x.damageType) : []
         );
         
-        const isCustomMaster = site && projects.find(p => p.id === currentProjectId)?.damageMaster?.[site.facilityType.trim()]?.[site.facilityForm.trim()];
+        const isCustomMaster = site && projects.find(p => p.id === currentProjectId)?.damageMaster?.[(site.facilityType || '').trim()]?.[(site.facilityForm || '').trim()];
         
         const noFacilitySet = !site || !site.facilityType || !site.facilityForm;
         damageListLabel.innerHTML = '손상기록 (' + p.damages.length + '개) ' +

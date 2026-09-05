@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-shot-v29-revision-persist-selfheal'; // durable store에 revision 저장(재시작 후 거짓충돌 방지) + 내 지점 self-heal
+const CACHE_NAME = 'point-shot-v30-renderdamage-trim-guard'; // renderDamageRecords facilityType/Form undefined 크래시 가드
 // 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
 // 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
 // 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.
