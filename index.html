@@ -2756,7 +2756,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v52';
+  const PS_BUILD = 'v53';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -9195,9 +9195,41 @@
       const totalPendingBefore = queue.filter(q => q.status === 'pending' || q.status === 'failed').length;
       const batch = queue.filter(q => (q.status === 'pending' || q.status === 'failed') && (q.nextRetryAt || 0) <= now).slice(0, 50);
 
+      // ★ 배치 시작에 "현재 클라우드 상태"를 종류별로 한 번에 받아온다. 예전엔
+      //   syncSingleEntity가 항목마다 .eq('id',…).maybeSingle() 을 따로 날려서,
+      //   지점 50개짜리 시설물 첫 동기화가 50번 왕복이었다. 이제 .in('id',[…]) 로
+      //   묶어 1~2번이면 된다. 결과는 prefetchRows(Map) 로 syncSingleEntity에 전달 —
+      //   키가 있으면(값이 null 이어도) "이미 조회함"으로 보고 개별 쿼리를 생략한다.
+      const prefetchRows = new Map();
+      try{
+        const tableByType = {
+          project: 'ps_projects', facility: 'ps_facilities',
+          inspection_point: 'ps_inspection_points', inspectionpoint: 'ps_inspection_points',
+          existing_damage: 'ps_existing_damages', existingdamage: 'ps_existing_damages',
+          damage: 'ps_damages'
+        };
+        const idsByType = {};
+        batch.forEach(it => {
+          const t = String(it.entityType).toLowerCase();
+          if(!tableByType[t]) return;
+          (idsByType[t] = idsByType[t] || new Set()).add(it.entityId);
+        });
+        for(const [t, idSet] of Object.entries(idsByType)){
+          const ids = Array.from(idSet);
+          for(let i = 0; i < ids.length; i += 150){
+            const chunk = ids.slice(i, i + 150);
+            const { data, error } = await supabaseClient.from(tableByType[t]).select('*').in('id', chunk);
+            if(error) continue; // 실패하면 그 종류는 개별 쿼리로 폴백
+            const found = new Set();
+            (data || []).forEach(row => { prefetchRows.set(t + ':' + row.id, row); found.add(row.id); });
+            chunk.forEach(id => { if(!found.has(id)) prefetchRows.set(t + ':' + id, null); }); // 없는 것도 "조회함"으로 기록
+          }
+        }
+      }catch(e){ /* 프리페치 실패 = 그냥 예전처럼 개별 쿼리 */ }
+
       for(const item of batch){
         item.status = 'syncing';
-        const result = await syncSingleEntity(item);
+        const result = await syncSingleEntity(item, prefetchRows);
 
         if(result && result.ok){
           item.status = 'synced';
@@ -9320,7 +9352,7 @@
   }
 
   // 개별 Entity 단위 동기화 (실제 Supabase 7개 테이블 스키마 100% 일치)
-  async function syncSingleEntity(item){
+  async function syncSingleEntity(item, prefetchRows){
     if(!supabaseClient || !supabaseSession) return { ok: false, reason: 'AUTH_FAILED', authError: true };
     const entityType = String(item.entityType).toLowerCase();
     const entityId = item.entityId;
@@ -9329,6 +9361,15 @@
     const expectedRevision = typeof item.revision === 'number' ? item.revision : 1;
     const userId = supabaseSession.user.id;
     const devId = getOrCreateDeviceId();
+
+    // 배치 프리페치(processSyncQueue)가 이 엔티티의 클라우드 행을 이미 받아놨으면
+    // 그걸 쓰고, 아니면 예전처럼 개별 쿼리한다. prefetchRows.has(key) 이면 값이
+    // null(=클라우드에 없음)이어도 "조회 완료"로 취급한다.
+    async function fetchExisting(table, cols){
+      const key = entityType + ':' + entityId;
+      if(prefetchRows && prefetchRows.has(key)) return { data: prefetchRows.get(key), error: null };
+      return await supabaseClient.from(table).select(cols).eq('id', entityId).maybeSingle();
+    }
 
     try{
       // 1. ps_projects Sync
@@ -9345,7 +9386,7 @@
           expectedRevision
         );
 
-        const { data: existing, error: fetchErr } = await supabaseClient.from('ps_projects').select('data, updated_at, user_id').eq('id', entityId).maybeSingle();
+        const { data: existing, error: fetchErr } = await fetchExisting('ps_projects', 'data, updated_at, user_id');
         // 조직 프로젝트의 프로젝트 "행" 자체는 소유자(만든 사람)만 수정 가능하다
         // (ps_projects_update 정책: is_org_member AND user_id = auth.uid()). 팀원은
         // 이 행을 못 고치니 아예 시도하지 않는다 — 시설물·지점은 각자 올리면 된다.
@@ -9413,7 +9454,7 @@
           return c;
         };
         const facBaseRevision = Math.max(expectedRevision, (site && typeof site.revision === 'number') ? site.revision : 1);
-        const { data: existing, error: fetchErr } = await supabaseClient.from('ps_facilities').select('data, updated_at, user_id').eq('id', entityId).maybeSingle();
+        const { data: existing, error: fetchErr } = await fetchExisting('ps_facilities', 'data, updated_at, user_id');
         // 팀원이 만든 시설물을 pull만 해온 경우: 내가 그 행을 수정할 게 없으면 skip.
         if(!fetchErr && existing && op !== 'delete' && existing.user_id && existing.user_id !== userId){
           if(existing.data && typeof existing.data.revision === 'number') site.revision = Math.max(site.revision || 1, existing.data.revision);
@@ -9499,7 +9540,7 @@
         // 수 있으므로 둘 중 큰 값을 기준으로 삼는다(project 브랜치와 동일한 처리 —
         // 이게 없으면 pull로 최신 revision을 받아와도 큐에 남은 옛 스냅샷 때문에 계속 충돌).
         const ipBaseRevision = Math.max(expectedRevision, (point && typeof point.revision === 'number') ? point.revision : 1);
-        const { data: existing, error: checkErr } = await supabaseClient.from('ps_inspection_points').select('revision, data, user_id').eq('id', entityId).maybeSingle();
+        const { data: existing, error: checkErr } = await fetchExisting('ps_inspection_points', 'revision, data, user_id');
         // 팀원이 만든 지점(클라우드 행의 주인이 내가 아님)은 내가 올리지 않는다.
         // RLS상 남의 행은 수정 권한이 없어 어차피 거부되고, 이 기기가 그걸 계속
         // 재시도하며 대기열을 부풀렸다. 내가 만든 로컬 표시(createdBy)가 없고
@@ -9578,7 +9619,7 @@
         const pObj = projects.find(p => p.id === projId);
         const orgId = (pObj && pObj.organizationId) || null;
 
-        const { data: existing, error: checkErr } = await supabaseClient.from('ps_damages').select('revision, data').eq('id', entityId).maybeSingle();
+        const { data: existing, error: checkErr } = await fetchExisting('ps_damages', 'revision, data');
         // [B] 손상(ps_damages)은 지점의 자식 — 지점 주인이 곧 손상 주인이라 팀원끼리
         //   같은 손상을 건드릴 일이 없다. revision만 어긋나면 내 것으로 밀어올린다.
         let dmgBase = expectedRevision;
@@ -9625,7 +9666,7 @@
         const orgId = (pObj && pObj.organizationId) || null;
 
         const edBaseRevision = Math.max(expectedRevision, (exDmg && typeof exDmg.revision === 'number') ? exDmg.revision : 1);
-        const { data: existing, error: checkErr } = await supabaseClient.from('ps_existing_damages').select('revision, data, user_id').eq('id', entityId).maybeSingle();
+        const { data: existing, error: checkErr } = await fetchExisting('ps_existing_damages', 'revision, data, user_id');
         if(!checkErr && existing && op !== 'delete' && existing.user_id && existing.user_id !== userId
            && !(exDmg && exDmg.createdBy === userId)){
           if(exDmg && typeof existing.revision === 'number') exDmg.revision = Math.max(exDmg.revision || 1, existing.revision);
@@ -9839,7 +9880,20 @@
       }
 
       const FACILITY_ARRAY_FIELDS = ['markers', 'existingDamages', 'drawings'];
-      const { data: remoteFacs, error: facErr } = await supabaseClient.from('ps_facilities').select('*').eq('project_id', targetProjId);
+
+      // ★ 시설물·지점·기존손상 3개 테이블은 서로 데이터 의존이 없다(병합 순서만
+      //   1→2→3). 예전엔 순차 await 3번이었는데 Promise.all로 한 번에 받는다 —
+      //   "팀원 자료 가져오기" 체감 속도 개선.
+      const [_facR, _ptR, _edR] = await Promise.all([
+        supabaseClient.from('ps_facilities').select('*').eq('project_id', targetProjId),
+        supabaseClient.from('ps_inspection_points').select('*').eq('project_id', targetProjId),
+        supabaseClient.from('ps_existing_damages').select('*').eq('project_id', targetProjId)
+      ]);
+      const remoteFacs = _facR && _facR.data;
+      const facErr = _facR && _facR.error;
+      const _remotePtsPrefetched = (_ptR && Array.isArray(_ptR.data)) ? _ptR.data : null;
+      const _remoteEdsPrefetched = (_edR && Array.isArray(_edR.data)) ? _edR.data : null;
+
       if(!facErr && Array.isArray(remoteFacs)){
         remoteFacs.forEach(rf => {
           const idx = sites.findIndex(s => s.id === rf.id);
@@ -9908,7 +9962,8 @@
       const remotePointIds = new Set();
       const remotePointFacility = new Map(); // id -> facility_id (진단용)
       try{
-        const { data: remotePts } = await supabaseClient.from('ps_inspection_points').select('*').eq('project_id', targetProjId);
+        const remotePts = _remotePtsPrefetched
+          || ((await supabaseClient.from('ps_inspection_points').select('*').eq('project_id', targetProjId)).data);
         if(Array.isArray(remotePts)){
           remotePts.forEach(rp => {
             remotePointIds.add(rp.id); remotePointFacility.set(rp.id, rp.facility_id);
@@ -9975,7 +10030,8 @@
 
       // 3. Existing Damages Pull (기존손상 — ID 기준 합집합, 소프트삭제 상태도 그대로 반영)
       try{
-        const { data: remoteEds } = await supabaseClient.from('ps_existing_damages').select('*').eq('project_id', targetProjId);
+        const remoteEds = _remoteEdsPrefetched
+          || ((await supabaseClient.from('ps_existing_damages').select('*').eq('project_id', targetProjId)).data);
         if(Array.isArray(remoteEds)){
           remoteEds.forEach(re => {
             const site = sites.find(s => s.id === re.facility_id);
