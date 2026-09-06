@@ -2740,7 +2740,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v48';
+  const PS_BUILD = 'v49';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -9255,28 +9255,12 @@
           return { ok: true, skipped: true, reason: 'not-owner' };
         }
         const cloudRevision = (existing && existing.data && typeof existing.data.revision === 'number') ? existing.data.revision : 0;
-        if(!fetchErr && cloudRevision > baseRevision){
-          if(sameSyncedContent(proj, existing.data)){
-            // 리비전만 뒤처졌을 뿐 내용은 동일 — 충돌 아님. 클라우드 리비전을 그대로
-            // 수용하고 넘어간다(다음 저장 때 로컬에 반영됨).
-            proj.revision = cloudRevision;
-            diagLog('sync', 'auto-reconcile: project ' + entityId, { adopted_revision: cloudRevision });
-            return { ok: true, reconciled: true };
-          }
-          await detectAndRecordConflict({
-            organization_id: orgId,
-            project_id: entityId,
-            entity_type: 'project',
-            entity_id: entityId,
-            user_id: userId,
-            local_revision: baseRevision,
-            cloud_revision: cloudRevision,
-            local_data: proj,
-            cloud_data: existing.data
-          });
-          return { ok: false, conflict: true, reason: `Revision mismatch: Local ${baseRevision} vs Cloud ${cloudRevision}` };
+        // [B] 프로젝트 행은 소유자만 올린다(위에서 팀원은 skip). 여기 오는 건 "같은
+        //   소유자의 다른 기기"뿐이라 진짜 충돌이 아니다 — 클라우드 리비전을 기준으로
+        //   삼고 이 기기 내용으로 덮어쓴다(마지막 저장 우선). 충돌기록 안 만든다.
+        if(!fetchErr && cloudRevision > baseRevision && !sameSyncedContent(proj, existing.data)){
+          diagLog('sync', 'project LWW 병합: ' + entityId, { local_base: baseRevision, cloud: cloudRevision });
         }
-
         proj.revision = Math.max(baseRevision, cloudRevision) + 1;
         const { error } = await supabaseClient.from('ps_projects').upsert({
           id: proj.id,
@@ -9341,29 +9325,20 @@
             return { ok: true, skipped: true };
           }
         }
-        if(!fetchErr && existing && existing.data && existing.data.revision && existing.data.revision > facBaseRevision){
-          const localMeta = facMetaOnly(site);
-          const cloudMeta = facMetaOnly(existing.data);
-          if(sameSyncedContent(localMeta, cloudMeta)){
+        // [B] 시설물 행(메타+도면)은 세팅한 사람만 올린다(위에서 팀원 skip). 여기 오는 건
+        //   "같은 소유자의 다른 기기"뿐 — 클라우드 리비전을 기준으로 이 기기 내용으로
+        //   덮어쓴다(마지막 저장 우선). 충돌기록 안 만든다.
+        let facBase = facBaseRevision;
+        if(!fetchErr && existing && existing.data && typeof existing.data.revision === 'number' && existing.data.revision > facBase){
+          if(sameSyncedContent(facMetaOnly(site), facMetaOnly(existing.data))){
             site.revision = existing.data.revision;
-            diagLog('sync', 'auto-reconcile: facility ' + entityId, { adopted_revision: existing.data.revision });
             return { ok: true, reconciled: true };
           }
-          await detectAndRecordConflict({
-            organization_id: orgId,
-            project_id: projId,
-            entity_type: 'facility',
-            entity_id: entityId,
-            user_id: userId,
-            local_revision: facBaseRevision,
-            cloud_revision: existing.data.revision,
-            local_data: site,
-            cloud_data: existing.data
-          });
-          return { ok: false, conflict: true, reason: `Revision mismatch: Local ${facBaseRevision} vs Cloud ${existing.data.revision}` };
+          diagLog('sync', 'facility LWW 병합: ' + entityId, { local_base: facBase, cloud: existing.data.revision });
+          facBase = existing.data.revision;
         }
 
-        site.revision = facBaseRevision + 1;
+        site.revision = facBase + 1;
         // [B] 시설물 blob에는 메타데이터 + 도면(drawings)만 담는다. markers/existingDamages는
         //     각 조사자가 ps_inspection_points / ps_existing_damages 에 자기 것만 따로 올리고
         //     pull이 id 기준 합집합으로 취합한다 — blob에 넣으면 두 조사자가 서로 덮어쓴다.
@@ -9445,29 +9420,12 @@
             diagLog('sync', 'auto-reconcile: inspection_point ' + entityId, { adopted_revision: existing.revision });
             return { ok: true, reconciled: true };
           }
-          // 내가 만든 내 지점인데 revision만 어긋난 경우(재시작으로 로컬 revision이
-          // 1로 돌아갔다든지) — 남이 편집할 일이 거의 없는 내 소유 행이므로 진짜
-          // 충돌로 쌓지 말고 "내 로컬 버전"으로 밀어올린다(revision을 클라우드보다
-          // 높여서 재업로드). 이게 "재시작할 때마다 충돌이 또 뜬다"의 핵심 완화책.
-          const iOwnIt = (existing.user_id && existing.user_id === userId) || (point && point.createdBy === userId);
-          if(point && iOwnIt){
-            diagLog('sync', 'self-heal: inspection_point ' + entityId + ' (내 지점, 로컬 우선)', { local: ipBaseRevision, cloud: existing.revision });
-            // 아래 정상 업로드 경로로 흘려보내되, revision을 클라우드+1로 맞춘다
-            point.revision = existing.revision;
-          } else {
-          await detectAndRecordConflict({
-            organization_id: orgId,
-            project_id: projId,
-            entity_type: 'inspection_point',
-            entity_id: entityId,
-            user_id: userId,
-            local_revision: ipBaseRevision,
-            cloud_revision: existing.revision,
-            local_data: point,
-            cloud_data: existing.data || existing
-          });
-          return { ok: false, conflict: true, reason: `Revision mismatch: Local ${ipBaseRevision} vs Cloud ${existing.revision}` };
-          }
+          // [B] 여기 오는 지점은 "내 지점"뿐이다(팀원 지점은 위에서 skip). revision만
+          //   어긋난 경우(재시작으로 로컬 revision이 1로 돌아갔다든지)는 내 소유 행이라
+          //   진짜 충돌이 아니다 — 내 로컬 버전으로 밀어올린다(revision을 클라우드보다
+          //   높여 재업로드). 충돌기록 안 만든다.
+          diagLog('sync', 'self-heal: inspection_point ' + entityId + ' (내 지점, 로컬 우선)', { local: ipBaseRevision, cloud: existing.revision });
+          point.revision = existing.revision;
         }
 
         // self-heal 분기에서 point.revision을 클라우드값으로 맞춰뒀을 수 있으니,
@@ -9520,22 +9478,13 @@
         const orgId = (pObj && pObj.organizationId) || null;
 
         const { data: existing, error: checkErr } = await supabaseClient.from('ps_damages').select('revision, data').eq('id', entityId).maybeSingle();
-        if(!checkErr && existing && existing.revision && existing.revision > expectedRevision){
-          await detectAndRecordConflict({
-            organization_id: orgId,
-            project_id: projId,
-            entity_type: 'damage',
-            entity_id: entityId,
-            user_id: userId,
-            local_revision: expectedRevision,
-            cloud_revision: existing.revision,
-            local_data: dmg,
-            cloud_data: existing.data || existing
-          });
-          return { ok: false, conflict: true, reason: `Revision mismatch: Local ${expectedRevision} vs Cloud ${existing.revision}` };
+        // [B] 손상(ps_damages)은 지점의 자식 — 지점 주인이 곧 손상 주인이라 팀원끼리
+        //   같은 손상을 건드릴 일이 없다. revision만 어긋나면 내 것으로 밀어올린다.
+        let dmgBase = expectedRevision;
+        if(!checkErr && existing && typeof existing.revision === 'number' && existing.revision > dmgBase){
+          dmgBase = existing.revision;
         }
-
-        const dmgRevision = expectedRevision + 1;
+        const dmgRevision = dmgBase + 1;
         const { error: upErr } = await supabaseClient.from('ps_damages').upsert({
           id: entityId,
           point_id: dmg.pointId || dmg.point_id || null,
@@ -9585,27 +9534,19 @@
           if(typeof existing.revision === 'number') exDmg.revision = Math.max(exDmg.revision || 1, existing.revision);
           return { ok: true, skipped: true };
         }
-        if(!checkErr && existing && existing.revision && existing.revision > edBaseRevision){
+        let edBase = edBaseRevision;
+        if(!checkErr && existing && existing.revision && existing.revision > edBase){
           if(exDmg && Object.keys(exDmg).length && sameSyncedContent(exDmg, existing.data || existing)){
             exDmg.revision = existing.revision;
-            diagLog('sync', 'auto-reconcile: existing_damage ' + entityId, { adopted_revision: existing.revision });
             return { ok: true, reconciled: true };
           }
-          await detectAndRecordConflict({
-            organization_id: orgId,
-            project_id: projId,
-            entity_type: 'existing_damage',
-            entity_id: entityId,
-            user_id: userId,
-            local_revision: edBaseRevision,
-            cloud_revision: existing.revision,
-            local_data: exDmg,
-            cloud_data: existing.data || existing
-          });
-          return { ok: false, conflict: true, reason: `Revision mismatch: Local ${edBaseRevision} vs Cloud ${existing.revision}` };
+          // [B] 여기 오는 건 "내 기존손상"뿐(팀원 것은 위에서 skip). revision만 어긋난
+          //   내 소유 행이므로 충돌 아님 — 내 로컬 버전으로 밀어올린다.
+          diagLog('sync', 'self-heal: existing_damage ' + entityId + ' (내 것, 로컬 우선)', { local: edBase, cloud: existing.revision });
+          edBase = existing.revision;
         }
 
-        const exRevision = edBaseRevision + 1;
+        const exRevision = edBase + 1;
         if(exDmg) exDmg.revision = exRevision; // 실제 site.existingDamages 안의 객체이므로 이제 정말로 반영됨
         const lightExDmg = { ...exDmg, photos: (exDmg.photos || []).map(stripPhotoHeavyFields) }; // 사진 원본은 ps-photos에 별도 업로드됨(위 inspection_point와 동일한 이유)
         const { error: upErr } = await supabaseClient.from('ps_existing_damages').upsert({
