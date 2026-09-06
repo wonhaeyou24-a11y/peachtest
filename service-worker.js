@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-shot-v46-pull-marker-wipe-fix'; // ★ pull이 라이브 배열 재구성 시 같은참조면 markers 전멸하던 버그 수정 + ps_facilities RLS 가드
+const CACHE_NAME = 'point-shot-v47-no-view-reset-on-pull'; // 배경 pull이 도면 줌/이동을 100%로 리셋하던 것 수정(이미지 안 바뀌면 안 다시그림) + 사진촬영 지점못찾음 방어
 // 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
 // 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
 // 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.

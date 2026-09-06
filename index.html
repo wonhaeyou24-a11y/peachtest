@@ -2740,7 +2740,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v46';
+  const PS_BUILD = 'v47';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -10024,6 +10024,7 @@
         // ★ 라이브 배열 재구성 + 저장을 한 임계구간으로 묶는다. 이 사이에 saveState의
         //   commitLiveToCurrentSite가 끼어들면 pull이 합쳐온 지점/도면을 옛 라이브
         //   배열로 덮어써 지점·도면이 사라졌다 나타났다 한다(_pullSyncingLive로 commit 차단).
+        const _baseImageBeforePull = (typeof baseImageSrc !== 'undefined') ? baseImageSrc : null;
         _pullSyncingLive = true;
         try{
           const curSite = sites.find(s=>s.id===currentSiteId);
@@ -10073,7 +10074,17 @@
           deletedSites: lightweightDeletedSitesFor(deletedSites)
         });
         _pullSyncingLive = false;
-        try{ if(typeof renderBaseImage === 'function' && baseImageSrc) renderBaseImage(); }catch(e){}
+        // ★ renderBaseImage()는 stage.innerHTML=''로 DOM을 통째로 새로 그리고
+        //   fitToStage()가 줌/이동(zScale/zTx/zTy)을 100%로 리셋한다. 배경 pull이
+        //   돌 때마다 이걸 부르면, 사용자가 도면을 확대·이동해둔 상태가 매번 원래대로
+        //   튕긴다("줌/이동 불안정"). 도면 이미지가 실제로 바뀌었을 때만 다시 그린다.
+        try{
+          const imgFrameNow = document.getElementById('imgFrame');
+          const needRedraw = baseImageSrc && (baseImageSrc !== _baseImageBeforePull || !imgFrameNow);
+          if(typeof renderBaseImage === 'function' && needRedraw){
+            renderBaseImage();
+          }
+        }catch(e){}
         try{ if(typeof renderDrawingTabs === 'function') renderDrawingTabs(); }catch(e){}
         refreshStageHeader();
         renderMarkers();
@@ -14395,7 +14406,22 @@
 
   async function openCapture(markerId){
     activeMarkerId = markerId;
-    const m = markers.find(x=>x.id===markerId);
+    let m = markers.find(x=>x.id===markerId);
+    // 방어: 라이브 markers 에 없으면 현재 시설물 배열에서 찾아 라이브에 복구한다
+    // (예전 pull 버그로 라이브 배열이 비었던 잔재 등). 여기서 throw 되면 촬영창이
+    // 깨진 채로 열려 카메라가 아예 안 뜬다("사진 촬영이 안 됨"의 한 경로).
+    if(!m){
+      try{
+        const cs = (typeof currentSiteObj === 'function') ? currentSiteObj() : sites.find(s=>s.id===currentSiteId);
+        const found = cs && (cs.markers || []).find(x=>x.id===markerId);
+        if(found){ if(!markers.find(x=>x.id===markerId)) markers.push(found); m = found; }
+      }catch(e){}
+    }
+    if(!m){
+      try{ diagLog('save', '사진 촬영 열기 실패: 지점을 찾을 수 없음', { markerId, liveCount: markers.length }); }catch(e){}
+      alert('지점 정보를 찾을 수 없어 촬영을 열 수 없습니다. 목록에서 지점을 다시 선택해주세요.');
+      return;
+    }
     captureTitle.textContent = '지점 ' + m.num + ' · 사진 촬영';
     captureModal.style.display = 'flex';
     btnRestartCamera.style.display = 'none';
@@ -14672,8 +14698,21 @@
   }
 
   async function addPhoto(markerId, dataUrl, exif){
-    const m = markers.find(x=>x.id===markerId);
-    if(!m) return;
+    let m = markers.find(x=>x.id===markerId);
+    if(!m){
+      // 라이브 배열에 없으면 현재 시설물에서 찾아 복구 — 못 찾으면 사진이 조용히
+      // 사라지고 "미촬영"으로 남는다(실사용 중 실제로 발생).
+      try{
+        const cs = (typeof currentSiteObj === 'function') ? currentSiteObj() : sites.find(s=>s.id===currentSiteId);
+        const found = cs && (cs.markers || []).find(x=>x.id===markerId);
+        if(found){ markers.push(found); m = found; }
+      }catch(e){}
+    }
+    if(!m){
+      try{ diagLog('save', '사진 저장 실패: 지점을 찾을 수 없음', { markerId }); }catch(e){}
+      alert('사진을 붙일 지점을 찾지 못했습니다. 지점을 다시 선택한 뒤 시도해주세요.');
+      return;
+    }
     if(!m.photos) m.photos = [];
     const quality = await computePhotoAnalysis(dataUrl);
     const photoId = genId();
