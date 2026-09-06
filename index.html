@@ -2740,7 +2740,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v49';
+  const PS_BUILD = 'v50';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -8614,6 +8614,7 @@
   }
 
   let syncProcessing = false;
+  let _teamUpdatesAvailable = false; // 45초 주기 점검이 채움 — 상단 상태줄에 "새 자료 있음" 표시용
   let lastSyncTimestamp = null;
 
   // Multi-tab 동기화 알림용 BroadcastChannel
@@ -9204,6 +9205,18 @@
       if(syncedCount > 0 && syncBroadcastChannel){
         try{ syncBroadcastChannel.postMessage({ type: 'SYNC_COMPLETED', count: syncedCount }); }catch(e){}
       }
+      // ★ 처리 중(syncProcessing=true) 사이에 새로 들어온 항목은 그때 enqueue가
+      //   processSyncQueue()를 못 불렀다(가드에 걸림). 그래서 지점을 연달아 찍으면
+      //   두 번째부터는 큐에 쌓인 채 다음 visibilitychange까지 안 올라갔다
+      //   ("마지막 지점이 한참 뒤에야 취합됨"). 처리 후 아직 보낼 게 남아있으면
+      //   짧게 뒤에 한 번 더 돌린다.
+      try{
+        const still = (await loadEntitySyncQueue()).filter(q =>
+          (q.status === 'pending' || q.status === 'failed') && (q.nextRetryAt || 0) <= Date.now());
+        if(still.length > 0){
+          setTimeout(()=>{ processSyncQueue().catch(()=>{}); }, 1500);
+        }
+      }catch(e){}
       return { ok: true, syncedCount };
     }catch(err){
       console.warn('[Sync] 큐 처리 중 예외 (로컬 데이터 안전 보존)', err);
@@ -10036,6 +10049,8 @@
       }
 
       await setSyncCursor(targetProjId, new Date().toISOString());
+      _teamUpdatesAvailable = false; // 방금 가져왔으니 "새 자료 있음" 표시를 내린다
+      try{ if(typeof updateSyncStatusIndicator === 'function') updateSyncStatusIndicator(); }catch(e){}
       console.log(`[Sync] pull completed: ${mergedCount} items merged`);
       const facilitySummary = (sites || []).filter(s=>s.projectId===targetProjId)
         .map(s=>({ name: s.name, id: s.id, points: (s.markers||[]).length, isCurrent: s.id===currentSiteId }));
@@ -10080,7 +10095,20 @@
     try{
       const queue = await loadEntitySyncQueue();
       const pending = queue.filter(q => q.status === 'pending' || q.status === 'failed');
-      if(pending.length === 0){ sbSync.style.display = 'none'; return; }
+      if(pending.length === 0){
+        // 올릴 건 없지만 팀원이 올린 새 자료가 있으면 그걸 알린다(누르면 동기화 탭 열림).
+        if(_teamUpdatesAvailable){
+          sbSync.style.display = '';
+          sbSync.textContent = '🟢 팀원 새 자료 있음 — 눌러서 가져오기';
+          sbSync.className = 'sb-item';
+          sbSync.style.color = '#1F8A4C';
+        } else {
+          sbSync.style.display = 'none';
+          sbSync.style.color = '';
+        }
+        return;
+      }
+      sbSync.style.color = '';
       const failing = pending.filter(q => (q.retryCount || 0) > 0);
       sbSync.style.display = '';
       if(!navigator.onLine){
@@ -17053,6 +17081,37 @@
   // 30분마다 메모리/저장소 사용량을 한 번씩 남긴다 — 장시간 현장조사 중 서서히
   // 메모리가 쌓이는지(지난 메모리누수 수정이 실제로 버티는지) 확인용 정기 기록.
   setInterval(()=>{ diagLogMemorySnapshot('정기 점검(30분)'); }, 30 * 60 * 1000);
+
+  // ★ 20초마다 동기화 큐를 한 번씩 밀어준다 — 지점을 연달아 찍는 동안에는
+  //   enqueue 시점에 이전 동기화가 아직 돌고 있어(syncProcessing) 자동 처리가
+  //   건너뛰어지는데, 그러면 다음 화면전환(visibilitychange)까지 큐에 쌓인 채
+  //   안 올라갔다("모바일 마지막 지점이 PC로 한참 뒤에 취합됨"). 이 타이머가
+  //   그 사이 올릴 게 있으면 바로 올린다. pull(가져오기)은 여기서 안 한다 —
+  //   가져오기는 사용자가 직접 눌러야 하는 수동 동작 그대로.
+  setInterval(()=>{
+    try{
+      if(navigator.onLine && supabaseClient && supabaseSession && !syncProcessing){
+        processSyncQueue().catch(()=>{});
+      }
+    }catch(e){}
+  }, 20 * 1000);
+
+  // 45초마다 "팀원이 올린 새 자료가 있는지"만 가볍게 확인해서, 동기화 대시보드를
+  // 열지 않아도 상단 상태줄에 "🟢 팀원 새 자료 있음 — 가져오기"가 뜨게 한다.
+  //   (자동 pull은 안 한다 — 가져오기는 사용자가 직접 누르는 수동 동작 그대로.)
+  setInterval(()=>{
+    try{
+      if(navigator.onLine && supabaseClient && supabaseSession && currentProjectId){
+        checkTeamUpdatesAvailable(currentProjectId).then(r=>{
+          const has = !!(r && r.available);
+          if(has !== _teamUpdatesAvailable){
+            _teamUpdatesAvailable = has;
+            if(typeof updateSyncStatusIndicator === 'function') updateSyncStatusIndicator();
+          }
+        }).catch(()=>{});
+      }
+    }catch(e){}
+  }, 45 * 1000);
 
   // 브라우저 탭을 직접 닫거나 다른 주소로 이동할 때만 뜨는 네이티브 "나가시겠습니까?"
   // 확인창. pagehide/visibilitychange는 비동기 저장을 기다려줄 방법이 없어서(브라우저가
