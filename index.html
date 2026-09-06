@@ -2756,7 +2756,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v53';
+  const PS_BUILD = 'v54';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -8749,42 +8749,18 @@
   // 그리고 그렇게 "대기 중"으로 큐에 계속 남아있으니 pullCloudChanges의
   // pendingKeys 보호로직이 "로컬에 손댄 게 있다"고 착각해 그 지점은 영원히
   // 다시 못 당겨왔다("팀원 최신자료 가져오기"가 매번 "최신조사 없음"으로 뜨던 원인).
+  // 이 Map은 "이번 실행(세션) 동안" 같은 내용을 반복해서 큐에 안 넣도록 하는 캐시다.
+  //   ※ 일부러 IndexedDB에 저장하지 않는다. 앱을 재시작하면 이 Map이 비고, 그 첫
+  //     저장 때 시설물의 모든 항목이 다시 큐에 들어가 한 번씩 동기화 확인을 거친다.
+  //     낭비처럼 보이지만(진단로그의 skipped:N) 이게 "자동 복구" 역할을 한다 —
+  //     클라우드에서 프로젝트/시설물 행이 삭제됐거나 소실됐어도, 재시작 후 재-push로
+  //     다시 만들어진다. 이 캐시를 영구 저장했더니(v52) 그 복구가 안 돼서 자식
+  //     지점들이 FK 위반으로 영원히 실패했다 → 되돌림.
   const lastQueuedEntitySignatures = new Map(); // `${entityType}:${entityId}` -> 마지막으로 큐에 넣은 내용의 서명
-
-  // ★ 이 Map을 IndexedDB에 저장·복원한다. iOS는 PWA를 1~2분마다 리로드하는데,
-  //   그때마다 이 Map이 비면 첫 saveState가 시설물의 모든 마커·기존손상을 다시
-  //   큐에 넣고(내용은 안 바뀌었는데), 동기화가 그걸 하나씩 "이미 동일"로 스킵한다
-  //   (진단로그의 skipped:N — Supabase SELECT 낭비). 리로드 후에도 서명이 남아있으면
-  //   재큐잉 자체가 안 일어난다.
-  const SYNCED_SIG_KEY = 'point-shot-synced-sigs-v1';
-  let _sigPersistTimer = 0;
-  function persistSyncedSignatures(){
-    if(_sigPersistTimer) return;
-    _sigPersistTimer = setTimeout(async ()=>{
-      _sigPersistTimer = 0;
-      try{
-        // 너무 커지지 않게 상한(현장 프로젝트 규모면 넉넉). 초과 시 최근 것 우선.
-        const entries = Array.from(lastQueuedEntitySignatures.entries());
-        const capped = entries.length > 4000 ? entries.slice(entries.length - 4000) : entries;
-        await storageSet(SYNCED_SIG_KEY, capped);
-      }catch(e){}
-    }, 4000);
-  }
+  function persistSyncedSignatures(){ /* v52 롤백: 영속화 안 함 (위 주석 참고) */ }
   async function restoreSyncedSignatures(){
-    try{
-      const saved = await storageGet(SYNCED_SIG_KEY);
-      if(!Array.isArray(saved)) return;
-      // 현재 로컬에 실재하는 엔티티만 복원(삭제된 것의 서명은 버림 — 무한 증가 방지).
-      const liveIds = new Set();
-      (projects || []).forEach(p => liveIds.add('project:' + p.id));
-      (sites || []).forEach(s => {
-        liveIds.add('facility:' + s.id);
-        (s.markers || []).forEach(m => m && m.id && liveIds.add('inspection_point:' + m.id));
-        (s.existingDamages || []).forEach(d => d && d.id && liveIds.add('existing_damage:' + d.id));
-        (s.drawings || []).forEach(d => d && d.id && liveIds.add('drawing:' + d.id));
-      });
-      saved.forEach(([k, sig]) => { if(k && sig != null && liveIds.has(k)) lastQueuedEntitySignatures.set(k, sig); });
-    }catch(e){}
+    // v52 롤백: 복원 안 함. v52/v53 에서 쓰던 키가 남아있으면 지운다(다시는 안 씀).
+    try{ await storageDelete('point-shot-synced-sigs-v1'); }catch(e){}
   }
 
   function entityContentSignature(obj){
@@ -9247,18 +9223,43 @@
         } else {
           item.retryCount = (item.retryCount || 0) + 1;
           item.lastError = (result && result.reason) || '알 수 없는 동기화 오류';
-          // 재시도해봐야 절대 안 풀리는 오류들: RLS 권한 거부(남의 행), FK 위반
-          // (참조하는 도면/시설물이 클라우드에 아직 없음). 몇 번 시도 후 큐에서
-          // 빼서 무한 재시도·대기열 적체를 막는다(로컬 데이터는 안전).
-          const unfixable = /row-level security|permission denied|not authorized|foreign key constraint|violates foreign key/i.test(item.lastError);
-          if(unfixable && item.retryCount >= 3){
-            item.status = 'skipped_unfixable';
+          const isFk = /foreign key constraint|violates foreign key/i.test(item.lastError);
+          const isRls = /row-level security|permission denied|not authorized/i.test(item.lastError);
+
+          if(isFk){
+            // FK 위반 = 부모(프로젝트/시설물)가 아직 클라우드에 없다. "영구 실패"가
+            // 아니라 "순서 문제"다 — 부모가 올라가면 저절로 풀린다. 부모 서명을
+            // 캐시에서 지워서 다음 저장 때 부모가 다시 큐에 들어가게 하고, 이 항목은
+            // 넉넉한 backoff로 재시도 유지한다(예전엔 3번 만에 큐에서 빼버려서
+            // 부모가 나중에 생겨도 이 지점은 영영 안 올라갔다).
+            try{
+              if(item.projectId) lastQueuedEntitySignatures.delete('project:' + item.projectId);
+              if(item.facilityId){
+                lastQueuedEntitySignatures.delete('facility:' + item.facilityId);
+                const _s = sites.find(s => s.id === item.facilityId);
+                if(_s){ _s._pushBlocked = false; if(typeof _s.revision === 'number') _s.revision = 1; }
+              }
+            }catch(e){}
+            if(item.retryCount >= 30){
+              // ~30분 넘게 부모가 안 올라왔다(팀원이 오래 오프라인 등). 큐에서 빼되,
+              // 로컬 데이터는 그대로 — 다음 앱 재시작 때 서명 캐시가 비면서 다시 큐에 들어간다.
+              item.status = 'skipped_unfixable';
+              failReasons['FK 장기대기(큐에서 제외, 재시작 시 재시도): ' + String(item.entityType)] =
+                (failReasons['FK 장기대기(큐에서 제외, 재시작 시 재시도): ' + String(item.entityType)] || 0) + 1;
+            } else {
+              item.status = 'failed';
+              item.nextRetryAt = Date.now() + Math.min(60000, 8000 * item.retryCount);
+              failReasons['FK 대기(부모 미동기화): ' + String(item.entityType)] = (failReasons['FK 대기(부모 미동기화): ' + String(item.entityType)] || 0) + 1;
+            }
             failedCount++;
-            const isFk = /foreign key/i.test(item.lastError);
-            const rk = (isFk ? 'FK위반(참조대상 없음, 큐에서 제외): ' : 'RLS 권한없음(큐에서 제외): ') + String(item.entityType);
-            failReasons[rk] = (failReasons[rk] || 0) + 1;
             changed = true;
-            console.warn(`[Sync] drop (unfixable): ${item.entityType} (${item.entityId}) - ${item.lastError}`);
+            console.warn(`[Sync] FK wait (#${item.retryCount}): ${item.entityType} (${item.entityId}) - 부모 재큐잉함`);
+          } else if(isRls && item.retryCount >= 3){
+            item.status = 'skipped_unfixable'; // RLS는 재시도해도 안 풀림
+            failedCount++;
+            failReasons['RLS 권한없음(큐에서 제외): ' + String(item.entityType)] = (failReasons['RLS 권한없음(큐에서 제외): ' + String(item.entityType)] || 0) + 1;
+            changed = true;
+            console.warn(`[Sync] drop (RLS): ${item.entityType} (${item.entityId}) - ${item.lastError}`);
           } else {
             item.status = 'failed';
             const delay = getRetryDelay(item.retryCount);
