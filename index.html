@@ -2740,7 +2740,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v43';
+  const PS_BUILD = 'v44';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -5896,7 +5896,7 @@
   async function listCloudProjects(){
     if(!supabaseClient || !supabaseSession) return [];
     try{
-      let query = supabaseClient.from('ps_projects').select('id,name,updated_at,organization_id').order('updated_at', { ascending:false });
+      let query = supabaseClient.from('ps_projects').select('id,name,updated_at,organization_id,user_id,data').order('updated_at', { ascending:false });
       if(activeOrganizationId){
         query = query.or(`organization_id.eq.${activeOrganizationId},user_id.eq.${supabaseSession.user.id}`);
       } else {
@@ -5965,6 +5965,9 @@
       name: (projRow.name || (projRow.data && projRow.data.name) || '프로젝트') + (isTeamProject ? '' : ' (클라우드에서 불러옴)'),
       organizationId: projRow.organization_id || null,
       ownerId: isTeamProject ? (projRow.user_id || null) : _me,  // 조직 프로젝트 행은 소유자만 수정 가능
+      createdBy: (projRow.data && projRow.data.createdBy) || projRow.user_id || null,
+      createdByName: (projRow.data && projRow.data.createdByName)
+        || (projRow.user_id && orgMemberEmailById[projRow.user_id]) || null,
       _pushBlocked: isTeamProject && projRow.user_id && _me ? (projRow.user_id !== _me) : false,
       savedAt: new Date().toISOString()
     });
@@ -10933,7 +10936,8 @@
 
   function renderProjectList(){
     if(projects.length === 0){
-      projectListBody.innerHTML = '<div class="log-empty">프로젝트가 없습니다. "＋ 새 프로젝트 만들기"로 시작하세요.</div>';
+      projectListBody.innerHTML = '<div class="log-empty">프로젝트가 없습니다. "＋ 새 프로젝트 만들기"로 시작하거나, 아래에서 팀 프로젝트를 받으세요.</div>';
+      renderCloudTeamProjectsSection();
       return;
     }
     const q = (projectSearch && projectSearch.value || '').trim().toLowerCase();
@@ -10949,6 +10953,7 @@
     const filteredProjects = q ? visibleProjects.filter(p => p.name.toLowerCase().includes(q)) : visibleProjects;
     if(filteredProjects.length === 0){
       projectListBody.innerHTML = '<div class="log-empty">검색 결과가 없거나 소속 조직의 프로젝트가 없습니다.</div>';
+      if(!q) renderCloudTeamProjectsSection();
       return;
     }
     projectListBody.innerHTML = '';
@@ -11015,7 +11020,9 @@
       
       // 클라우드 백업 상태 표시
       let syncNote = project.cloudSyncedAt ? ' · ☁️ 동기화됨' : ' · ⚡ 로컬전용';
+      const creator = projectCreatorLabel(project);
       metaRow.textContent = '시설물 ' + facilityCount + '개 · ' + (dateStr || '최근') +
+        (creator ? ' · 설정자: ' + creator : '') +
         (project.client ? ' · ' + project.client : '') +
         (project.inspector ? ' (' + project.inspector + ')' : '') + syncNote;
 
@@ -11142,6 +11149,71 @@
         projectListBody.appendChild(renderCard(p, !!p.organizationId));
       });
     }
+
+    // 3. 조직에 있지만 이 기기에는 아직 없는 프로젝트 — 여기서 바로 "받아서 작업 시작"
+    renderCloudTeamProjectsSection();
+  }
+
+  // 조직 클라우드에 있는데 이 기기 로컬엔 아직 없는 프로젝트를 프로젝트 창에서
+  // 바로 불러올 수 있게 한다(예전엔 "⋯ → 클라우드 동기화" 안에서만 가능).
+  async function renderCloudTeamProjectsSection(){
+    if(!projectListBody || !supabaseClient || !supabaseSession || !navigator.onLine) return;
+    const holderId = '__cloudTeamProjects';
+    let holder = document.getElementById(holderId);
+    if(holder) holder.remove();
+    holder = document.createElement('div');
+    holder.id = holderId;
+    projectListBody.appendChild(holder);
+
+    let cloud = [];
+    try{ cloud = await listCloudProjects(); }catch(e){ return; }
+    const localIds = new Set(projects.map(p => p.id));
+    const notHere = (cloud || []).filter(row =>
+      row.organization_id && !localIds.has(row.id) &&
+      (!activeOrganizationId || row.organization_id === activeOrganizationId)
+    );
+    if(notHere.length === 0){ holder.remove(); return; }
+
+    const header = document.createElement('div');
+    header.style.cssText = 'font-weight:700; font-size:13px; color:var(--text); margin:16px 0 6px; padding-bottom:4px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;';
+    header.innerHTML = '<span>👥 팀 프로젝트 받기</span> <span style="font-size:11px; color:var(--muted);">' + notHere.length + '개</span>';
+    holder.appendChild(header);
+
+    const hint = document.createElement('div');
+    hint.className = 'hint';
+    hint.style.cssText = 'margin:4px 0 10px; font-size:12px;';
+    hint.textContent = '조직원이 만든 프로젝트입니다. "이 기기로 불러오기"를 누르면 현장조사를 시작할 수 있습니다.';
+    holder.appendChild(hint);
+
+    notHere.forEach(row => {
+      const setter = (row.data && row.data.createdByName)
+        || (row.user_id && orgMemberEmailById[row.user_id])
+        || (row.user_id ? ('조사자 ' + String(row.user_id).slice(0,6)) : '');
+      const card = document.createElement('div');
+      card.className = 'compact-card';
+      const t = document.createElement('div');
+      t.className = 'card-header-row';
+      t.innerHTML = '<span class="card-title">' + escapeHtml(row.name || '프로젝트') + '</span>';
+      const meta = document.createElement('div');
+      meta.className = 'card-meta-row';
+      meta.textContent = (setter ? '설정자: ' + setter + ' · ' : '') +
+        (row.updated_at ? new Date(row.updated_at).toLocaleString('ko-KR') : '');
+      const actions = document.createElement('div');
+      actions.className = 'card-actions-row';
+      const getBtn = document.createElement('button');
+      getBtn.className = 'card-btn';
+      getBtn.textContent = '이 기기로 불러오기';
+      getBtn.addEventListener('click', async ()=>{
+        getBtn.disabled = true; getBtn.textContent = '불러오는 중…';
+        try{ await pullProjectFromCloud(row.id); }
+        catch(e){ alert('불러오기 실패: ' + (e && e.message || e)); }
+        projectModal.style.display = 'none';
+        renderProjectList();
+      });
+      actions.appendChild(getBtn);
+      card.appendChild(t); card.appendChild(meta); card.appendChild(actions);
+      holder.appendChild(card);
+    });
   }
 
   let editingProjectInfoId = null;
@@ -11223,6 +11295,27 @@
   // 조직이 하나 이상 있으면, 새 프로젝트를 만들 때 어느 조직 소속인지 물어본다.
   // 아무 조직도 없거나 "개인 프로젝트"를 고르면 organizationId는 null(지금까지와 동일).
   // 기존에 이미 만들어둔 프로젝트는 이 선택과 무관하게 그대로 개인 프로젝트로 남는다.
+  // 프로젝트를 만든 사람(설정자)을 기록한다 — 팀원이 프로젝트 목록에서
+  // "누가 세팅한 프로젝트인지" 보고 중복 생성/최신본 혼선을 줄이기 위함.
+  function stampProjectCreator(project){
+    try{
+      const u = supabaseSession && supabaseSession.user;
+      if(u){
+        project.createdBy = project.createdBy || u.id;
+        project.createdByName = project.createdByName || (u.email || u.id);
+      }
+    }catch(e){}
+    return project;
+  }
+  // 클라우드 행(user_id) 또는 저장된 createdByName 으로 표시용 설정자 이름을 만든다.
+  function projectCreatorLabel(project){
+    if(!project) return '';
+    if(project.createdByName) return project.createdByName;
+    const uid = project.createdBy || project.ownerId;
+    if(uid) return orgMemberEmailById[uid] || ('조사자 ' + String(uid).slice(0, 6));
+    return '';
+  }
+
   function pickOrganizationForNewProject(){
     if(activeOrganizationId) return activeOrganizationId;
     if(myOrganizations.length === 0) return null;
@@ -11249,6 +11342,7 @@
       savedAt: new Date().toISOString(),
       standardDbVersion: standardDbVersion
     };
+    stampProjectCreator(project);
     projects.push(project);
     switchToProject(project.id);
     renderProjectList();
@@ -11284,6 +11378,7 @@
       savedAt: new Date().toISOString(),
       standardDbVersion: standardDbVersion
     };
+    stampProjectCreator(project);
     projects.push(project);
     currentProjectId = null; // switchToProject의 '이미 같은 프로젝트' 가드를 피하기 위해 비워둠
     switchToProject(project.id);
