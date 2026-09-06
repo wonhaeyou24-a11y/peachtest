@@ -2635,7 +2635,7 @@
     <div class="modal-body">
       <div class="field-grid">
         <label>손상명 *<input id="edDamageName" type="text" placeholder="예: 균열, 박리, 침하"></label>
-        <label>구간<input id="edSection" type="text" placeholder="예: 1구간, 2구간"></label>
+        <label>구간<select id="edSection"><option value="">(선택 안 함)</option></select></label>
         <label>위치<input id="edPosition" type="text" placeholder="예: 2층 남측 벽체"></label>
         <label>조사년도<input id="edSurveyYear" type="number" placeholder="예: 2023"></label>
         <label>구성요소<input id="edComponent" type="text" placeholder="예: 교대, 슬래브"></label>
@@ -2740,7 +2740,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v42';
+  const PS_BUILD = 'v43';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -4855,6 +4855,10 @@
 
 
   const DAMAGE_TYPES = ['균열','박리','철근노출','누수','백태','세굴','배수불량','토사유실','낙석','변형','식생불량','기타'];
+  // 구간(section) 기본 선택지 — 손상 추가 시 매번 타이핑하지 않도록 미리 칩으로 노출.
+  // 이보다 더 필요하면 "＋ 직접입력"으로 추가할 수 있고, 추가한 값은 그 시설물의
+  // sectionList 에 저장돼 다음부터 칩으로 같이 뜬다.
+  const DEFAULT_SECTIONS = ['1구간','2구간','3구간','4구간','5구간','6구간'];
   const URGENCY_LEVELS = ['낮음','보통','높음'];
   // 참고: 아래 시설물 형식 분류는 공식 법령·지침(예: 국토교통부고시 제2025-470호 등)에서
   // 그대로 추출한 것이 아니라 일반적으로 통용되는 명칭입니다. 손상종류 목록도 마찬가지로
@@ -12170,7 +12174,20 @@
     editingExistingDamageId = damage ? damage.id : null;
     edFormTitle.textContent = damage ? '기존손상 수정' : '기존손상 추가';
     edDamageName.value = damage ? (damage.damageName || '') : '';
-    edSection.value = damage ? (damage.section || '') : '';
+    // 구간 선택지 채우기: 기본(1~6구간) + 이 시설물에서 쓴 구간 + 이 손상의 기존값
+    (function(){
+      const cur = damage ? (damage.section || '') : '';
+      const site = sites.find(s => s.id === currentSiteId);
+      const opts = [];
+      const push = (n)=>{ if(n && !opts.includes(n)) opts.push(n); };
+      DEFAULT_SECTIONS.forEach(push);
+      if(site && Array.isArray(site.sectionList)) site.sectionList.forEach(push);
+      push(cur);
+      edSection.innerHTML = '<option value="">(선택 안 함)</option>' +
+        opts.map(n => '<option value="' + escapeHtml(n) + '">' + escapeHtml(n) + '</option>').join('') +
+        '<option value="__custom__">＋ 직접입력…</option>';
+      edSection.value = cur;
+    })();
     edPosition.value = damage ? (damage.drawingPosition || '') : '';
     edSurveyYear.value = damage ? (damage.surveyYear || '') : '';
     edComponent.value = damage ? (damage.component || '') : '';
@@ -12192,6 +12209,21 @@
   existingDamageModal.addEventListener('click', (e)=>{ if(e.target === existingDamageModal) existingDamageModal.style.display = 'none'; });
 
   btnAddExistingDamage.addEventListener('click', ()=> openExistingDamageForm(null));
+  // "＋ 직접입력…"을 고르면 그 자리에서 입력받아 옵션으로 추가한다.
+  edSection.addEventListener('change', ()=>{
+    if(edSection.value !== '__custom__') return;
+    const custom = (prompt('구간 이름을 입력하세요 (예: 7구간, A구간)', '') || '').trim();
+    if(custom){
+      if(!Array.from(edSection.options).some(o => o.value === custom)){
+        const opt = document.createElement('option');
+        opt.value = custom; opt.textContent = custom;
+        edSection.insertBefore(opt, edSection.querySelector('option[value="__custom__"]'));
+      }
+      edSection.value = custom;
+    } else {
+      edSection.value = '';
+    }
+  });
   closeExistingDamageForm.addEventListener('click', ()=>{ existingDamageFormModal.style.display = 'none'; });
   edCancel.addEventListener('click', ()=>{ existingDamageFormModal.style.display = 'none'; });
   existingDamageFormModal.addEventListener('click', (e)=>{ if(e.target === existingDamageFormModal) existingDamageFormModal.style.display = 'none'; });
@@ -12200,11 +12232,12 @@
     const name = edDamageName.value.trim();
     if(!name){ alert('손상명을 입력해주세요.'); return; }
     const now = new Date().toISOString();
+    const sectionVal = (edSection.value === '__custom__') ? '' : edSection.value.trim();
     if(editingExistingDamageId){
       const d = existingDamages.find(x => x.id === editingExistingDamageId);
       if(d){
         d.damageName = name;
-        d.section = edSection.value.trim();
+        d.section = sectionVal;
         d.drawingPosition = edPosition.value.trim();
         d.surveyYear = edSurveyYear.value ? Number(edSurveyYear.value) : null;
         d.component = edComponent.value.trim();
@@ -12222,7 +12255,7 @@
       const d = {
         id: 'EX-DMG-' + String(num).padStart(3,'0'),
         damageName: name,
-        section: edSection.value.trim(),
+        section: sectionVal,
         drawingPosition: edPosition.value.trim(),
         surveyYear: edSurveyYear.value ? Number(edSurveyYear.value) : null,
         component: edComponent.value.trim(),
@@ -14755,8 +14788,13 @@
           sectionRow.className = 'damage-type-scroll';
 
           if(!Array.isArray(site.sectionList)) site.sectionList = [];
-          const sectionOptions = site.sectionList.slice();
-          if(d.section && !sectionOptions.includes(d.section)) sectionOptions.push(d.section);
+          // 기본 구간(1~6구간) 먼저, 그다음 이 시설물에서 직접 추가한 구간, 마지막에
+          // 현재 손상이 이미 갖고 있는 값(둘 다에 없으면) — 순서·중복 정리.
+          const sectionOptions = [];
+          const _pushSec = (n)=>{ if(n && !sectionOptions.includes(n)) sectionOptions.push(n); };
+          DEFAULT_SECTIONS.forEach(_pushSec);
+          site.sectionList.forEach(_pushSec);
+          _pushSec(d.section);
 
           function selectDamageSection(name){
             d.section = name || '';
