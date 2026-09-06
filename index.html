@@ -8688,12 +8688,13 @@
     // 도면(drawings) — 이미지(imageSrc) 없이 메타데이터만 동기화한다. ps_inspection_points
     // 는 drawing_id 외래키가 걸려 있어서, 도면 행이 클라우드에 없으면 그 도면 위에
     // 찍은 지점을 아예 업로드할 수 없다(진단로그의 "violates foreign key constraint").
-    // 이미지 자체는 아직 시설물 blob에 실려 가고, 여기선 FK를 만족시킬 행만 만든다.
+    // 이미지는 svg_data(TEXT) 컬럼으로 별도 업로드된다. 여기선 서명에 이미지
+    // 유무/길이만 반영해 "이미지가 새로 붙었을 때"는 재큐잉되게 한다(전체 base64는 안 넣음).
     (site.drawings || []).forEach(d=>{
       if(!d || !d.id) return;
       if(notMine(d)) return;
       const key = 'drawing:' + d.id;
-      const sig = entityContentSignature({ ...d, imageSrc: undefined });
+      const sig = entityContentSignature({ ...d, imageSrc: undefined, __imgLen: (d.imageSrc || '').length });
       if(sig !== null && lastQueuedEntitySignatures.get(key) === sig) return;
       items.push({
         entityType: 'drawing', entityId: d.id, projectId: site.projectId, facilityId: site.id,
@@ -9526,14 +9527,25 @@
         const orgId = (pObj && pObj.organizationId) || null;
 
         const drawBaseRevision = Math.max(expectedRevision, (typeof drawing.revision === 'number') ? drawing.revision : 1);
-        const { data: existing, error: checkErr } = await supabaseClient.from('ps_drawings').select('revision, data, user_id').eq('id', entityId).maybeSingle();
-        // 이미 있고 내가 주인이 아니면(팀원 도면) 손대지 않는다.
+        const { data: existing, error: checkErr } = await supabaseClient.from('ps_drawings').select('revision, data, user_id, svg_data').eq('id', entityId).maybeSingle();
+        // 이미 있고 내가 주인이 아니면(팀원 도면): 메타데이터는 안 건드리지만, 클라우드에
+        // 이미지가 아직 없고 내 로컬엔 있으면 이미지만 채워준다(누구든 먼저 올린 사람이).
         if(!checkErr && existing && op !== 'delete' && existing.user_id && existing.user_id !== userId){
           if(typeof existing.revision === 'number') drawing.revision = Math.max(drawing.revision || 1, existing.revision);
+          const myImg = drawing.imageSrc || drawing.svgData || drawing.svg || null;
+          if(myImg && typeof myImg === 'string' && !existing.svg_data){
+            try{ await supabaseClient.from('ps_drawings').update({ svg_data: myImg, updated_at: new Date().toISOString() }).eq('id', entityId); }catch(e){}
+          }
           return { ok: true, skipped: true, reason: 'not-owner' };
         }
+        // data 블롭에는 이미지를 넣지 않고(무거움), 도면 이미지는 svg_data(TEXT)
+        // 컬럼에 data URL 그대로 올린다. 팀원이 도면을 화면에 그리려면 이미지가
+        // 필요하다("도면 이미지가 안 뜬다" 문제).
+        const drawingImage = drawing.imageSrc || drawing.svgData || drawing.svg || null;
         const lightDrawing = { ...drawing }; delete lightDrawing.imageSrc; delete lightDrawing.svgData; delete lightDrawing.svg; delete lightDrawing.original;
-        if(!checkErr && existing && existing.data && sameSyncedContent(lightDrawing, existing.data)){
+        // 이미 클라우드에 있고 메타+이미지 유무가 같으면 스킵(이미지 재업로드 방지)
+        if(!checkErr && existing && existing.data && sameSyncedContent(lightDrawing, existing.data)
+           && (!drawingImage) === (!existing.svg_data)){
           if(typeof existing.revision === 'number') drawing.revision = Math.max(drawing.revision || 1, existing.revision);
           return { ok: true, skipped: true };
         }
@@ -9555,7 +9567,7 @@
           user_id: userId,
           organization_id: orgId,
           name: drawing.name || '도면',
-          svg_data: null,
+          svg_data: (drawingImage && typeof drawingImage === 'string') ? drawingImage : (existing && existing.svg_data) || null,
           data: lightDrawing,
           revision: drawingRevision,
           schema_version: 8,
@@ -9800,38 +9812,60 @@
         }
       }catch(e){}
 
-      // 3-5. Drawings Pull (도면 메타데이터 — 팀원이 도면 위에 찍은 지점을 내
-      // 화면에 그리려면 그 도면이 로컬 site.drawings 에 있어야 한다. 이미지(imageSrc)는
-      // 아직 시설물 blob 경로로 오므로, 여기서 받은 메타데이터에 이미지가 없으면
-      // 로컬에 이미 있던 imageSrc 는 지우지 않는다.)
+      // 3-5. Drawings Pull (도면 메타데이터 + 이미지). 팀원이 도면 위에 찍은 지점을
+      // 내 화면에 그리려면 그 도면이 로컬 site.drawings 에 있고 이미지(imageSrc)까지
+      // 있어야 한다. 이미지는 rd.svg_data(TEXT, data URL) 로 온다.
+      const touchedDrawingSites = new Set();
       try{
         const { data: remoteDraws } = await supabaseClient.from('ps_drawings').select('*').eq('project_id', targetProjId);
         if(Array.isArray(remoteDraws)){
           remoteDraws.forEach(rd => {
-            if(pullProtected(`drawing:${rd.id}`, (typeof rd.revision === 'number') ? rd.revision : undefined)) return;
             const site = sites.find(s => s.id === rd.facility_id);
             if(!site) return;
             if(!Array.isArray(site.drawings)) site.drawings = [];
             const dData = rd.data || { id: rd.id, name: rd.name };
+            const cloudImage = (rd.svg_data && typeof rd.svg_data === 'string' && rd.svg_data.length > 10) ? rd.svg_data : null;
             const authRev = (typeof rd.revision === 'number') ? rd.revision : null;
             const dIdx = site.drawings.findIndex(d => d.id === rd.id);
+            // 보호: 로컬에 있고 + 큐 대기 + 메타가 실제로 다를 때만 스킵.
+            if(dIdx >= 0 && pendingRev.has(`drawing:${rd.id}`)){
+              const lm = { ...site.drawings[dIdx] }; delete lm.imageSrc;
+              if(!sameSyncedContent(lm, dData)) { syncedDrawingIds.add(rd.id); return; }
+            }
             if(dIdx >= 0){
               const local = site.drawings[dIdx];
               const merged = Object.assign({}, local, dData);
-              if(local.imageSrc && !merged.imageSrc) merged.imageSrc = local.imageSrc; // 로컬 이미지 보존
+              // 이미지: 로컬에 없으면 클라우드 것으로 채운다(로컬에 있으면 유지 — 내가 만든 원본).
+              if(!merged.imageSrc && cloudImage) merged.imageSrc = cloudImage;
+              else if(local.imageSrc) merged.imageSrc = local.imageSrc;
               if(authRev !== null) merged.revision = Math.max(authRev, (typeof local.revision === 'number' ? local.revision : 1));
               merged.createdBy = local.createdBy || (rd.data && rd.data.createdBy) || rd.user_id || null;
               site.drawings[dIdx] = merged;
             } else {
               if(authRev !== null) dData.revision = authRev;
+              if(cloudImage && !dData.imageSrc) dData.imageSrc = cloudImage;
               dData.createdBy = (rd.data && rd.data.createdBy) || rd.user_id || null;
               if(!dData.facilityId) dData.facilityId = rd.facility_id;
               site.drawings.push(dData);
             }
-            try{ lastQueuedEntitySignatures.set('drawing:' + rd.id, entityContentSignature({ ...site.drawings[dIdx >= 0 ? dIdx : site.drawings.length - 1], imageSrc: undefined })); }catch(e){}
-            syncedDrawingIds.add(rd.id); // 클라우드에 도면 행이 있음이 확인됨 → 이 도면 위 지점 FK 통과
+            // 도면이 하나라도 생겼는데 시설물에 currentDrawingId 가 없으면 첫 도면으로 지정
+            // (안 그러면 renderMarkers 의 drawingId 필터 때문에 지점이 하나도 안 보인다).
+            if(!site.currentDrawingId && site.drawings.length) site.currentDrawingId = site.drawings[0].id;
+            touchedDrawingSites.add(site.id);
+            try{ const _dw = site.drawings[dIdx >= 0 ? dIdx : site.drawings.length - 1]; lastQueuedEntitySignatures.set('drawing:' + rd.id, entityContentSignature({ ..._dw, imageSrc: undefined, __imgLen: (_dw.imageSrc || '').length })); }catch(e){}
+            syncedDrawingIds.add(rd.id);
             mergedCount++;
           });
+        }
+      }catch(e){}
+      // 현재 보고 있는 시설물의 도면이 갱신됐으면 라이브 상태(drawings/currentDrawingId)도 맞춘다.
+      try{
+        if(touchedDrawingSites.has(currentSiteId)){
+          const cs = sites.find(s=>s.id===currentSiteId);
+          if(cs){
+            if(typeof drawings !== 'undefined' && Array.isArray(cs.drawings)){ drawings.length = 0; cs.drawings.forEach(d=>drawings.push(d)); }
+            if((typeof currentDrawingId === 'undefined' || !currentDrawingId) && cs.currentDrawingId){ currentDrawingId = cs.currentDrawingId; }
+          }
         }
       }catch(e){}
 
@@ -9886,6 +9920,21 @@
             markers.length = 0;
             curSite.markers.forEach(m=> markers.push(m));
             if(typeof normalizePhotos === 'function'){ markers.forEach(m=>{ try{ normalizePhotos(m); }catch(e){} }); }
+          }
+        }catch(e){}
+        // 도면(이미지·currentDrawingId)이 이번 pull로 갱신됐으면 도면 이미지도 다시 그린다.
+        try{
+          const cs = sites.find(s=>s.id===currentSiteId);
+          if(cs && touchedDrawingSites.has(currentSiteId)){
+            if(typeof drawings !== 'undefined' && Array.isArray(cs.drawings)){ drawings.length = 0; cs.drawings.forEach(d=>drawings.push(d)); }
+            if(!currentDrawingId && cs.currentDrawingId) currentDrawingId = cs.currentDrawingId;
+            const active = (cs.drawings || []).find(d => d.id === currentDrawingId) || (cs.drawings || [])[0];
+            if(active && active.imageSrc && baseImageSrc !== active.imageSrc){
+              baseImageSrc = active.imageSrc;
+              if(!currentDrawingId && active.id) currentDrawingId = active.id;
+              if(typeof renderBaseImage === 'function'){ try{ renderBaseImage(); }catch(e){} }
+            }
+            if(typeof renderDrawingTabs === 'function'){ try{ renderDrawingTabs(); }catch(e){} }
           }
         }catch(e){}
         refreshStageHeader();

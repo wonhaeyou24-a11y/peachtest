@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-shot-v35-surveyor-colors-diag'; // 조사자 색상 나=노랑/팀원=파랑, 번호 보색 + 범례 일치 + 지점 불일치 진단
+const CACHE_NAME = 'point-shot-v36-drawing-image-sync'; // 도면 이미지 동기화(svg_data 컬럼) + pull 시 currentDrawingId 자동 지정 + 이미지 재렌더
 // 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
 // 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
 // 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.
