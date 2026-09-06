@@ -8033,6 +8033,10 @@
 
   function commitLiveToCurrentSite(){
     if(!currentSiteId) return;
+    // pull이 site.markers/drawings를 재구성하는 도중이면, 지금 라이브 배열은
+    // 과도기 상태(비었거나 옛것)일 수 있다. 이때 커밋하면 pull이 합쳐온 지점/도면을
+    // 통째로 덮어써 사라졌다 나타났다 한다 — 그 짧은 구간에는 커밋을 건너뛴다.
+    if(_pullSyncingLive) return;
     let s = sites.find(x => x.id === currentSiteId);
     if(!s){
       s = {
@@ -9652,10 +9656,21 @@
     return local;
   }
 
+  let _pullInProgress = false;
+  let _pullSyncingLive = false; // pull이 라이브 markers/drawings를 재구성하는 짧은 구간
   async function pullCloudChanges(projectId){
     if(!supabaseClient || !supabaseSession || !navigator.onLine) return { ok: false, reason: 'Offline' };
     const targetProjId = projectId || currentProjectId;
     if(!targetProjId) return { ok: false, reason: 'No project selected' };
+    // ★ 동시 실행 금지. pull이 markers/drawings 배열을 재구성하는 도중 또 다른 pull이나
+    //   saveState가 끼어들면, 재구성 중간 상태(빈 배열)를 다른 쪽이 확정 저장해버려
+    //   지점·도면이 통째로 사라졌다 다시 나타났다 한다(진단로그의 지점수 0↔3 진동).
+    if(_pullInProgress) return { ok: false, reason: '이미 가져오는 중입니다.' };
+    _pullInProgress = true;
+    try{ return await _pullCloudChangesInner(targetProjId); }
+    finally{ _pullInProgress = false; }
+  }
+  async function _pullCloudChangesInner(targetProjId){
 
     console.log(`[Sync] pull starting for project: ${targetProjId}`);
     try{
@@ -9906,37 +9921,39 @@
       }catch(e){}
 
       if(mergedCount > 0){
+        // ★ 라이브 배열 재구성 + 저장을 한 임계구간으로 묶는다. 이 사이에 saveState의
+        //   commitLiveToCurrentSite가 끼어들면 pull이 합쳐온 지점/도면을 옛 라이브
+        //   배열로 덮어써 지점·도면이 사라졌다 나타났다 한다(_pullSyncingLive로 commit 차단).
+        _pullSyncingLive = true;
+        try{
+          const curSite = sites.find(s=>s.id===currentSiteId);
+          if(curSite && Array.isArray(curSite.markers) && typeof markers !== 'undefined'){
+            markers.length = 0;
+            curSite.markers.forEach(m=> markers.push(m));
+            curSite.markers = markers; // site와 라이브 배열을 같은 참조로 — 이후 커밋이 어긋나지 않게
+            if(typeof normalizePhotos === 'function'){ markers.forEach(m=>{ try{ normalizePhotos(m); }catch(e){} }); }
+          }
+          if(curSite && touchedDrawingSites.has(currentSiteId) && typeof drawings !== 'undefined' && Array.isArray(curSite.drawings)){
+            drawings.length = 0; curSite.drawings.forEach(d=>drawings.push(d));
+            curSite.drawings = drawings;
+            if(!currentDrawingId && curSite.currentDrawingId) currentDrawingId = curSite.currentDrawingId;
+            const active = drawings.find(d => d.id === currentDrawingId) || drawings[0];
+            if(active){
+              if(!currentDrawingId) currentDrawingId = active.id;
+              curSite.currentDrawingId = currentDrawingId;
+              if(active.imageSrc && baseImageSrc !== active.imageSrc) baseImageSrc = active.imageSrc;
+            }
+          }
+        }catch(e){}
         await storageSet(STORAGE_KEY, {
           schemaVersion: CURRENT_SCHEMA_VERSION,
           sites: lightweightSitesFor(sites),
           currentSiteId, projects, currentProjectId,
           deletedSites: lightweightDeletedSitesFor(deletedSites)
         });
-        // 현재 보고 있는 시설물의 라이브 markers 배열도 갱신된 site.markers로 다시 맞춘다
-        // (안 그러면 pull이 site.markers는 채웠는데 화면이 참조하는 markers는 옛것이라 안 보임).
-        try{
-          const curSite = sites.find(s=>s.id===currentSiteId);
-          if(curSite && Array.isArray(curSite.markers) && typeof markers !== 'undefined'){
-            markers.length = 0;
-            curSite.markers.forEach(m=> markers.push(m));
-            if(typeof normalizePhotos === 'function'){ markers.forEach(m=>{ try{ normalizePhotos(m); }catch(e){} }); }
-          }
-        }catch(e){}
-        // 도면(이미지·currentDrawingId)이 이번 pull로 갱신됐으면 도면 이미지도 다시 그린다.
-        try{
-          const cs = sites.find(s=>s.id===currentSiteId);
-          if(cs && touchedDrawingSites.has(currentSiteId)){
-            if(typeof drawings !== 'undefined' && Array.isArray(cs.drawings)){ drawings.length = 0; cs.drawings.forEach(d=>drawings.push(d)); }
-            if(!currentDrawingId && cs.currentDrawingId) currentDrawingId = cs.currentDrawingId;
-            const active = (cs.drawings || []).find(d => d.id === currentDrawingId) || (cs.drawings || [])[0];
-            if(active && active.imageSrc && baseImageSrc !== active.imageSrc){
-              baseImageSrc = active.imageSrc;
-              if(!currentDrawingId && active.id) currentDrawingId = active.id;
-              if(typeof renderBaseImage === 'function'){ try{ renderBaseImage(); }catch(e){} }
-            }
-            if(typeof renderDrawingTabs === 'function'){ try{ renderDrawingTabs(); }catch(e){} }
-          }
-        }catch(e){}
+        _pullSyncingLive = false;
+        try{ if(typeof renderBaseImage === 'function' && baseImageSrc) renderBaseImage(); }catch(e){}
+        try{ if(typeof renderDrawingTabs === 'function') renderDrawingTabs(); }catch(e){}
         refreshStageHeader();
         renderMarkers();
         if(typeof renderMapMarkers === 'function'){ try{ renderMapMarkers(); }catch(e){} }
