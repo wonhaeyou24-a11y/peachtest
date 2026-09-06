@@ -1094,6 +1094,15 @@
   .more-menu-group.collapsed{
     display:none;
   }
+  .more-section-label{
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    color: var(--muted);
+    padding: 12px 4px 2px;
+    text-transform: none;
+  }
+  .more-section-label:first-child{ padding-top: 2px; }
   /* office-only 요소는 기본 숨김이며, body.mode-office일 때만 JS가 display를 되살린다.
      (인라인 style="display:none"이 있어야 모드 판정 전 깜빡임 없이 시작한다) */
 
@@ -2300,22 +2309,23 @@
 <div class="modal-backdrop" id="moreModal" style="display:none;">
   <div class="modal">
     <div class="modal-head">
-      <h2>내보내기 · 백업</h2>
+      <h2>더보기</h2>
       <button class="close-x" id="closeMoreModal" aria-label="닫기">✕</button>
     </div>
     <div class="modal-body">
       <div class="more-menu">
-        <button class="more-item" id="mmProjectSwitch">
-          <span class="more-item-title">📁 프로젝트 전환</span>
-          <span class="more-item-desc">다른 프로젝트로 이동하거나 새 프로젝트를 만듭니다</span>
-        </button>
+        <!-- ── 자주 쓰는 것 ── -->
         <button class="more-item" id="mmSiteList">
           <span class="more-item-title">🏗️ 시설물 목록</span>
           <span class="more-item-desc">현재 프로젝트의 시설물을 전환하거나 새로 추가합니다</span>
         </button>
-        <button class="more-item" id="btnCompleteFacility">
-          <span class="more-item-title" id="btnCompleteFacilityTitle">시설물 조사완료</span>
-          <span class="more-item-desc" id="btnCompleteFacilityDesc">누락 여부를 먼저 확인한 뒤 완료 처리합니다</span>
+        <button class="more-item" id="mmProjectSwitch">
+          <span class="more-item-title">📁 프로젝트 전환</span>
+          <span class="more-item-desc">다른 프로젝트로 이동하거나 새 프로젝트를 만듭니다</span>
+        </button>
+        <button class="more-item" id="btnCloudSync">
+          <span class="more-item-title">☁️ 팀 동기화 · 조직</span>
+          <span class="more-item-desc">로그인 · 조직/팀원 관리 · 클라우드 프로젝트 불러오기 · 팀원 자료 가져오기</span>
         </button>
         <button class="more-item" id="btnExistingDamages">
           <span class="more-item-title">기존손상 관리</span>
@@ -2325,26 +2335,27 @@
           <span class="more-item-title">사진 일괄 가져오기 (GPS 자동 마킹)</span>
           <span class="more-item-desc">사진첩에서 여러 장을 골라 GPS 위치로 자동 지점 생성</span>
         </button>
-        <button class="more-item" id="btnSafetyDashboard">
-          <span class="more-item-title">📊 상태 & 진단</span>
-          <span class="more-item-desc">저장·백업·동기화·충돌·저장공간·무결성을 탭으로 한 화면에서 확인</span>
+        <button class="more-item" id="btnCompleteFacility">
+          <span class="more-item-title" id="btnCompleteFacilityTitle">시설물 조사완료</span>
+          <span class="more-item-desc" id="btnCompleteFacilityDesc">누락 여부를 먼저 확인한 뒤 완료 처리합니다</span>
         </button>
         <button class="more-item" id="btnTrash">
-          <span class="more-item-title">휴지통</span>
-          <span class="more-item-desc">삭제한 지점을 복원하거나 완전히 삭제</span>
-        </button>
-        <button class="more-item" id="btnSnapshots">
-          <span class="more-item-title">복구 스냅샷</span>
-          <span class="more-item-desc">5분 간격 자동 저장된 이전 상태로 되돌리기 (최근 3개)</span>
+          <span class="more-item-title">🗑️ 휴지통</span>
+          <span class="more-item-desc">삭제한 지점·시설물을 복원하거나 완전히 삭제</span>
         </button>
 
         <button class="more-group-toggle" id="btnToggleManageGroup" style="display:none;">
           <span id="manageGroupToggleLabel">🗂️ 관리·문서</span>
         </button>
         <div class="more-menu-group" id="moreGroupManage">
-          <button class="more-item" id="btnZip">
-            <span class="more-item-title">사진 전체 ZIP 다운로드</span>
-            <span class="more-item-desc">지점별 폴더로 정리된 원본 사진 전체</span>
+          <div class="more-section-label">📄 보고서 · 내보내기</div>
+          <button class="more-item" id="btnAppearanceReport">
+            <span class="more-item-title">외관조사 보고서 (양식)</span>
+            <span class="more-item-desc">외관조사 결과표 → 조사위치도 → 지점별 사진(현황·원인·대책) 양식</span>
+          </button>
+          <button class="more-item" id="btnAppearanceReportProject">
+            <span class="more-item-title">프로젝트 전체 외관조사 보고서</span>
+            <span class="more-item-desc">이 프로젝트의 모든 시설물을 같은 양식으로 반복해 한 Word 파일로 묶음</span>
           </button>
           <button class="more-item" id="btnWord">
             <span class="more-item-title">워드로 내보내기 (HWP 호환)</span>
@@ -2354,22 +2365,26 @@
             <span class="more-item-title">프로젝트 전체 손상현황 Excel</span>
             <span class="more-item-desc">이 프로젝트의 모든 시설물 손상현황·증감을 한 파일로 집계</span>
           </button>
-          <button class="more-item" id="btnAppearanceReport">
-            <span class="more-item-title">외관조사 보고서 (양식)</span>
-            <span class="more-item-desc">외관조사 결과표 → 조사위치도 → 지점별 사진(현황·원인·대책) 양식</span>
+          <button class="more-item" id="btnZip">
+            <span class="more-item-title">사진 전체 ZIP 다운로드</span>
+            <span class="more-item-desc">지점별 폴더로 정리된 원본 사진 전체</span>
           </button>
-          <button class="more-item" id="btnAppearanceReportProject">
-            <span class="more-item-title">프로젝트 전체 외관조사 보고서</span>
-            <span class="more-item-desc">이 프로젝트의 모든 시설물을 같은 양식으로 반복해 한 Word 파일로 묶음</span>
-          </button>
+
+          <div class="more-section-label">💾 백업 · 복구</div>
           <button class="more-item" id="btnSaveWork">
-            <span class="more-item-title">백업 내보내기</span>
-            <span class="more-item-desc">현재 시설물을 파일 하나로 저장</span>
+            <span class="more-item-title">백업 내보내기 (파일)</span>
+            <span class="more-item-desc">현재 시설물을 파일 하나로 저장 — 이 기기 밖 보관용</span>
           </button>
           <button class="more-item" id="btnLoadWork">
             <span class="more-item-title">백업 불러오기</span>
             <span class="more-item-desc">저장한 백업 파일을 새 시설물로 추가</span>
           </button>
+          <button class="more-item" id="btnSnapshots">
+            <span class="more-item-title">복구 스냅샷</span>
+            <span class="more-item-desc">5분 간격 자동 저장된 이전 상태로 되돌리기 (최근 3개)</span>
+          </button>
+
+          <div class="more-section-label">🔧 도구</div>
           <button class="more-item" id="btnRunAudit">
             <span class="more-item-title">자동 검수 실행</span>
             <span class="more-item-desc">사진누락·손상정보 미입력·화질경고·중복사진 확인</span>
@@ -2386,11 +2401,6 @@
             <span class="more-item-title">활동 로그</span>
             <span class="more-item-desc">생성·삭제·이동 등 변경 이력 확인</span>
           </button>
-          <!-- 동기화 대시보드 / 시스템 진단은 "📊 상태 & 진단"(위쪽) 안의 탭으로 통합됨 -->
-          <button class="more-item" id="btnCloudSync">
-            <span class="more-item-title">☁️ 클라우드 동기화</span>
-            <span class="more-item-desc">Supabase 로그인 · 온라인일 때 자동 백업 · 조직 관리</span>
-          </button>
           <button class="more-item office-only" id="btnDamageMaster" style="display:none;">
             <span class="more-item-title">손상마스터 관리</span>
             <span class="more-item-desc">시설물별 손상명, 부위, 원인, 보수·보강 커스텀 설정</span>
@@ -2404,6 +2414,12 @@
             <span class="more-item-desc">지침 원본 보관 및 기준 DB 버전 이력 관리 (사무실 전용 설정)</span>
           </button>
         </div>
+
+        <div class="more-section-label">📊 진단</div>
+        <button class="more-item" id="btnSafetyDashboard">
+          <span class="more-item-title">📊 상태 & 진단</span>
+          <span class="more-item-desc">동기화 현황 · 저장공간 · 데이터 무결성 · 진단 로그 확인</span>
+        </button>
       </div>
     </div>
   </div>
@@ -2740,7 +2756,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v50';
+  const PS_BUILD = 'v51';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -6098,6 +6114,30 @@
     signOutBtn.addEventListener('click', ()=> cloudSignOut());
     acctInfo.appendChild(acctSpan); acctInfo.appendChild(signOutBtn);
     cloudSyncBody.appendChild(acctInfo);
+
+    // ---- 팀원 최신자료 가져오기 (현재 조직 프로젝트를 보고 있을 때) ----
+    (function(){
+      const curProj = projects.find(p => p.id === currentProjectId);
+      if(!curProj || !curProj.organizationId) return;
+      const box = document.createElement('div');
+      box.style.cssText = 'margin-top:12px; padding:10px; background:var(--panel-2); border:1px solid var(--line); border-radius:6px;';
+      const t = document.createElement('div');
+      t.style.cssText = 'font-weight:600; font-size:12px; margin-bottom:4px; color:var(--text);';
+      t.textContent = '👥 팀원 조사자료';
+      const d = document.createElement('div');
+      d.className = 'hint';
+      d.style.cssText = 'font-size:11px; margin-bottom:8px;';
+      d.textContent = _teamUpdatesAvailable
+        ? '🟢 팀원이 올린 새 자료가 있습니다.'
+        : '팀원이 조사한 지점·손상을 이 기기로 취합합니다.';
+      const b = document.createElement('button');
+      b.className = 'card-btn primary';
+      b.style.cssText = 'width:100%;';
+      b.textContent = '🔄 팀원 최신자료 가져오기';
+      b.addEventListener('click', ()=> doPullTeamChanges(b));
+      box.appendChild(t); box.appendChild(d); box.appendChild(b);
+      cloudSyncBody.appendChild(box);
+    })();
 
     // ---- 다중 조직 전환 선택기 (Organization Selector) ----
     if(myOrganizations.length > 1){
