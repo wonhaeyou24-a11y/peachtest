@@ -5916,10 +5916,13 @@
       return;
     }
 
+    const _me = (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null;
     const newProject = Object.assign({}, projRow.data, {
       id: projId,
       name: (projRow.name || (projRow.data && projRow.data.name) || '프로젝트') + (isTeamProject ? '' : ' (클라우드에서 불러옴)'),
       organizationId: projRow.organization_id || null,
+      ownerId: isTeamProject ? (projRow.user_id || null) : _me,  // 조직 프로젝트 행은 소유자만 수정 가능
+      _pushBlocked: isTeamProject && projRow.user_id && _me ? (projRow.user_id !== _me) : false,
       savedAt: new Date().toISOString()
     });
     const newSites = (facRows || []).map(row=>{
@@ -8571,12 +8574,29 @@
     }catch(e){}
   }
 
+  // 조직 공유 프로젝트의 "행"(ps_projects)은 만든 사람만 수정 가능하다
+  // (ps_projects_update 정책: user_id = auth.uid()). 팀원(Inspector 등)이
+  // 시설물·지점만 조사해도 saveState가 매번 프로젝트 행을 큐에 넣어 RLS로
+  // 튕기고(new row violates row-level security policy for "ps_projects")
+  // 대기열이 계속 부풀었다. 내가 소유자가 아닌 조직 프로젝트는 아예 큐잉하지 않는다.
+  //  - proj.ownerId: 불러오기(pullProjectFromCloud) 또는 pull에서 채워지는 클라우드 행 소유자
+  //  - proj._pushBlocked: syncSingleEntity가 실제로 not-owner/RLS 거부를 확인하면 찍는 학습 플래그
+  function iOwnProjectRow(proj){
+    if(!proj) return false;
+    if(!proj.organizationId) return true;            // 개인 프로젝트 — 내 것
+    const me = (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null;
+    if(proj.ownerId && me) return proj.ownerId === me;
+    if(proj._pushBlocked) return false;              // 예전에 거부당한 적 있음
+    return true;                                     // 소유자 정보 없음 — 일단 한 번 시도(그 결과로 학습)
+  }
+
   function queueCloudSync(){
     if(!currentProjectId) return;
     // 이 기기가 마지막으로 클라우드와 맞춘 리비전을 함께 넘긴다. 예전엔 아무것도 안
     // 넘겨서 syncSingleEntity가 항상 baseline=1로 검사했고, 프로젝트가 클라우드에
     // 한 번 올라가 revision이 2가 되는 순간부터 저장할 때마다 거짓 충돌이 쌓였다.
     const proj = projects.find(p => p.id === currentProjectId);
+    if(!iOwnProjectRow(proj)) return; // 팀원은 프로젝트 행을 못 고침 — 큐잉 자체를 안 함
     enqueueEntitySync({
       entityType: 'project',
       entityId: currentProjectId,
@@ -8611,6 +8631,7 @@
     try{
       const copy = { ...obj };
       delete copy.revision; delete copy.createdBy; // createdBy는 조사자 표시용 메타 — 내용 변경으로 안 침
+      delete copy.ownerId; delete copy._pushBlocked; // 프로젝트 행 소유/차단 학습 플래그 — 내용 아님
       if(Array.isArray(copy.photos)) copy.photos = copy.photos.map(stripPhotoHeavyFields);
       return JSON.stringify(copy);
     }catch(e){
@@ -8627,7 +8648,8 @@
   const SYNC_VOLATILE_KEYS = new Set([
     'revision','updatedAt','updated_at','syncedAt','cloudSyncedAt','savedAt','lastSavedAt',
     'cloudRef','blobExtracted','blobSize','mimeType','pendingCloudDownload','pendingCloudUpload',
-    'src','original','_localOnly','_dirty','deviceId','device_id','updated_by','createdBy'
+    'src','original','_localOnly','_dirty','deviceId','device_id','updated_by','createdBy',
+    'ownerId','_pushBlocked'
   ]);
   function stableSyncStringify(v){
     if(v === null || typeof v !== 'object') return JSON.stringify(v);
@@ -9155,6 +9177,8 @@
         // 이 행을 못 고치니 아예 시도하지 않는다 — 시설물·지점은 각자 올리면 된다.
         if(!fetchErr && existing && op !== 'delete' && existing.user_id && existing.user_id !== userId){
           if(existing.data && typeof existing.data.revision === 'number') proj.revision = Math.max(proj.revision || 1, existing.data.revision);
+          proj.ownerId = existing.user_id;  // 소유자 학습 — 다음부터 queueCloudSync가 큐잉 안 함
+          proj._pushBlocked = true;
           return { ok: true, skipped: true, reason: 'not-owner' };
         }
         const cloudRevision = (existing && existing.data && typeof existing.data.revision === 'number') ? existing.data.revision : 0;
@@ -9190,7 +9214,14 @@
           schema_version: String(proj.schemaVersion || CURRENT_SCHEMA_VERSION),
           organization_id: orgId
         }, { onConflict: 'id' });
-        if(error) return { ok: false, reason: error.message };
+        if(error){
+          // RLS 거부(조직 프로젝트인데 내가 소유자가 아님, 또는 조직원 인증 불일치) —
+          // 다음 저장부터는 이 프로젝트 행을 큐에 아예 안 넣는다(대기열 부풀림 방지).
+          if(/row-level security|permission denied|not authorized/i.test(error.message || '')){
+            proj._pushBlocked = true;
+          }
+          return { ok: false, reason: error.message };
+        }
         return { ok: true };
       }
 
@@ -9707,6 +9738,21 @@
 
       let mergedCount = 0;
       let pulledFacilities = 0, pulledPoints = 0, pulledDamages = 0, pulledNewPoints = 0;
+
+      // 0. 프로젝트 행 소유자 확인 — 이미 불러와 쓰던 조직 프로젝트에 ownerId가
+      //    없을 수 있다(예전 버전으로 불러온 것). 여기서 채워두면 queueCloudSync가
+      //    "내가 소유자 아닌 조직 프로젝트 행"을 더 이상 큐에 안 넣는다(RLS 튕김 방지).
+      try{
+        const meId = (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null;
+        const localProj = projects.find(p => p.id === targetProjId);
+        if(localProj && localProj.organizationId && (!localProj.ownerId || localProj._pushBlocked === undefined)){
+          const { data: projRow } = await supabaseClient.from('ps_projects').select('user_id, data').eq('id', targetProjId).maybeSingle();
+          if(projRow && projRow.user_id){
+            localProj.ownerId = projRow.user_id;
+            localProj._pushBlocked = meId ? (projRow.user_id !== meId) : true;
+          }
+        }
+      }catch(e){}
 
       // 1. Facilities Pull
       // 예전엔 원격 시설물 blob(rf.data)으로 로컬 시설물을 통째로 덮어써서, 그
