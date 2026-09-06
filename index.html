@@ -4565,11 +4565,18 @@
   // 자동으로 "기본 프로젝트" 하나에 담아준다. 이미 프로젝트 구조가
   // 있으면 아무것도 바꾸지 않는다(중복 생성 방지).
   // ================================================================
-  function ensureProjectsIntegrity(){
+  function ensureProjectsIntegrity(opts){
+    opts = opts || {};
     let changed = false;
     if(!Array.isArray(projects)) projects = [];
+    if(!Array.isArray(sites)) sites = [];
 
-    if(projects.length === 0){
+    // 프로젝트가 하나도 없을 때 "기본 프로젝트"를 자동 생성하는 경우는 딱 둘 뿐이다:
+    //  (1) 앱 최초 실행(저장된 데이터가 전혀 없음) — 솔로 사용자 온보딩
+    //  (2) 담을 프로젝트가 없는 시설물이 남아 있음 — 데이터 유실 방지
+    // 사용자가 프로젝트를 전부 삭제한 상태(시설물도 없음)는 0개를 그대로 허용한다.
+    // (예전에는 무조건 1개를 강제로 만들어, 마지막 프로젝트를 삭제할 수 없었음)
+    if(projects.length === 0 && (opts.firstRun || sites.length > 0)){
       const legacy = {
         id: genId(),
         name: DEFAULT_PROJECT_NAME,
@@ -4581,17 +4588,21 @@
       changed = true;
     }
 
-    if(!currentProjectId || !projects.find(p => p.id === currentProjectId)){
-      currentProjectId = projects[0].id;
-      changed = true;
-    }
-
-    sites.forEach(s => {
-      if(!s.projectId || !projects.find(p => p.id === s.projectId)){
-        s.projectId = currentProjectId;
+    if(projects.length > 0){
+      if(!currentProjectId || !projects.find(p => p.id === currentProjectId)){
+        currentProjectId = projects[0].id;
         changed = true;
       }
-    });
+      sites.forEach(s => {
+        if(!s.projectId || !projects.find(p => p.id === s.projectId)){
+          s.projectId = currentProjectId;
+          changed = true;
+        }
+      });
+    } else if(currentProjectId){
+      currentProjectId = null;
+      changed = true;
+    }
 
     return changed;
   }
@@ -4600,7 +4611,7 @@
     const p = projects.find(x => x.id === currentProjectId);
     const org = p && p.organizationId ? myOrganizations.find(o => o.id === p.organizationId) : null;
     const orgPrefix = org ? ('[' + org.name + '] ') : '';
-    projectLabel.textContent = '📁 ' + orgPrefix + (p ? p.name : DEFAULT_PROJECT_NAME) + ' ▾';
+    projectLabel.textContent = '📁 ' + orgPrefix + (p ? p.name : (projects.length === 0 ? '프로젝트 없음' : DEFAULT_PROJECT_NAME)) + ' ▾';
   }
 
   // ================================================================
@@ -9704,6 +9715,34 @@
       // 사라질 수 있었다(3-배선/4). 이제 시설물의 메타데이터(이름·종류·형식 등)만
       // 병합하고, 배열 필드는 로컬 값을 그대로 유지 — 마커·기존손상은 아래 2·3단계가
       // ID 기준으로 개별 병합한다(팀원 A·B가 각자 추가한 지점이 합집합으로 합쳐짐).
+      const touchedDrawingSites = new Set();
+      // 시설물 blob(ps_facilities.data) 안에는 markers처럼 drawings 배열이 이미지까지
+      // 통째로 들어있다(facility 업로드가 사진만 벗겨내고 도면 이미지는 유지함).
+      // "전체 다시 불러오기"가 도면을 제대로 가져오는 건 바로 이 blob 덕분이다.
+      // 반면 증분 pull은 예전엔 로컬 drawings 배열을 그대로 유지(빈 배열)해서
+      // 도면이 안 넘어왔다 — 이제 로컬을 기준으로 원격 도면을 id 기준 합집합하고,
+      // 로컬 도면에 이미지가 없으면 원격 이미지로 채운다.
+      function mergeDrawingsUnion(localDraws, remoteDraws){
+        const local = Array.isArray(localDraws) ? localDraws.map(d => ({ ...d })) : [];
+        const byId = new Map(local.map(d => [d.id, d]));
+        let changed = false;
+        (Array.isArray(remoteDraws) ? remoteDraws : []).forEach(rd => {
+          if(!rd || !rd.id) return;
+          const existing = byId.get(rd.id);
+          if(!existing){
+            local.push({ ...rd });
+            byId.set(rd.id, local[local.length - 1]);
+            changed = true;
+          } else {
+            const rImg = rd.imageSrc || rd.svgData || rd.svg || null;
+            if(!existing.imageSrc && rImg){ existing.imageSrc = rImg; changed = true; }
+            if(typeof rd.revision === 'number' && rd.revision > (existing.revision || 1)){ existing.revision = rd.revision; changed = true; }
+            if(!existing.name && rd.name){ existing.name = rd.name; changed = true; }
+          }
+        });
+        return { drawings: local, changed };
+      }
+
       const FACILITY_ARRAY_FIELDS = ['markers', 'existingDamages', 'drawings'];
       const { data: remoteFacs, error: facErr } = await supabaseClient.from('ps_facilities').select('*').eq('project_id', targetProjId);
       if(!facErr && Array.isArray(remoteFacs)){
@@ -9713,11 +9752,32 @@
           if(idx >= 0 && rf.data && pendingRev.has(`facility:${rf.id}`)){
             const lm = { ...sites[idx] }; FACILITY_ARRAY_FIELDS.forEach(f=>delete lm[f]); delete lm.trash;
             const cm = { ...rf.data }; FACILITY_ARRAY_FIELDS.forEach(f=>delete cm[f]); delete cm.trash;
-            if(!sameSyncedContent(lm, cm)){ console.log(`[Sync] pull protection: Facility(${rf.id})`); return; }
+            if(!sameSyncedContent(lm, cm)){
+              console.log(`[Sync] pull protection: Facility(${rf.id})`);
+              // 메타데이터는 보호하더라도, 로컬에 아예 없는 도면은 blob에서 채워준다
+              // (팀원이 올린 도면이 내 화면에 안 뜨는 문제 — 로컬 미저장 수정과 무관).
+              if(rf.data && Array.isArray(rf.data.drawings) && rf.data.drawings.length){
+                const u = mergeDrawingsUnion(sites[idx].drawings, rf.data.drawings);
+                if(u.changed){
+                  sites[idx].drawings = u.drawings;
+                  if(!sites[idx].currentDrawingId && u.drawings.length) sites[idx].currentDrawingId = u.drawings[0].id;
+                  touchedDrawingSites.add(rf.id);
+                  mergedCount++;
+                }
+              }
+              return;
+            }
           }
           if(idx >= 0 && rf.data){
             const merged = Object.assign({}, sites[idx], rf.data);
-            FACILITY_ARRAY_FIELDS.forEach(f => { merged[f] = sites[idx][f]; }); // 로컬 배열 유지
+            FACILITY_ARRAY_FIELDS.forEach(f => { merged[f] = sites[idx][f]; }); // 로컬 배열 유지(마커 등 로컬 추가분 보존)
+            // 단, drawings는 이미지까지 든 blob이 있으므로 id 기준 합집합한다.
+            const u = mergeDrawingsUnion(sites[idx].drawings, rf.data.drawings);
+            merged.drawings = u.drawings;
+            if(u.changed){
+              if(!merged.currentDrawingId && u.drawings.length) merged.currentDrawingId = u.drawings[0].id;
+              touchedDrawingSites.add(rf.id);
+            }
             sites[idx] = merged;
             mergedCount++; pulledFacilities++;
           } else if(rf.data){
@@ -9830,7 +9890,7 @@
       // 3-5. Drawings Pull (도면 메타데이터 + 이미지). 팀원이 도면 위에 찍은 지점을
       // 내 화면에 그리려면 그 도면이 로컬 site.drawings 에 있고 이미지(imageSrc)까지
       // 있어야 한다. 이미지는 rd.svg_data(TEXT, data URL) 로 온다.
-      const touchedDrawingSites = new Set();
+      // (touchedDrawingSites 는 위 1단계에서 이미 선언 — 시설물 blob 병합분도 포함)
       try{
         const { data: remoteDraws } = await supabaseClient.from('ps_drawings').select('*').eq('project_id', targetProjId);
         if(Array.isArray(remoteDraws)){
@@ -10144,7 +10204,7 @@
           updateResetImageLabel();
         }
       } else {
-        ensureProjectsIntegrity();
+        ensureProjectsIntegrity({ firstRun: true });
         renderProjectHeader();
         refreshStageHeader();
         updateResetImageLabel();
@@ -10377,6 +10437,12 @@
   let editingSiteId = null;
 
   function openFacilityModalForCreate(){
+    // 프로젝트가 0개면(전부 삭제한 상태) 시설물을 담을 곳이 없으므로
+    // 기본 프로젝트를 조용히 하나 만든다.
+    if(!currentProjectId || !projects.find(p => p.id === currentProjectId)){
+      ensureProjectsIntegrity({ firstRun: true });
+      renderProjectHeader();
+    }
     editingSiteId = null;
     facilityModalTitle.textContent = '새 시설물 만들기';
     fmCreate.textContent = '시설물 만들기';
@@ -10675,7 +10741,7 @@
   function renderSiteList(){
     const projectSites = sites.filter(s => s.projectId === currentProjectId);
     const curProject = projects.find(p => p.id === currentProjectId);
-    if(siteModalTitle) siteModalTitle.textContent = '시설물 목록 · ' + (curProject ? curProject.name : DEFAULT_PROJECT_NAME);
+    if(siteModalTitle) siteModalTitle.textContent = '시설물 목록 · ' + (curProject ? curProject.name : (projects.length === 0 ? '프로젝트 없음' : DEFAULT_PROJECT_NAME));
 
     siteListBody.innerHTML = '';
 
@@ -10688,7 +10754,7 @@
       projLabel.textContent = '📁 프로젝트';
       const projName = document.createElement('div');
       projName.style.cssText = 'font-weight:700; font-size:14px;';
-      projName.textContent = curProject ? curProject.name : DEFAULT_PROJECT_NAME;
+      projName.textContent = curProject ? curProject.name : (projects.length === 0 ? '프로젝트 없음' : DEFAULT_PROJECT_NAME);
       const projSwitchBtn = document.createElement('button');
       projSwitchBtn.className = 'ghost';
       projSwitchBtn.style.cssText = 'padding:4px 8px; font-size:11px;';
@@ -11012,7 +11078,6 @@
         delBtn.className = 'card-btn danger';
         delBtn.textContent = '삭제';
         delBtn.addEventListener('click', ()=>{
-          if(projects.length <= 1){ alert('프로젝트가 최소 1개는 있어야 합니다.'); return; }
           if(facilityCount > 0){
             const backedUp = project.backupStatus === '백업완료';
             const backupNote = backedUp
@@ -11037,9 +11102,18 @@
 
           projects = projects.filter(p => p.id !== project.id);
           if(currentProjectId === project.id){
-            const nextId = projects[0].id;
             currentProjectId = null;
-            switchToProject(nextId);
+            if(projects.length > 0){
+              switchToProject(projects[0].id);
+            } else {
+              // 프로젝트가 0개가 됐다 — 빈 상태로 둔다(새 프로젝트를 만들거나
+              // 클라우드에서 팀 프로젝트를 불러오면 다시 채워짐)
+              currentSiteId = null;
+              baseImageSrc = null; markers = []; nextNum = 1; trash = []; activityLog = []; trackLog = [];
+              resetStageToEmpty();
+              renderMarkers(); renderLog(); updateCounts(); refreshStageHeader();
+              applyProjectRoleGate();
+            }
           }
           renderProjectList();
           renderProjectHeader();
@@ -12081,6 +12155,11 @@
       s.projectId = projects[0].id;
     }
     sites.push(s);
+    // 담을 프로젝트가 하나도 없으면(전부 삭제한 상태) 기본 프로젝트를 만들어 연결한다
+    if(!s.projectId || !projects.find(p => p.id === s.projectId)){
+      ensureProjectsIntegrity();
+      s.projectId = currentProjectId;
+    }
     deletedSites = deletedSites.filter(x => x !== item);
     renderSiteTrash();
     if(typeof renderSiteList === 'function') renderSiteList();

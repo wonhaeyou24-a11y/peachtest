@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-shot-v37-pull-mutex-no-flicker'; // pull 동시실행 금지 + pull 중 저장이 병합결과 덮어쓰지 않게(지점/도면 진동 수정)
+const CACHE_NAME = 'point-shot-v38-incremental-drawing-pull'; // 증분 pull이 시설물 blob에서 도면(이미지 포함)을 합집합 + 프로젝트 최소 1개 강제 제거
 // 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
 // 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
 // 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.
