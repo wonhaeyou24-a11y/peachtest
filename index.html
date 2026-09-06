@@ -2740,7 +2740,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v47';
+  const PS_BUILD = 'v48';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -13351,14 +13351,19 @@
     });
   }
 
+  let singleDownAt = 0;
   stage.addEventListener('pointerdown', (e)=>{
     if(!baseImageSrc) return;
-    stage.setPointerCapture(e.pointerId);
+    // setPointerCapture 가 드물게 InvalidStateError 로 throw 되면(합성 이벤트,
+    // 특이 포인터 상태 등) 이 핸들러가 그 줄에서 중단돼 panStart 가 안 잡히고,
+    // 그 결과 마우스로 끌어도 pan 이 안 되고 놓는 순간 지점이 찍혔다.
+    try{ stage.setPointerCapture(e.pointerId); }catch(err){}
     activePointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
     if(activePointers.size === 1){
       panStart = { x:e.clientX, y:e.clientY, tx:zTx, ty:zTy };
       singleMoved = false;
       singleStartTarget = e.target;
+      singleDownAt = Date.now();
     } else if(activePointers.size === 2){
       panStart = null; // pinch 중에는 1손가락 pan 계산과 섞이지 않게 끈다
       startPinch();
@@ -13373,11 +13378,15 @@
       updatePinch();
     } else if(activePointers.size === 1 && panStart){
       const dx = e.clientX - panStart.x, dy = e.clientY - panStart.y;
-      if(Math.abs(dx) > 10 || Math.abs(dy) > 10) singleMoved = true;
+      // 예전 10px는 확대 상태에서 미세 이동(pan)을 탭(마킹)으로 오인하기 쉬웠다 → 5px.
+      if(Math.abs(dx) > 5 || Math.abs(dy) > 5) singleMoved = true;
       if(singleMoved){
         zTx = panStart.tx + dx;
         zTy = panStart.ty + dy;
-        scheduleTransform();
+        // pointermove는 이미 브라우저가 rAF에 맞춰 보내므로 직접 반영한다.
+        // (scheduleTransform의 rAF 콜백이 백그라운드 탭 등에서 지연되면 pan이
+        //  "안 먹는 것처럼" 보였다.)
+        applyTransform();
       }
     }
   });
@@ -13387,7 +13396,10 @@
     const wasPinching = activePointers.size >= 2;
     activePointers.delete(e.pointerId);
 
-    if(wasSingle && !singleMoved && !hadMultiTouch && baseImageSrc){
+    // 움직임이 거의 없고(=탭) + 짧게 눌렀을 때만 지점 마킹으로 처리한다.
+    // 느리게 눌렀다 놓은 건(움직임 적어도) 마킹 의도가 아닐 확률이 높다.
+    const heldMs = Date.now() - singleDownAt;
+    if(wasSingle && !singleMoved && heldMs < 400 && !hadMultiTouch && baseImageSrc){
       handleTap(singleStartTarget, e);
     }
 

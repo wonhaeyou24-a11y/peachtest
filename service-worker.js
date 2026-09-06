@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-shot-v47-no-view-reset-on-pull'; // 배경 pull이 도면 줌/이동을 100%로 리셋하던 것 수정(이미지 안 바뀌면 안 다시그림) + 사진촬영 지점못찾음 방어
+const CACHE_NAME = 'point-shot-v48-pan-drag-fix'; // 확대 후 마우스 드래그 pan이 안 먹고 지점 찍히던 것 수정(rAF→직접 반영, setPointerCapture throw 방어, 임계 10→5px)
 // 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
 // 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
 // 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.
