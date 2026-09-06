@@ -2740,7 +2740,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v44';
+  const PS_BUILD = 'v45';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -5995,6 +5995,17 @@
     cloudSyncBody.innerHTML = '<div class="hint">사진을 내려받는 중입니다…</div>';
     await downloadPendingCloudPhotos(newSites);
     await saveState();
+    // [B] 시설물 blob에는 이제 메타+도면만 들어있으므로, 팀 프로젝트는 지점·기존손상을
+    //     ps_inspection_points / ps_existing_damages 에서 따로 당겨와야 조사자료가 다 보인다.
+    if(isTeamProject){
+      try{
+        cloudSyncBody.innerHTML = '<div class="hint">팀 조사자료를 가져오는 중입니다…</div>';
+        await pullCloudChanges(newProject.id);
+        await saveState();
+        const cur = sites.find(s => s.id === currentSiteId);
+        if(cur){ await loadSite(cur); }
+      }catch(e){ console.warn('불러오기 후 팀자료 pull 실패(수동으로 "팀원 자료 가져오기" 가능)', e); }
+    }
     renderCloudSyncBody();
     alert('클라우드에서 "' + newProject.name + '" 프로젝트를 불러왔습니다.');
   }
@@ -8637,6 +8648,22 @@
     return true;                                     // 소유자 정보 없음 — 일단 한 번 시도(그 결과로 학습)
   }
 
+  // [B: 조사자별 독립 레코드] 시설물 "행"(메타 + 도면)은 프로젝트를 세팅한 사람만
+  // 올린다. 팀원은 그 시설물의 자기 지점·기존손상만 각자 올리고, 시설물 blob 자체는
+  // 건드리지 않는다 — 예전엔 두 조사자가 각자 markers 배열이 든 시설물 blob을 통째로
+  // 올려서 서로의 지점을 덮어썼다("나타났다 사라졌다"의 근본 원인).
+  function iOwnFacility(site){
+    if(!site) return false;
+    const proj = projects.find(p => p.id === site.projectId);
+    if(!proj || !proj.organizationId) return true;   // 개인 프로젝트의 시설물 — 내 것
+    const me = (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null;
+    if(!me) return false;
+    if(site.createdBy) return site.createdBy === me;
+    if(site.ownerId) return site.ownerId === me;
+    // 소유자 정보가 없는 예전 시설물: 프로젝트 소유자면 시설물도 내 것으로 본다.
+    return iOwnProjectRow(proj);
+  }
+
   function queueCloudSync(){
     if(!currentProjectId) return;
     // 이 기기가 마지막으로 클라우드와 맞춘 리비전을 함께 넘긴다. 예전엔 아무것도 안
@@ -8732,15 +8759,18 @@
     if(!site || !site.id) return;
     const items = [];
 
-    const facKey = 'facility:' + site.id;
-    const facSig = facilityMetaSignature(site);
-    if(facSig === null || lastQueuedEntitySignatures.get(facKey) !== facSig){
-      items.push({
-        entityType: 'facility', entityId: site.id, projectId: site.projectId, facilityId: site.id,
-        revision: (typeof site.revision === 'number' ? site.revision : 1),
-        payload: { id: site.id }
-      });
-      if(facSig !== null) lastQueuedEntitySignatures.set(facKey, facSig);
+    // [B] 시설물 blob(메타+도면)은 세팅한 사람만 올린다. 팀원은 자기 지점만.
+    if(iOwnFacility(site)){
+      const facKey = 'facility:' + site.id;
+      const facSig = facilityMetaSignature(site);
+      if(facSig === null || lastQueuedEntitySignatures.get(facKey) !== facSig){
+        items.push({
+          entityType: 'facility', entityId: site.id, projectId: site.projectId, facilityId: site.id,
+          revision: (typeof site.revision === 'number' ? site.revision : 1),
+          payload: { id: site.id }
+        });
+        if(facSig !== null) lastQueuedEntitySignatures.set(facKey, facSig);
+      }
     }
 
     // 팀원이 만든 항목(createdBy가 나 아님)은 애초에 큐에 안 넣는다. 이 기기는
@@ -9269,6 +9299,11 @@
       else if(entityType === 'facility'){
         const site = sites.find(s => s.id === entityId) || payload;
         if(!site) return { ok: true };
+        // [B] 시설물 blob(메타+도면)은 세팅한 사람만 올린다. 팀원은 자기 지점만
+        //     각자 올리므로, 여기서 팀원이 시설물 행을 건드리지 않는다.
+        if(op !== 'delete' && !iOwnFacility(site)){
+          return { ok: true, skipped: true, reason: 'not-facility-owner' };
+        }
         const projId = site.projectId || item.projectId || currentProjectId;
         const pObj = projects.find(p => p.id === projId);
         const orgId = site.organizationId || (pObj && pObj.organizationId) || null;
@@ -9326,8 +9361,15 @@
         }
 
         site.revision = facBaseRevision + 1;
+        // [B] 시설물 blob에는 메타데이터 + 도면(drawings)만 담는다. markers/existingDamages는
+        //     각 조사자가 ps_inspection_points / ps_existing_damages 에 자기 것만 따로 올리고
+        //     pull이 id 기준 합집합으로 취합한다 — blob에 넣으면 두 조사자가 서로 덮어쓴다.
         const lightSite = JSON.parse(JSON.stringify(site));
-        (lightSite.markers || []).forEach(m => (m.photos || []).forEach(p => { if(p.cloudRef) delete p.src; delete p.original; }));
+        delete lightSite.markers;
+        delete lightSite.existingDamages;
+        delete lightSite.trash;
+        delete lightSite.activityLog;
+        delete lightSite.trackLog;
 
         const { error } = await supabaseClient.from('ps_facilities').upsert({
           id: site.id,
@@ -9783,9 +9825,13 @@
             sites[idx] = merged;
             mergedCount++; pulledFacilities++;
           } else if(rf.data){
-            // 로컬에 아예 없던 시설물(팀원이 새로 만든 것) — 통째로 받는다. 소실 위험 없음.
-            // rf.data.drawings 에 이미지까지 들어있다(경로 단일화).
+            // 로컬에 아예 없던 시설물(팀원이 새로 만든 것) — 메타+도면만 받는다.
+            // [B] 지점·기존손상은 blob이 아니라 아래 2·3단계에서 각 조사자 행으로 취합.
+            //     (예전 blob엔 markers가 들어있을 수 있으니 여기서 제거)
             const nf = rf.data;
+            nf.markers = [];
+            nf.existingDamages = [];
+            delete nf.trash;
             if(Array.isArray(nf.drawings) && nf.drawings.length){
               nf._drawingsMigrated = true;
               if(!nf.currentDrawingId || !nf.drawings.find(d => d.id === nf.currentDrawingId)) nf.currentDrawingId = nf.drawings[0].id;
@@ -10508,7 +10554,8 @@
       baseImageSrc: null,
       markers: [],
       nextNum: 1,
-      projectId: currentProjectId
+      projectId: currentProjectId,
+      createdBy: (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null
     };
     sites.push(site);
     await applyDamageMasterSnapshotIfNeeded(site);
