@@ -8,7 +8,8 @@
 -- ============================================================
 
 -- A-1. The Avengers 멤버십 + auth.users 매칭
-SELECT om.organization_id, o.name AS org_name, o.owner_id,
+--     (organizations 테이블 소유자 컬럼명은 owner_user_id — owner_id 아님)
+SELECT om.organization_id, o.name AS org_name, o.owner_user_id,
        om.email, om.user_id, om.role, om.status,
        au.email AS auth_email_for_user_id,
        (au.id IS NOT NULL) AS user_id_valid
@@ -28,7 +29,9 @@ LEFT JOIN public.organizations o ON o.id = p.organization_id
 ORDER BY p.updated_at DESC NULLS LAST;
 
 
--- A-3. is_org_member 를 kim/hyun/wonki 관점에서 수동 재현
+-- A-3. is_org_member 재현 — 배포된 함수는 소유권을 안 보고 "active 멤버인지"만 확인한다:
+--        select exists (select 1 from organization_members
+--          where organization_id::text = check_org_id and user_id = auth.uid() and status = 'active')
 WITH org AS (
   SELECT id FROM public.organizations WHERE name = 'The Avengers'
 ), targets AS (
@@ -37,16 +40,16 @@ WITH org AS (
   WHERE au.email ILIKE ANY (ARRAY['kim@gmail.com','hyun@naver.com','wonki@gmail.com'])
 )
 SELECT t.email, t.uid,
-       EXISTS (SELECT 1 FROM public.organization_members m
-               WHERE m.organization_id = (SELECT id FROM org)
-                 AND m.user_id = t.uid AND m.status = 'active') AS active_member,
-       EXISTS (SELECT 1 FROM public.organizations o
-               WHERE o.id = (SELECT id FROM org) AND o.owner_id = t.uid) AS is_owner
+       EXISTS (
+         SELECT 1 FROM public.organization_members m
+         WHERE m.organization_id::text = (SELECT id::text FROM org)
+           AND m.user_id = t.uid
+           AND m.status = 'active'
+       ) AS is_org_member_result
 FROM targets t
 ORDER BY t.email;
--- active_member 와 is_owner 둘 다 false 인 사람 -> 그 계정에서 is_org_member 실패.
--- 원인은 A-1 에서 그 사람의 user_id 가 NULL/불일치 이거나 status != 'active'.
--- 고치려면 아래 UPDATE (A-1 결과 확인 후):
+-- is_org_member_result 가 kim/hyun 에게 false -> A-1 에서 그 사람의 user_id 가
+-- NULL/불일치 이거나 status != 'active'. 고치려면 아래 UPDATE:
 --   UPDATE public.organization_members m
 --     SET user_id = au.id, status = 'active'
 --     FROM auth.users au
