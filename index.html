@@ -2740,7 +2740,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v41';
+  const PS_BUILD = 'v42';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -8666,7 +8666,6 @@
   // pendingKeys 보호로직이 "로컬에 손댄 게 있다"고 착각해 그 지점은 영원히
   // 다시 못 당겨왔다("팀원 최신자료 가져오기"가 매번 "최신조사 없음"으로 뜨던 원인).
   const lastQueuedEntitySignatures = new Map(); // `${entityType}:${entityId}` -> 마지막으로 큐에 넣은 내용의 서명
-  const syncedDrawingIds = new Set(); // 클라우드 ps_drawings 에 행이 있는 게 확인된 도면 id (지점 FK 사전충족용)
   function entityContentSignature(obj){
     try{
       const copy = { ...obj };
@@ -8710,6 +8709,13 @@
       const copy = { ...site };
       delete copy.markers; delete copy.existingDamages; delete copy.drawings; delete copy.trash; delete copy.revision;
       delete copy._drawingsMigrated; delete copy.ownerId; delete copy._pushBlocked; // 로컬 학습 플래그 — 내용 아님
+      // ★ 도면(drawings)은 이제 별도 테이블(ps_drawings)이 아니라 시설물 blob
+      //   (ps_facilities.data.drawings)로만 동기화된다. 그래서 "도면이 추가/교체/이미지
+      //   변경"되면 시설물을 다시 큐에 넣어야 blob이 올라간다 — 도면의 id·이름·이미지
+      //   길이만 지문에 넣는다(전체 base64 는 안 넣어서 지문 계산이 가볍다).
+      copy.__drawingsFingerprint = (site.drawings || [])
+        .map(d => (d && d.id ? (d.id + '~' + (d.name || '') + '~' + ((d.imageSrc || d.svgData || d.svg || '').length)) : ''))
+        .join('|');
       return JSON.stringify(copy);
     }catch(e){
       return null;
@@ -8763,24 +8769,10 @@
       });
       if(sig !== null) lastQueuedEntitySignatures.set(key, sig);
     });
-    // 도면(drawings) — 이미지(imageSrc) 없이 메타데이터만 동기화한다. ps_inspection_points
-    // 는 drawing_id 외래키가 걸려 있어서, 도면 행이 클라우드에 없으면 그 도면 위에
-    // 찍은 지점을 아예 업로드할 수 없다(진단로그의 "violates foreign key constraint").
-    // 이미지는 svg_data(TEXT) 컬럼으로 별도 업로드된다. 여기선 서명에 이미지
-    // 유무/길이만 반영해 "이미지가 새로 붙었을 때"는 재큐잉되게 한다(전체 base64는 안 넣음).
-    (site.drawings || []).forEach(d=>{
-      if(!d || !d.id) return;
-      if(notMine(d)) return;
-      const key = 'drawing:' + d.id;
-      const sig = entityContentSignature({ ...d, imageSrc: undefined, __imgLen: (d.imageSrc || '').length });
-      if(sig !== null && lastQueuedEntitySignatures.get(key) === sig) return;
-      items.push({
-        entityType: 'drawing', entityId: d.id, projectId: site.projectId, facilityId: site.id,
-        revision: (typeof d.revision === 'number' ? d.revision : 1),
-        payload: { id: d.id }
-      });
-      if(sig !== null) lastQueuedEntitySignatures.set(key, sig);
-    });
+    // 도면(drawings)은 더 이상 개별 엔티티로 큐잉하지 않는다. 이미지까지 통째로
+    // 시설물 blob(ps_facilities.data.drawings)에 담겨 올라가고, pull은 그 blob에서
+    // id 기준 합집합으로 병합한다(경로 단일화). facilityMetaSignature 에 도면 지문을
+    // 넣어 뒀으므로, 도면이 추가/교체되면 위에서 시설물이 자동 재큐잉된다.
     if(items.length === 0) return;
     enqueueEntitySyncBatch(items).catch(()=>{});
   }
@@ -9280,7 +9272,14 @@
         const facMetaOnly = (o)=>{
           const c = { ...(o || {}) };
           ['markers','existingDamages','drawings','trash','currentDrawingId','currentSiteId',
-           'baseImageSrc','baseImage','deletedSites','sectionCollapsed','uiState','_view'].forEach(k=>delete c[k]);
+           'baseImageSrc','baseImage','deletedSites','sectionCollapsed','uiState','_view',
+           '_drawingsMigrated','ownerId','_pushBlocked'].forEach(k=>delete c[k]);
+          // ★ 도면은 이제 시설물 blob으로만 동기화되므로, 도면이 추가/교체/이미지변경되면
+          //   "본문이 달라졌다"고 판단해 blob을 다시 올려야 한다. 전체 base64 대신
+          //   id·이름·이미지길이 지문만 비교에 넣는다.
+          c.__drawingsFingerprint = (Array.isArray(o && o.drawings) ? o.drawings : [])
+            .map(d => (d && d.id ? (d.id + '~' + (d.name || '') + '~' + ((d.imageSrc || d.svgData || d.svg || '').length)) : ''))
+            .join('|');
           return c;
         };
         const facBaseRevision = Math.max(expectedRevision, (site && typeof site.revision === 'number') ? site.revision : 1);
@@ -9416,41 +9415,11 @@
         const pointRevision = Math.max(ipBaseRevision, (point && typeof point.revision === 'number') ? point.revision : 1) + 1;
         if(point) point.revision = pointRevision;
 
-        // ★ FK 사전충족: 이 지점이 도면(drawing_id)을 참조하면, ps_inspection_points
-        //   의 drawing_id → ps_drawings(id) 외래키 때문에 그 도면 행이 클라우드에
-        //   먼저 있어야 한다. 도면 동기화는 현재 시설물을 볼 때만 큐잉되므로,
-        //   "다른 시설물의 도면 위 지점"을 올릴 때는 도면 행이 없어 업로드가 통째로
-        //   거부됐다(진단로그의 "violates foreign key constraint" 대량 실패).
-        //   여기서 그 도면의 메타데이터 행(이미지 제외)을 즉석에서 upsert 한다.
-        const dwId = point && point.drawingId;
-        if(dwId && op !== 'delete' && !syncedDrawingIds.has(dwId)){
-          try{
-            let dwObj = null, dwFacId = facId;
-            for(const s of sites){
-              const f = (s.drawings || []).find(d => d.id === dwId);
-              if(f){ dwObj = f; dwFacId = s.id; break; }
-            }
-            const lightDw = dwObj ? { ...dwObj } : { id: dwId, name: '도면' };
-            delete lightDw.imageSrc; delete lightDw.svgData; delete lightDw.svg; delete lightDw.original;
-            const { error: dwErr } = await supabaseClient.from('ps_drawings').upsert({
-              id: dwId,
-              facility_id: dwFacId,
-              project_id: projId,
-              user_id: userId,
-              organization_id: orgId,
-              name: (dwObj && dwObj.name) || '도면',
-              svg_data: null,
-              data: lightDw,
-              revision: (dwObj && typeof dwObj.revision === 'number') ? dwObj.revision : 1,
-              schema_version: 8,
-              device_id: devId,
-              created_at: (dwObj && dwObj.createdAt) || new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-              updated_by: userId
-            }, { onConflict: 'id', ignoreDuplicates: false });
-            if(!dwErr) syncedDrawingIds.add(dwId);
-          }catch(e){ /* 도면 upsert 실패해도 아래 지점 upsert 시도는 해본다 */ }
-        }
+        // ★ 도면은 이제 ps_drawings 테이블이 아니라 시설물 blob으로만 동기화된다
+        //   (경로 단일화). 그래서 ps_inspection_points.drawing_id(→ ps_drawings FK)는
+        //   더 이상 채우지 않는다(아래 upsert에서 null). 지점의 소속 도면 id는
+        //   data 블롭의 drawingId 로만 다니고, pull이 거기서 읽는다. 이렇게 하면
+        //   "도면 행이 없어서 지점 업로드가 통째로 거부"되던 FK 문제가 원천 제거된다.
 
         // 사진 원본(base64)은 이미 ps-photos 스토리지에 별도 업로드되고(cloudRef로
         // 참조), 여기 data 컬럼엔 필요 없다 — 스트리핑 없이 그대로 올리면 저장할
@@ -9461,7 +9430,7 @@
 
         const { error: upErr } = await supabaseClient.from('ps_inspection_points').upsert({
           id: entityId,
-          drawing_id: (point && point.drawingId) || null,
+          drawing_id: null, // 경로 단일화: 도면 참조는 data.drawingId 로만 (ps_drawings FK 안 씀)
           facility_id: facId,
           project_id: projId,
           user_id: userId,
@@ -9598,75 +9567,12 @@
         return { ok: true };
       }
 
-      // 6. ps_drawings Sync (이미지 없이 메타데이터만 — inspection_points의 drawing_id FK 충족용)
+      // 6. ps_drawings — 경로 단일화로 더 이상 쓰지 않는다. 도면은 시설물 blob
+      //    (ps_facilities.data.drawings)에 이미지까지 담겨 동기화되고 pull이 거기서
+      //    id 합집합으로 병합한다. 큐잉도 안 하지만(queueEntitySyncForFacility),
+      //    혹시 예전 버전이 남긴 'drawing' 큐 항목이 있으면 조용히 성공 처리해 비운다.
       else if(entityType === 'drawing'){
-        // payload는 { id } 표시자. 실제 도면 객체를 sites[].drawings 에서 찾는다.
-        let drawing = null, drawSite = null;
-        for(const s of sites){
-          const found = (s.drawings || []).find(d => d.id === entityId);
-          if(found){ drawing = found; drawSite = s; if(!item.facilityId) item.facilityId = s.id; if(!item.projectId) item.projectId = s.projectId; break; }
-        }
-        if(!drawing && op !== 'delete') return { ok: true };
-        drawing = drawing || {};
-        const projId = item.projectId || currentProjectId;
-        const facId = item.facilityId || (drawSite && drawSite.id) || currentSiteId;
-        const pObj = projects.find(p => p.id === projId);
-        const orgId = (pObj && pObj.organizationId) || null;
-
-        const drawBaseRevision = Math.max(expectedRevision, (typeof drawing.revision === 'number') ? drawing.revision : 1);
-        const { data: existing, error: checkErr } = await supabaseClient.from('ps_drawings').select('revision, data, user_id, svg_data').eq('id', entityId).maybeSingle();
-        // 이미 있고 내가 주인이 아니면(팀원 도면): 메타데이터는 안 건드리지만, 클라우드에
-        // 이미지가 아직 없고 내 로컬엔 있으면 이미지만 채워준다(누구든 먼저 올린 사람이).
-        if(!checkErr && existing && op !== 'delete' && existing.user_id && existing.user_id !== userId){
-          if(typeof existing.revision === 'number') drawing.revision = Math.max(drawing.revision || 1, existing.revision);
-          const myImg = drawing.imageSrc || drawing.svgData || drawing.svg || null;
-          if(myImg && typeof myImg === 'string' && !existing.svg_data){
-            try{ await supabaseClient.from('ps_drawings').update({ svg_data: myImg, updated_at: new Date().toISOString() }).eq('id', entityId); }catch(e){}
-          }
-          return { ok: true, skipped: true, reason: 'not-owner' };
-        }
-        // data 블롭에는 이미지를 넣지 않고(무거움), 도면 이미지는 svg_data(TEXT)
-        // 컬럼에 data URL 그대로 올린다. 팀원이 도면을 화면에 그리려면 이미지가
-        // 필요하다("도면 이미지가 안 뜬다" 문제).
-        const drawingImage = drawing.imageSrc || drawing.svgData || drawing.svg || null;
-        const lightDrawing = { ...drawing }; delete lightDrawing.imageSrc; delete lightDrawing.svgData; delete lightDrawing.svg; delete lightDrawing.original;
-        // 이미 클라우드에 있고 메타+이미지 유무가 같으면 스킵(이미지 재업로드 방지)
-        if(!checkErr && existing && existing.data && sameSyncedContent(lightDrawing, existing.data)
-           && (!drawingImage) === (!existing.svg_data)){
-          if(typeof existing.revision === 'number') drawing.revision = Math.max(drawing.revision || 1, existing.revision);
-          return { ok: true, skipped: true };
-        }
-        if(!checkErr && existing && existing.revision && existing.revision > drawBaseRevision && !sameSyncedContent(lightDrawing, existing.data || existing)){
-          await detectAndRecordConflict({
-            organization_id: orgId, project_id: projId, entity_type: 'drawing', entity_id: entityId,
-            user_id: userId, local_revision: drawBaseRevision, cloud_revision: existing.revision,
-            local_data: lightDrawing, cloud_data: existing.data || existing
-          });
-          return { ok: false, conflict: true, reason: `Revision mismatch: Local ${drawBaseRevision} vs Cloud ${existing.revision}` };
-        }
-
-        const drawingRevision = drawBaseRevision + 1;
-        drawing.revision = drawingRevision;
-        const { error: upErr } = await supabaseClient.from('ps_drawings').upsert({
-          id: entityId,
-          facility_id: facId,
-          project_id: projId,
-          user_id: userId,
-          organization_id: orgId,
-          name: drawing.name || '도면',
-          svg_data: (drawingImage && typeof drawingImage === 'string') ? drawingImage : (existing && existing.svg_data) || null,
-          data: lightDrawing,
-          revision: drawingRevision,
-          schema_version: 8,
-          device_id: drawing.deviceId || devId,
-          deleted_at: op === 'delete' ? new Date().toISOString() : (drawing.deletedAt || null),
-          created_at: drawing.createdAt || new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          updated_by: userId
-        }, { onConflict: 'id' });
-        if(upErr) return { ok: false, reason: upErr.message };
-        syncedDrawingIds.add(entityId);
-        return { ok: true };
+        return { ok: true, skipped: true, reason: 'drawings-via-facility-blob' };
       }
 
       // 7. ps_photo_index & Storage ps-photos Sync
@@ -9871,7 +9777,14 @@
             mergedCount++; pulledFacilities++;
           } else if(rf.data){
             // 로컬에 아예 없던 시설물(팀원이 새로 만든 것) — 통째로 받는다. 소실 위험 없음.
-            sites.push(rf.data);
+            // rf.data.drawings 에 이미지까지 들어있다(경로 단일화).
+            const nf = rf.data;
+            if(Array.isArray(nf.drawings) && nf.drawings.length){
+              nf._drawingsMigrated = true;
+              if(!nf.currentDrawingId || !nf.drawings.find(d => d.id === nf.currentDrawingId)) nf.currentDrawingId = nf.drawings[0].id;
+              touchedDrawingSites.add(nf.id);
+            }
+            sites.push(nf);
             mergedCount++; pulledFacilities++;
           }
         });
@@ -9976,53 +9889,16 @@
         }
       }catch(e){}
 
-      // 3-5. Drawings Pull (도면 메타데이터 + 이미지). 팀원이 도면 위에 찍은 지점을
-      // 내 화면에 그리려면 그 도면이 로컬 site.drawings 에 있고 이미지(imageSrc)까지
-      // 있어야 한다. 이미지는 rd.svg_data(TEXT, data URL) 로 온다.
-      // (touchedDrawingSites 는 위 1단계에서 이미 선언 — 시설물 blob 병합분도 포함)
-      try{
-        const { data: remoteDraws } = await supabaseClient.from('ps_drawings').select('*').eq('project_id', targetProjId);
-        if(Array.isArray(remoteDraws)){
-          remoteDraws.forEach(rd => {
-            const site = sites.find(s => s.id === rd.facility_id);
-            if(!site) return;
-            if(!Array.isArray(site.drawings)) site.drawings = [];
-            const dData = rd.data || { id: rd.id, name: rd.name };
-            const cloudImage = (rd.svg_data && typeof rd.svg_data === 'string' && rd.svg_data.length > 10) ? rd.svg_data : null;
-            const authRev = (typeof rd.revision === 'number') ? rd.revision : null;
-            const dIdx = site.drawings.findIndex(d => d.id === rd.id);
-            // 보호: 로컬에 있고 + 큐 대기 + 메타가 실제로 다를 때만 스킵.
-            if(dIdx >= 0 && pendingRev.has(`drawing:${rd.id}`)){
-              const lm = { ...site.drawings[dIdx] }; delete lm.imageSrc;
-              if(!sameSyncedContent(lm, dData)) { syncedDrawingIds.add(rd.id); return; }
-            }
-            if(dIdx >= 0){
-              const local = site.drawings[dIdx];
-              const merged = Object.assign({}, local, dData);
-              // 이미지: 로컬에 없으면 클라우드 것으로 채운다(로컬에 있으면 유지 — 내가 만든 원본).
-              if(!merged.imageSrc && cloudImage) merged.imageSrc = cloudImage;
-              else if(local.imageSrc) merged.imageSrc = local.imageSrc;
-              if(authRev !== null) merged.revision = Math.max(authRev, (typeof local.revision === 'number' ? local.revision : 1));
-              merged.createdBy = local.createdBy || (rd.data && rd.data.createdBy) || rd.user_id || null;
-              site.drawings[dIdx] = merged;
-            } else {
-              if(authRev !== null) dData.revision = authRev;
-              if(cloudImage && !dData.imageSrc) dData.imageSrc = cloudImage;
-              dData.createdBy = (rd.data && rd.data.createdBy) || rd.user_id || null;
-              if(!dData.facilityId) dData.facilityId = rd.facility_id;
-              site.drawings.push(dData);
-            }
-            // 도면이 하나라도 생겼는데 시설물에 currentDrawingId 가 없으면 첫 도면으로 지정
-            // (안 그러면 renderMarkers 의 drawingId 필터 때문에 지점이 하나도 안 보인다).
-            if(!site.currentDrawingId && site.drawings.length) site.currentDrawingId = site.drawings[0].id;
-            if(site.drawings.length) site._drawingsMigrated = true;
-            touchedDrawingSites.add(site.id);
-            try{ const _dw = site.drawings[dIdx >= 0 ? dIdx : site.drawings.length - 1]; lastQueuedEntitySignatures.set('drawing:' + rd.id, entityContentSignature({ ..._dw, imageSrc: undefined, __imgLen: (_dw.imageSrc || '').length })); }catch(e){}
-            syncedDrawingIds.add(rd.id);
-            mergedCount++;
-          });
-        }
-      }catch(e){}
+      // 3-5. 도면 Pull — 경로 단일화로 ps_drawings 테이블은 더 이상 읽지 않는다.
+      //   도면(메타 + 이미지)은 위 1단계 시설물 blob(rf.data.drawings) 에서
+      //   mergeDrawingsUnion 으로 이미 병합됐다. currentDrawingId 정합만 한 번 더 챙긴다.
+      (sites || []).forEach(s => {
+        if(!Array.isArray(s.drawings) || s.drawings.length === 0) return;
+        if(s.currentDrawingId && s.drawings.find(d => d.id === s.currentDrawingId)) return;
+        s.currentDrawingId = s.drawings[0].id;
+        touchedDrawingSites.add(s.id);
+      });
+
       // 현재 보고 있는 시설물의 도면이 갱신됐으면 라이브 상태(drawings/currentDrawingId)도 맞춘다.
       try{
         if(touchedDrawingSites.has(currentSiteId)){
