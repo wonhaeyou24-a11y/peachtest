@@ -2756,7 +2756,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v51';
+  const PS_BUILD = 'v52';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -8715,6 +8715,12 @@
     // 한 번 올라가 revision이 2가 되는 순간부터 저장할 때마다 거짓 충돌이 쌓였다.
     const proj = projects.find(p => p.id === currentProjectId);
     if(!iOwnProjectRow(proj)) return; // 팀원은 프로젝트 행을 못 고침 — 큐잉 자체를 안 함
+    // 프로젝트 메타데이터가 실제로 안 바뀌었으면 큐잉하지 않는다(매 저장마다 project를
+    // 넣어 skipped 처리되던 것). 시설물/지점은 아래 queueEntitySyncForFacility가 담당.
+    const pKey = 'project:' + currentProjectId;
+    const pSig = entityContentSignature(proj);
+    if(pSig !== null && lastQueuedEntitySignatures.get(pKey) === pSig) return;
+    if(pSig !== null){ lastQueuedEntitySignatures.set(pKey, pSig); persistSyncedSignatures(); }
     enqueueEntitySync({
       entityType: 'project',
       entityId: currentProjectId,
@@ -8744,11 +8750,50 @@
   // pendingKeys 보호로직이 "로컬에 손댄 게 있다"고 착각해 그 지점은 영원히
   // 다시 못 당겨왔다("팀원 최신자료 가져오기"가 매번 "최신조사 없음"으로 뜨던 원인).
   const lastQueuedEntitySignatures = new Map(); // `${entityType}:${entityId}` -> 마지막으로 큐에 넣은 내용의 서명
+
+  // ★ 이 Map을 IndexedDB에 저장·복원한다. iOS는 PWA를 1~2분마다 리로드하는데,
+  //   그때마다 이 Map이 비면 첫 saveState가 시설물의 모든 마커·기존손상을 다시
+  //   큐에 넣고(내용은 안 바뀌었는데), 동기화가 그걸 하나씩 "이미 동일"로 스킵한다
+  //   (진단로그의 skipped:N — Supabase SELECT 낭비). 리로드 후에도 서명이 남아있으면
+  //   재큐잉 자체가 안 일어난다.
+  const SYNCED_SIG_KEY = 'point-shot-synced-sigs-v1';
+  let _sigPersistTimer = 0;
+  function persistSyncedSignatures(){
+    if(_sigPersistTimer) return;
+    _sigPersistTimer = setTimeout(async ()=>{
+      _sigPersistTimer = 0;
+      try{
+        // 너무 커지지 않게 상한(현장 프로젝트 규모면 넉넉). 초과 시 최근 것 우선.
+        const entries = Array.from(lastQueuedEntitySignatures.entries());
+        const capped = entries.length > 4000 ? entries.slice(entries.length - 4000) : entries;
+        await storageSet(SYNCED_SIG_KEY, capped);
+      }catch(e){}
+    }, 4000);
+  }
+  async function restoreSyncedSignatures(){
+    try{
+      const saved = await storageGet(SYNCED_SIG_KEY);
+      if(!Array.isArray(saved)) return;
+      // 현재 로컬에 실재하는 엔티티만 복원(삭제된 것의 서명은 버림 — 무한 증가 방지).
+      const liveIds = new Set();
+      (projects || []).forEach(p => liveIds.add('project:' + p.id));
+      (sites || []).forEach(s => {
+        liveIds.add('facility:' + s.id);
+        (s.markers || []).forEach(m => m && m.id && liveIds.add('inspection_point:' + m.id));
+        (s.existingDamages || []).forEach(d => d && d.id && liveIds.add('existing_damage:' + d.id));
+        (s.drawings || []).forEach(d => d && d.id && liveIds.add('drawing:' + d.id));
+      });
+      saved.forEach(([k, sig]) => { if(k && sig != null && liveIds.has(k)) lastQueuedEntitySignatures.set(k, sig); });
+    }catch(e){}
+  }
+
   function entityContentSignature(obj){
     try{
       const copy = { ...obj };
       delete copy.revision; delete copy.createdBy; // createdBy는 조사자 표시용 메타 — 내용 변경으로 안 침
-      delete copy.ownerId; delete copy._pushBlocked; // 프로젝트 행 소유/차단 학습 플래그 — 내용 아님
+      delete copy.ownerId; delete copy._pushBlocked; delete copy._drawingsMigrated; // 학습 플래그 — 내용 아님
+      // 저장할 때마다 바뀌는 타임스탬프류 — 이게 들어가면 서명이 매번 달라져 dirty-check 무의미.
+      ['savedAt','updatedAt','updated_at','cloudSyncedAt','syncedAt','lastSavedAt','_lastSync'].forEach(k=>delete copy[k]);
       if(Array.isArray(copy.photos)) copy.photos = copy.photos.map(stripPhotoHeavyFields);
       return JSON.stringify(copy);
     }catch(e){
@@ -8786,7 +8831,9 @@
     try{
       const copy = { ...site };
       delete copy.markers; delete copy.existingDamages; delete copy.drawings; delete copy.trash; delete copy.revision;
-      delete copy._drawingsMigrated; delete copy.ownerId; delete copy._pushBlocked; // 로컬 학습 플래그 — 내용 아님
+      delete copy._drawingsMigrated; delete copy.ownerId; delete copy._pushBlocked; delete copy.createdBy; // 로컬 학습 플래그 — 내용 아님
+      delete copy.activityLog; delete copy.trackLog; delete copy.currentDrawingId; delete copy.baseImageSrc; delete copy.mode;
+      ['savedAt','updatedAt','updated_at','cloudSyncedAt','syncedAt','lastSavedAt'].forEach(k=>delete copy[k]); // 매 저장마다 바뀌는 값 제외
       // ★ 도면(drawings)은 이제 별도 테이블(ps_drawings)이 아니라 시설물 blob
       //   (ps_facilities.data.drawings)로만 동기화된다. 그래서 "도면이 추가/교체/이미지
       //   변경"되면 시설물을 다시 큐에 넣어야 blob이 올라간다 — 도면의 id·이름·이미지
@@ -8854,6 +8901,7 @@
     // 시설물 blob(ps_facilities.data.drawings)에 담겨 올라가고, pull은 그 blob에서
     // id 기준 합집합으로 병합한다(경로 단일화). facilityMetaSignature 에 도면 지문을
     // 넣어 뒀으므로, 도면이 추가/교체되면 위에서 시설물이 자동 재큐잉된다.
+    persistSyncedSignatures();
     if(items.length === 0) return;
     enqueueEntitySyncBatch(items).catch(()=>{});
   }
@@ -10091,6 +10139,7 @@
       await setSyncCursor(targetProjId, new Date().toISOString());
       _teamUpdatesAvailable = false; // 방금 가져왔으니 "새 자료 있음" 표시를 내린다
       try{ if(typeof updateSyncStatusIndicator === 'function') updateSyncStatusIndicator(); }catch(e){}
+      persistSyncedSignatures(); // pull이 갱신한 서명들도 디스크에 남긴다
       console.log(`[Sync] pull completed: ${mergedCount} items merged`);
       const facilitySummary = (sites || []).filter(s=>s.projectId===targetProjId)
         .map(s=>({ name: s.name, id: s.id, points: (s.markers||[]).length, isCurrent: s.id===currentSiteId }));
@@ -17049,6 +17098,8 @@
       todaysMarkerCount();
       diagLogMemorySnapshot('앱 시작 직후');
       pruneStaleConflictRecords(); // 삭제된 프로젝트/시설물의 옛 충돌 배지 정리(비동기, 대기 안 함)
+      await restoreSyncedSignatures(); // 동기화 서명 캐시 복원 → 리로드 후 전체 재큐잉(skipped:N) 방지
+
     }catch(e){
       console.error('로컬 데이터 복구 실패:', e);
       diagLog('error', 'initPeachShotApp: 로컬 데이터 복구 실패: ' + (e && e.message || String(e)));
