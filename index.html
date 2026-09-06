@@ -2740,7 +2740,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v45';
+  const PS_BUILD = 'v46';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -8658,10 +8658,13 @@
     if(!proj || !proj.organizationId) return true;   // 개인 프로젝트의 시설물 — 내 것
     const me = (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null;
     if(!me) return false;
-    if(site.createdBy) return site.createdBy === me;
+    if(site._pushBlocked) return false;              // 이 시설물 행 push가 RLS로 거부된 적 있음
+    if(site.createdBy) return site.createdBy === me; // 명확한 소유자 정보
     if(site.ownerId) return site.ownerId === me;
-    // 소유자 정보가 없는 예전 시설물: 프로젝트 소유자면 시설물도 내 것으로 본다.
-    return iOwnProjectRow(proj);
+    // createdBy 불명 + 조직 프로젝트: 내가 "확인된" 프로젝트 소유자일 때만 시설물도
+    // 내 것으로 본다. iOwnProjectRow 의 "정보 없으면 일단 시도"(optimistic true)는
+    // 여기서 믿지 않는다 — 팀원이 남의 시설물 blob을 올리려다 RLS로 튕기는 걸 막는다.
+    return !!(proj.ownerId && proj.ownerId === me);
   }
 
   function queueCloudSync(){
@@ -9381,7 +9384,15 @@
           schema_version: String(site.schemaVersion || CURRENT_SCHEMA_VERSION),
           organization_id: orgId
         }, { onConflict: 'id' });
-        if(error) return { ok: false, reason: error.message };
+        if(error){
+          // RLS 거부 — 이 시설물은 내가 만든 게 아님(또는 조직원 인증 불일치).
+          // 다음부터 이 시설물 blob을 큐에 아예 안 넣는다(대기열 부풀림·반복 실패 방지).
+          if(/row-level security|permission denied|not authorized/i.test(error.message || '')){
+            site._pushBlocked = true;
+            if(!site.createdBy && existing && existing.user_id) site.createdBy = existing.user_id;
+          }
+          return { ok: false, reason: error.message };
+        }
         return { ok: true };
       }
 
@@ -9814,6 +9825,11 @@
           if(idx >= 0 && rf.data){
             const merged = Object.assign({}, sites[idx], rf.data);
             FACILITY_ARRAY_FIELDS.forEach(f => { merged[f] = sites[idx][f]; }); // 로컬 배열 유지(마커 등 로컬 추가분 보존)
+            // 이 시설물의 클라우드 행 소유자를 기록 — 다음부터 iOwnFacility 가 정확히 판정,
+            // 팀원이 남의 시설물 blob을 올리려다 RLS로 튕기는 일이 없어진다.
+            if(rf.user_id) merged.createdBy = merged.createdBy || rf.user_id;
+            const meNow = (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null;
+            if(merged.createdBy && meNow && merged.createdBy !== meNow) merged._pushBlocked = true;
             // 단, drawings는 이미지까지 든 blob이 있으므로 id 기준 합집합한다.
             const u = mergeDrawingsUnion(sites[idx].drawings, rf.data.drawings);
             merged.drawings = u.drawings;
@@ -9832,6 +9848,9 @@
             nf.markers = [];
             nf.existingDamages = [];
             delete nf.trash;
+            if(rf.user_id) nf.createdBy = nf.createdBy || rf.user_id;
+            const meNow2 = (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null;
+            if(nf.createdBy && meNow2 && nf.createdBy !== meNow2) nf._pushBlocked = true;
             if(Array.isArray(nf.drawings) && nf.drawings.length){
               nf._drawingsMigrated = true;
               if(!nf.currentDrawingId || !nf.drawings.find(d => d.id === nf.currentDrawingId)) nf.currentDrawingId = nf.drawings[0].id;
@@ -9993,6 +10012,8 @@
           로컬만_있는지점: localOnly.slice(0,8), 클라우드만_있는지점: cloudOnly.slice(0,8),
           지점들의_도면id: Array.from(drawingIds).slice(0,5),
           현재도면id: (typeof currentDrawingId !== 'undefined') ? currentDrawingId : null,
+          현재도면_이미지있음: (function(){ try{ const cs=sites.find(s=>s.id===currentSiteId); const d=cs&&(cs.drawings||[]).find(x=>x.id===currentDrawingId); return !!(d&&d.imageSrc); }catch(e){ return null; } })(),
+          baseImage있음: (typeof baseImageSrc !== 'undefined') && !!baseImageSrc,
           현재시설물_지점수: curSite ? (curSite.markers || []).length : 0,
           현재모드: (document.getElementById('mapStage') && document.getElementById('mapStage').style.display !== 'none') ? '지도모드' : '도면모드',
           시설물별: perFacility
@@ -10007,15 +10028,36 @@
         try{
           const curSite = sites.find(s=>s.id===currentSiteId);
           if(curSite && Array.isArray(curSite.markers) && typeof markers !== 'undefined'){
+            // ★★ curSite.markers 와 라이브 markers 가 "같은 배열 참조"일 수 있다
+            //    (loadSite 가 markers = site.markers 로 연결 + 이전 pull 이 curSite.markers = markers).
+            //    그 상태에서 markers.length=0 하면 curSite.markers 도 같이 비고,
+            //    이어지는 forEach 는 이미 빈 배열을 순회해 아무것도 안 넣는다 → 지점 전멸.
+            //    반드시 참조 복사본을 먼저 떠놓고 재구성한다.
+            const snap = curSite.markers.slice();
             markers.length = 0;
-            curSite.markers.forEach(m=> markers.push(m));
+            snap.forEach(m=> markers.push(m));
             curSite.markers = markers; // site와 라이브 배열을 같은 참조로 — 이후 커밋이 어긋나지 않게
             if(typeof normalizePhotos === 'function'){ markers.forEach(m=>{ try{ normalizePhotos(m); }catch(e){} }); }
           }
-          if(curSite && touchedDrawingSites.has(currentSiteId) && typeof drawings !== 'undefined' && Array.isArray(curSite.drawings)){
-            drawings.length = 0; curSite.drawings.forEach(d=>drawings.push(d));
+          // 도면 라이브 배열도 항상 맞춘다(예전엔 touchedDrawingSites 일 때만 — 팀원이
+          // 올린 지점은 받았는데 그 지점이 소속된 도면이 화면 도면과 안 맞아 renderMarkers
+          // 필터에 걸려 "가져왔다는데 안 보임"이 되던 문제).
+          if(curSite && typeof drawings !== 'undefined' && Array.isArray(curSite.drawings)){
+            const dSnap = curSite.drawings.slice();
+            drawings.length = 0; dSnap.forEach(d=>drawings.push(d));
             curSite.drawings = drawings;
-            if(!currentDrawingId && curSite.currentDrawingId) currentDrawingId = curSite.currentDrawingId;
+            // 방금 합쳐온 지점들이 실제로 가리키는 도면 id 집계 — 현재 도면이 그 중
+            // 하나가 아니면(또는 비어있으면) 지점이 가장 많이 붙은 도면으로 스냅한다.
+            const usage = {};
+            (curSite.markers || []).forEach(m => { if(m.drawingId){ usage[m.drawingId] = (usage[m.drawingId]||0) + 1; } });
+            const drawnHere = currentDrawingId && drawings.find(d => d.id === currentDrawingId);
+            const curHasMarkers = drawnHere && usage[currentDrawingId];
+            if(!curHasMarkers){
+              const best = Object.keys(usage).sort((a,b)=> usage[b]-usage[a])
+                .find(id => drawings.find(d => d.id === id));
+              const target = best || curSite.currentDrawingId || (drawings[0] && drawings[0].id);
+              if(target && target !== currentDrawingId) currentDrawingId = target;
+            }
             const active = drawings.find(d => d.id === currentDrawingId) || drawings[0];
             if(active){
               if(!currentDrawingId) currentDrawingId = active.id;
