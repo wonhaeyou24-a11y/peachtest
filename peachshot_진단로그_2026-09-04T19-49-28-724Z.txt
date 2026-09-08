@@ -1,0 +1,5 @@
+PeachShot 진단 로그 — 내보낸 시각: 2026. 9. 5. 오전 4:49:28 — 총 2건
+기기: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Claude/1.46388.1 Chrome/148.0.7778.280 Safari/537.36 MSIX
+============================================================
+[2026-09-04T19:49:08.116Z] (lifecycle) 앱 시작 {"online":true}
+[2026-09-04T19:49:08.125Z] (memory) 앱 시작 직후 {"mem":{"usedMb":"9.8","limitMb":"4096"},"storage":{"usedMb":"0.0","quotaMb":"2659"},"hydratedPhotoCount":0,"hydratedPhotoMbApprox":"0.0","siteCount":0}

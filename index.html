@@ -2652,8 +2652,8 @@
       <div class="field-grid">
         <label>손상명 *<input id="edDamageName" type="text" placeholder="예: 균열, 박리, 침하"></label>
         <label>구간<select id="edSection"><option value="">(선택 안 함)</option></select></label>
-        <label>위치<input id="edPosition" type="text" placeholder="예: 2층 남측 벽체"></label>
-        <label>조사년도<input id="edSurveyYear" type="number" placeholder="예: 2023"></label>
+        <label>위치<input id="edPosition" type="text" placeholder="예: 152m"></label>
+        <label>부위별<input id="edPart" type="text" placeholder="예: 사면부, 배수시설"></label>
         <label>구성요소<input id="edComponent" type="text" placeholder="예: 교대, 슬래브"></label>
         <label>손상규모<input id="edMeasurement" type="text" placeholder="예: 길이 2.5m, 폭 0.3mm"></label>
         <label>원인<input id="edCause" type="text" placeholder="예: 건조수축"></label>
@@ -2933,7 +2933,7 @@
   const edDamageName = document.getElementById('edDamageName');
   const edSection = document.getElementById('edSection');
   const edPosition = document.getElementById('edPosition');
-  const edSurveyYear = document.getElementById('edSurveyYear');
+  const edPart = document.getElementById('edPart');
   const edComponent = document.getElementById('edComponent');
   const edMeasurement = document.getElementById('edMeasurement');
   const edCause = document.getElementById('edCause');
@@ -8003,7 +8003,7 @@
   // 행 구성: (1) 기존손상 × 이번 조사에서 연결된 지점  (2) 조사 안 된 기존손상
   //          (3) 신규손상.
   // ================================================================
-  const DAMAGE_INVENTORY_COLUMNS = ['구분','구간','구성요소','위치','손상명','조사지점','기존규모','현재규모','증감치수','증감률','증감상세','증감여부','원인','보수방안','비고'];
+  const DAMAGE_INVENTORY_COLUMNS = ['구분','구간','부위별','위치','손상명','조사지점','기존규모','현재규모','증감치수','증감률','증감상세','증감여부','원인','보수방안','비고'];
 
   function buildDamageInventory(site){
     if(!site) return [];
@@ -8024,7 +8024,7 @@
       const links = linkedByEd[ed.id] || [];
       if(links.length === 0){
         rows.push({
-          '구분':'기존(미조사)', '구간': ed.section || '', '구성요소': ed.component || '', '위치': ed.drawingPosition || '',
+          '구분':'기존(미조사)', '구간': ed.section || '', '부위별': ed.part || '', '위치': ed.drawingPosition || '',
           '손상명': ed.damageName || '', '조사지점':'',
           '기존규모': ed.measurement || '', '현재규모':'',
           '증감치수':'', '증감률':'', '증감상세':'', '증감여부': ed.status || '미조사',
@@ -8043,7 +8043,7 @@
             ? (detailedCmp.some(r => r.delta > 0) ? '증가' : detailedCmp.some(r => r.delta < 0) ? '감소' : (detailedCmp.every(r => r.delta === 0) ? '동일' : '미확인'))
             : (cmp.unavailable ? '미확인' : (cmp.delta > 0 ? '증가' : cmp.delta < 0 ? '감소' : '동일'));
           rows.push({
-            '구분':'기존', '구간': d.section || ed.section || m.section || '', '구성요소': d.component || ed.component || '', '위치': ed.drawingPosition || '',
+            '구분':'기존', '구간': d.section || ed.section || m.section || '', '부위별': d.part || ed.part || '', '위치': ed.drawingPosition || '',
             '손상명': ed.damageName || d.damageType || '', '조사지점': '지점 ' + m.num,
             '기존규모': ed.measurement || '', '현재규모': d.measurement || '',
             '증감치수': cmp.unavailable ? '' : (cmp.delta > 0 ? '+' : '') + cmp.delta.toFixed(2),
@@ -8065,7 +8065,7 @@
           if(d.damageOrigin !== 'NEW') return;
           countedDamageIds.add(d.id);
           rows.push({
-            '구분':'신규', '구간': d.section || m.section || '', '구성요소': d.component || '', '위치':'',
+            '구분':'신규', '구간': d.section || m.section || '', '부위별': d.part || '', '위치':'',
             '손상명': d.damageType || '', '조사지점': '지점 ' + m.num,
             '기존규모':'', '현재규모': d.measurement || '',
             '증감치수':'', '증감률':'', '증감상세':'', '증감여부':'신규',
@@ -8085,7 +8085,7 @@
           if(countedDamageIds.has(d.id)) return;
           if(!d.damageType && !d.measurement && !d.cause) return;
           rows.push({
-            '구분':'미분류', '구간': d.section || m.section || '', '구성요소': d.component || '', '위치':'',
+            '구분':'미분류', '구간': d.section || m.section || '', '부위별': d.part || '', '위치':'',
             '손상명': d.damageType || '(손상명 미입력)', '조사지점': '지점 ' + m.num,
             '기존규모':'', '현재규모': d.measurement || '',
             '증감치수':'', '증감률':'', '증감상세':'', '증감여부':'미분류(신규/기존 구분 필요)',
@@ -12470,10 +12470,10 @@
       row.style.cursor = 'pointer';
       row.innerHTML =
         '<div style="font-weight:600;">' +
-        [d.section, d.drawingPosition, d.measurement, d.damageName || '(손상명 없음)'].filter(Boolean).map(escapeHtml).join(' - ') +
+        [d.section, d.drawingPosition, d.part, d.measurement, d.damageName || '(손상명 없음)'].filter(Boolean).map(escapeHtml).join(' - ') +
         '<span style="font-weight:400; color:#888; font-size:12px;"> · ' + escapeHtml(d.status || '미확인') + '</span></div>' +
         '<div style="font-size:12px; color:#666;">' +
-        [d.id, d.surveyYear ? d.surveyYear + '년' : '', d.component].filter(Boolean).map(escapeHtml).join(' · ') +
+        [d.id, d.component].filter(Boolean).map(escapeHtml).join(' · ') +
         '</div>';
       row.addEventListener('click', ()=> openExistingDamageForm(d));
       existingDamageBody.appendChild(row);
@@ -12499,7 +12499,7 @@
       edSection.value = cur;
     })();
     edPosition.value = damage ? (damage.drawingPosition || '') : '';
-    edSurveyYear.value = damage ? (damage.surveyYear || '') : '';
+    edPart.value = damage ? (damage.part || '') : '';
     edComponent.value = damage ? (damage.component || '') : '';
     edMeasurement.value = damage ? (damage.measurement || '') : '';
     edCause.value = damage ? (damage.cause || '') : '';
@@ -12549,7 +12549,7 @@
         d.damageName = name;
         d.section = sectionVal;
         d.drawingPosition = edPosition.value.trim();
-        d.surveyYear = edSurveyYear.value ? Number(edSurveyYear.value) : null;
+        d.part = edPart.value.trim();
         d.component = edComponent.value.trim();
         d.measurement = edMeasurement.value.trim();
         d.cause = edCause.value.trim();
@@ -12567,7 +12567,7 @@
         damageName: name,
         section: sectionVal,
         drawingPosition: edPosition.value.trim(),
-        surveyYear: edSurveyYear.value ? Number(edSurveyYear.value) : null,
+        part: edPart.value.trim(),
         component: edComponent.value.trim(),
         measurement: edMeasurement.value.trim(),
         cause: edCause.value.trim(),
@@ -12610,7 +12610,7 @@
     { key:'damageName', label:'손상명' },
     { key:'section', label:'구간' },
     { key:'drawingPosition', label:'위치' },
-    { key:'surveyYear', label:'조사년도' },
+    { key:'part', label:'부위별' },
     { key:'component', label:'구성요소' },
     { key:'measurement', label:'손상규모' },
     { key:'cause', label:'원인' },
@@ -12859,13 +12859,11 @@
           skipCount++;
           return;
         }
-        const yearRaw = row['조사년도'];
-        const year = (yearRaw !== '' && !isNaN(Number(yearRaw))) ? Number(yearRaw) : null;
         toInsert.push({
           damageName: name,
           section: String(row['구간'] || '').trim(),
           drawingPosition: String(row['위치'] || '').trim(),
-          surveyYear: year,
+          part: String(row['부위별'] || '').trim(),
           component: String(row['구성요소'] || '').trim(),
           measurement: String(row['손상규모'] || '').trim(),
           cause: String(row['원인'] || '').trim(),
