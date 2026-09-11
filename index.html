@@ -195,7 +195,9 @@
       height: calc(100dvh - 84px - env(safe-area-inset-top)) !important;
       display: flex !important;
       flex-direction: column !important;
-      padding: 0 10px !important;
+      /* 좌우 여백 없이 화면 폭을 꽉 채운다 — stage-wrap/log는 이미 좌우 border/radius를
+         지워둬서(아래) 안쪽 요소들의 자체 padding만으로 내용이 화면 끝에 안 붙는다. */
+      padding: 0 !important;
       /* 하단 안전 여백을 6px 수준으로 줄여 리스트 가시 공간 확보 */
       padding-bottom: max(6px, env(safe-area-inset-bottom)) !important;
       gap: 4px !important;
@@ -795,6 +797,7 @@
   }
   .log-item-mobile:last-child{ border-bottom:none; }
   .log-item-mobile:active{ background: var(--panel-2); }
+  .log-item-mobile.selected{ background: rgba(46,109,164,0.10); box-shadow: inset 0 0 0 2px #2E6DA4; }
   .log-item-mobile .lim-num{
     font-family:'JetBrains Mono', monospace;
     font-weight:700;
@@ -1209,6 +1212,13 @@
     #captureModal video{ height: 56vh; }
   }
   #captureModal.modal-backdrop{ padding: 8px; }
+
+  /* 지점 상세창(previewModal)도 모바일에서는 좌우 여백 없이 화면을 꽉 채운다 —
+     세로는 기존처럼 상하 여백을 둬서 상태바/스와이프 제스처 영역과 안 겹치게 유지. */
+  @media (max-width: 880px){
+    #previewModal.modal-backdrop{ padding-left: 0; padding-right: 0; }
+    #previewModal .modal{ max-width: none; border-left: none; border-right: none; border-radius: 0; }
+  }
 
   /* ---------- PHASE12: PC 사무실 Workspace 1단계 — Project Explorer 도킹 ----------
      PC 폭(1000px 이상) + 사무실모드일 때만, 기존 "시설물 목록" 모달을 화면을 덮는
@@ -1908,6 +1918,12 @@
     .log-item:hover {
       background: var(--panel-2);
       border-color: var(--amber-dim);
+    }
+
+    .log-item.selected {
+      background: rgba(46,109,164,0.08);
+      border-color: #2E6DA4;
+      box-shadow: inset 0 0 0 1px #2E6DA4;
     }
 
     .log-item .log-thumb {
@@ -2770,7 +2786,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v56';
+  const PS_BUILD = 'v57';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -13816,7 +13832,9 @@
   }
   function surveyorLabelFor(uid){
     if(!uid || uid === myUserId()) return '나';
-    return orgMemberEmailById[uid] || ('조사자 ' + String(uid).slice(0, 6));
+    const email = orgMemberEmailById[uid];
+    if(email) return email.split('@')[0]; // 범례·마커 표시는 이메일 전체 대신 아이디 부분만(공간 절약)
+    return '조사자 ' + String(uid).slice(0, 6);
   }
   // 현재 마커들 중 "나 아닌" 조사자가 있는지 → 있으면 지도/도면에 범례를 띄운다.
   function renderSurveyorLegend(){
@@ -14171,7 +14189,8 @@
     for(const p of photos){ if(p.damages && p.damages.length){ rep = p.damages[0]; break; } }
 
     const item = document.createElement('div');
-    item.className = 'log-item-mobile';
+    item.className = 'log-item-mobile' + (activeMarkerId === m.id ? ' selected' : '');
+    item.dataset.markerId = m.id;
     if(m.createdBy && m.createdBy !== myUserId()){
       item.style.borderLeft = '4px solid ' + surveyorColorFor(m.createdBy);
       item.title = '조사자: ' + surveyorLabelFor(m.createdBy);
@@ -14232,6 +14251,16 @@
     }
     renderMarkers();
     renderMapMarkers();
+    highlightSelectedLogItem(markerId);
+  }
+
+  // 기록목록에서 방금 선택된 지점 행에 선택색을 표시한다. 전체 목록을 다시 그리면
+  // 스크롤 위치가 튀므로, 재렌더 없이 클래스만 옮겨서 표시한다.
+  function highlightSelectedLogItem(markerId){
+    if(!log) return;
+    Array.from(log.children).forEach(el=>{
+      el.classList.toggle('selected', el.dataset && el.dataset.markerId === markerId);
+    });
   }
 
   function switchFacility(facilityId){
@@ -14283,7 +14312,8 @@
 
   function renderLogItemDesktop(m){
     const item = document.createElement('div');
-    item.className = 'log-item';
+    item.className = 'log-item' + (activeMarkerId === m.id ? ' selected' : '');
+    item.dataset.markerId = m.id;
     if(m.createdBy && m.createdBy !== myUserId()){
       item.style.borderLeft = '4px solid ' + surveyorColorFor(m.createdBy);
       item.title = '조사자: ' + surveyorLabelFor(m.createdBy);
@@ -14995,6 +15025,7 @@
     // activeMarkerId를 이미 참조하도록 고쳐뒀으니, 다시 그리기만 하면 된다 —
     // xPct/yPct/lat/lng 등 실제 데이터는 전혀 건드리지 않는다.
     if(currentMode === 'image'){ renderMarkers(); } else { renderMapMarkers(); }
+    highlightSelectedLogItem(markerId);
     if(typeof updatePcExplorerDocking === 'function' && document.body.classList.contains('pc-explorer-docked')){
       renderSiteList(); // Explorer 트리에서도 지금 선택된 지점을 강조(펼침상태는 유지됨)
     }
