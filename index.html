@@ -2756,7 +2756,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v54';
+  const PS_BUILD = 'v55';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -13987,6 +13987,11 @@
     // 유실되지 않는다 — 대신 탭 누를 때마다 "저장 중"이 불필요하게 뜨는 것과 잦은
     // 저장으로 인한 부하(간헐적 저장실패 가능성 포함)를 줄인다.
     if(mobileBottomBar) mobileBottomBar.classList.toggle('map-mode', mode === 'map');
+    // 지도모드 하단 촬영바 높이만큼 기록목록에 패딩을 주는 CSS(body.is-map-mode .log)가
+    // 실제로 걸리려면 body에 이 클래스가 있어야 한다 — 지금까지 아무도 body에 이
+    // 클래스를 넣지 않아서 그 CSS가 죽어있었고, 지도모드에서 목록 맨 아래 지점이
+    // 촬영바에 가려 스크롤해도 끝까지 올라오지 않는 문제의 원인이었다.
+    document.body.classList.toggle('is-map-mode', mode === 'map');
   }
 
   // ================================================================
