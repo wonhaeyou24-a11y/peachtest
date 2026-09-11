@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-shot-v55-map-mode-log-padding'; // 지도모드 body.is-map-mode 클래스 누락 수정 — 기록목록 마지막 지점이 하단 촬영바에 가려 스크롤해도 안 올라오던 문제
+const CACHE_NAME = 'point-shot-v56-log-tap-focus-vs-detail'; // 기록목록 지점 클릭 시 상세창이 바로 열려 실수로 열리던 문제 — 클릭은 위치이동/강조만, 상세창은 "상세" 버튼으로 분리
 // 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
 // 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
 // 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.

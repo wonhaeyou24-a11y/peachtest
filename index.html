@@ -838,10 +838,17 @@
     flex-shrink:0;
   }
   .log-item-mobile .lim-chev{
-    color: var(--muted);
+    color: var(--amber-text);
+    background: var(--amber-dim);
+    border: 1px solid var(--amber);
+    border-radius: 6px;
     flex-shrink:0;
-    font-size:16px;
+    font-size:11px;
+    font-weight:700;
+    padding: 5px 8px;
+    white-space: nowrap;
   }
+  .log-item-mobile .lim-chev:active{ filter:brightness(0.95); }
   .log-toprow{
     display:flex;
     align-items:baseline;
@@ -1954,6 +1961,13 @@
       color: #FF3B30 !important;
       background: rgba(255, 59, 48, 0.06) !important;
     }
+
+    .log-item .log-action-btn.accent {
+      color: var(--amber-text) !important;
+      background: var(--amber-dim) !important;
+      border-color: var(--amber) !important;
+      font-weight: 700 !important;
+    }
   }
 
   @media (prefers-reduced-motion: reduce){
@@ -2756,7 +2770,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v55';
+  const PS_BUILD = 'v56';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -14162,7 +14176,9 @@
       item.style.borderLeft = '4px solid ' + surveyorColorFor(m.createdBy);
       item.title = '조사자: ' + surveyorLabelFor(m.createdBy);
     }
-    item.addEventListener('click', ()=> openPreview(m.id));
+    // 한 번 탭하면 지점 위치로 이동/강조만 하고, 상세창은 우측 "상세" 버튼을
+    // 눌러야 열리도록 분리 — 목록을 훑어보다 실수로 상세창이 열리는 것을 방지.
+    item.addEventListener('click', ()=> focusRecordPoint(m.id));
 
     const numEl = document.createElement('span');
     numEl.className = 'lim-num';
@@ -14186,9 +14202,14 @@
     const t = m.createdAt ? new Date(m.createdAt) : null;
     timeEl.textContent = t ? t.toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit'}) : '';
 
-    const chevEl = document.createElement('span');
+    const chevEl = document.createElement('button');
+    chevEl.type = 'button';
     chevEl.className = 'lim-chev';
-    chevEl.textContent = '›';
+    chevEl.textContent = '상세 ›';
+    chevEl.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      openPreview(m.id);
+    });
 
     item.appendChild(numEl);
     item.appendChild(originEl);
@@ -14267,9 +14288,10 @@
       item.style.borderLeft = '4px solid ' + surveyorColorFor(m.createdBy);
       item.title = '조사자: ' + surveyorLabelFor(m.createdBy);
     }
+    // 한 번 클릭하면 지점 위치로 이동/강조만 하고, 상세창은 아래 "상세" 버튼을
+    // 눌러야 열리도록 분리 — 목록을 훑어보다 실수로 상세창이 열리는 것을 방지.
     item.addEventListener('click', ()=>{
       focusRecordPoint(m.id);
-      openPreview(m.id);
     });
 
     const photos = m.photos || [];
@@ -14322,6 +14344,12 @@
     const btnGroup = document.createElement('div');
     btnGroup.className = 'log-btn-group';
     btnGroup.addEventListener('click', (e)=> e.stopPropagation());
+
+    const detailBtn = document.createElement('button');
+    detailBtn.className = 'log-action-btn accent';
+    detailBtn.textContent = '상세';
+    detailBtn.addEventListener('click', ()=> openPreview(m.id));
+    btnGroup.appendChild(detailBtn);
 
     const photoBtn = document.createElement('button');
     photoBtn.className = 'log-action-btn';
