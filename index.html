@@ -2786,7 +2786,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v57';
+  const PS_BUILD = 'v58';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -4819,6 +4819,21 @@
                     await idbPutPhotoBlob(ref, blob, blob.type);
                     p.blobExtracted = true; // 새 스토어로 막 옮겨 썼으니 이미 안전하게 저장됨
                   }
+                } else if(p.cloudRef && supabaseClient && navigator.onLine){
+                  // 3. 이 기기엔 원본이 없는 사진(팀원이 "지금 클라우드에 백업"으로 올린 것) —
+                  //    Storage에서 받아와 로컬에도 그대로 저장해둔다(다음부터는 1번 경로로 빠짐).
+                  try{
+                    const { data, error } = await supabaseClient.storage.from('ps-photos').download(p.cloudRef);
+                    if(!error && data){
+                      p.src = await blobToDataUrl(data);
+                      p.mimeType = data.type;
+                      p.blobSize = data.size;
+                      await idbPutPhotoBlob(ref, data, data.type);
+                      p.blobExtracted = true;
+                    }
+                  }catch(cloudErr){
+                    console.warn('사진 클라우드 다운로드 실패(다음에 다시 시도)', ref, cloudErr);
+                  }
                 }
               }
             }catch(e){
@@ -5890,6 +5905,17 @@
           }
         }
       }
+
+      // 방금 올린 사진들의 cloudRef를 실제 지점(ps_inspection_points) 데이터에도
+      // 실어 보낸다 — 아래 ps_facilities blob에도 cloudRef가 같이 올라가지만, pull은
+      // 시설물 blob의 markers를 무시하고 ps_inspection_points만 정본으로 쓴다(로컬
+      // 배열 우선 병합 원칙, 3-배선 교훈). 이걸 안 하면 팀원이 "최신자료 가져오기"를
+      // 해도 cloudRef를 영영 못 받는다. queueEntitySyncForFacility는 내용이 실제로
+      // 안 바뀐 지점은 알아서 건너뛰므로 매번 불러도 안전하다.
+      try{
+        for(const s of psites){ queueEntitySyncForFacility(s); }
+        await processSyncQueue();
+      }catch(e){ console.warn('사진 cloudRef 지점 동기화 실패(다음 자동 동기화 때 재시도)', e); }
 
       const { error: projErr } = await supabaseClient.from('ps_projects').upsert({
         id: project.id,
@@ -8815,9 +8841,13 @@
   // 비교에서 제외한다.
   const SYNC_VOLATILE_KEYS = new Set([
     'revision','updatedAt','updated_at','syncedAt','cloudSyncedAt','savedAt','lastSavedAt',
-    'cloudRef','blobExtracted','blobSize','mimeType','pendingCloudDownload','pendingCloudUpload',
+    'blobExtracted','blobSize','mimeType','pendingCloudDownload','pendingCloudUpload',
     'src','original','_localOnly','_dirty','deviceId','device_id','updated_by','createdBy',
     'ownerId','_pushBlocked','_drawingsMigrated'
+    // ★ cloudRef는 일부러 여기 안 넣는다 — "지금 클라우드에 백업"으로 사진을 올린
+    // 뒤 이 값을 ps_inspection_points에 실어 보내야 하는데, 여기 넣으면 다른 내용이
+    // 전부 같을 때 sameSyncedContent가 "차이 없음"으로 보고 업로드를 건너뛰어
+    // cloudRef가 영영 클라우드에 안 올라간다(팀원이 사진을 못 받는 원인 중 하나).
   ]);
   function stableSyncStringify(v){
     if(v === null || typeof v !== 'object') return JSON.stringify(v);
@@ -9814,6 +9844,9 @@
         if(ph.note && !exPh.note) exPh.note = ph.note;
         if(ph.damages && (!exPh.damages || exPh.damages.length < ph.damages.length)) exPh.damages = ph.damages;
         if(!exPh.photoRef && ph.photoRef) exPh.photoRef = ph.photoRef;
+        // 팀원이 나중에 "지금 백업"으로 이 사진을 클라우드에 올렸으면 cloudRef가
+        // 뒤늦게 생길 수 있다 — 이미 로컬에 있던(사진 없이 메타만 있던) 항목에도 반영.
+        if(!exPh.cloudRef && ph.cloudRef) exPh.cloudRef = ph.cloudRef;
       }
     });
     return local;
@@ -10222,6 +10255,30 @@
         if(typeof updateCounts === 'function'){ try{ updateCounts(); }catch(e){} }
         if(typeof renderExistingDamages === 'function'){ try{ renderExistingDamages(); }catch(e){} }
       }
+
+      // 4. 팀원이 "지금 클라우드에 백업"으로 올려둔 사진 원본을 받아온다.
+      //    위 2단계(지점 pull)는 사진 메타데이터(cloudRef 포함)만 병합했을 뿐 실제
+      //    이미지는 아직 안 받아온 상태 — cloudRef는 있는데 이 기기에 원본이 없는
+      //    사진만 골라 hydratePhotoBlobs에 맡긴다(로컬 스토어 우선 조회 후, 없으면
+      //    cloudRef로 Storage에서 다운로드). mergedCount와 무관하게 항상 확인 —
+      //    이번 pull에서 새로 합쳐진 게 없어도, 지난 pull 이후 팀원이 뒤늦게 백업했을
+      //    수 있다.
+      try{
+        if(navigator.onLine && supabaseClient){
+          const projSites = sites.filter(s => s.projectId === targetProjId);
+          const needHydrate = [];
+          projSites.forEach(s => (s.markers || []).forEach(m => {
+            if((m.photos || []).some(p => !p.src && p.cloudRef)) needHydrate.push(m);
+          }));
+          if(needHydrate.length){
+            await hydratePhotoBlobs(needHydrate);
+            renderMarkers();
+            if(typeof renderMapMarkers === 'function'){ try{ renderMapMarkers(); }catch(e){} }
+            if(typeof renderLog === 'function'){ try{ renderLog(); }catch(e){} }
+            if(typeof renderPreviewGridIfOpen === 'function' && activeMarkerId){ try{ renderPreviewGridIfOpen(activeMarkerId); }catch(e){} }
+          }
+        }
+      }catch(e){}
 
       await setSyncCursor(targetProjId, new Date().toISOString());
       _teamUpdatesAvailable = false; // 방금 가져왔으니 "새 자료 있음" 표시를 내린다
