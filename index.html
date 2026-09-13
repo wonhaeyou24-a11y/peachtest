@@ -16829,242 +16829,94 @@
       const buf = await dataUrlToBlob(dataUrl).arrayBuffer();
       return new Uint8Array(buf);
     }
-    const labelCell = (t)=> new TableCell({ width:{size:12,type:WidthType.PERCENTAGE}, shading:{fill:'F2F2F2'}, margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ children:[ new TextRun({text:t, bold:true, size:15}) ] }) ] });
-    const textCell = (paras, size)=> new TableCell({ width:{size:size||88,type:WidthType.PERCENTAGE}, margins:{top:40,bottom:40,left:60,right:60}, children: Array.isArray(paras) ? paras : [ new Paragraph({ children:[ new TextRun({text:String(paras||''), size:15}) ] }) ] });
-
     const children = [];
     children.push(new Paragraph({ text: siteName + ' 외관조사 보고서', heading: HeadingLevel.TITLE }));
     children.push(new Paragraph({ children:[ new TextRun({ text:(projectName ? projectName + ' · ' : '') + '작성일 ' + today, size:18, color:'555555' }) ], spacing:{ after:300 } }));
 
-    // ---- 구간별로 나눠서 가/나/다를 반복할지 판단 ----
-    // 구간은 지점(마커) 단위가 아니라 손상 하나하나마다 직접 고르는 값이다(조사
-    // 동선이 항상 순서대로 진행되지 않아, 한 지점에 여러 구간의 손상이 섞일 수
-    // 있기 때문). 그래서 지점 하나가 서로 다른 구간에 동시에 걸쳐 있을 수 있고,
-    // 그런 지점은 해당되는 구간 각각의 "나/다" 섹션에 전부 나온다(중복 게재 — 그
-    // 지점에서 그 구간에 해당하는 손상이 실제로 있으므로 의도된 동작).
-    // 구간을 전혀 안 쓰는 시설물은(기존 방식 그대로) 시설물 전체를 한 번만 만든다.
-    const invAll = buildDamageInventory(site);
-    function markerSectionSet(m){
-      const set = new Set();
-      (m.photos || []).forEach(p => (p.damages || []).forEach(d=>{
-        const s = (d.section || '').trim();
-        if(s) set.add(s);
-      }));
-      return set;
+    // ---- 조사위치도 ----
+    children.push(new Paragraph({ text:'조사위치도', heading: HeadingLevel.HEADING_1, spacing:{ before:200, after:120 } }));
+    let anyLocationImg = false;
+    const sortedDrawings = (siteDrawings || []).slice().sort((a,b)=>(a.order||0)-(b.order||0));
+    for(const d of sortedDrawings){
+      if(!d.imageSrc) continue;
+      const marked = await buildMarkedImageFor(d.imageSrc, d.id, siteMarkers);
+      if(!marked) continue;
+      anyLocationImg = true;
+      children.push(new Paragraph({ children:[ new TextRun({ text:'· ' + (d.name || '도면') + (d.type ? ' (' + d.type + ')' : ''), size:15, bold:true }) ], spacing:{ before:120, after:80 } }));
+      children.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: await toBytes(marked), transformation: await imgDims(marked, 560) }) ], spacing:{ after:120 } }));
     }
-    const usedSections = Array.from(new Set(invAll.map(r => (r['구간'] || '').trim()).filter(Boolean)));
-    const grouped = usedSections.length > 0;
-    const sectionGroups = grouped
-      ? usedSections.map(name => ({ name, markers: siteMarkers.filter(m => markerSectionSet(m).has(name)) }))
-        .concat(
-          siteMarkers.some(m => markerSectionSet(m).size === 0)
-            ? [{ name:'미지정', markers: siteMarkers.filter(m => markerSectionSet(m).size === 0) }]
-            : []
-        )
-      : [{ name:'', markers: siteMarkers }];
-
-    for(let gi=0; gi<sectionGroups.length; gi++){
-      const grp = sectionGroups[gi];
-      const gMarkers = grp.markers;
-      const inv = grouped
-        ? invAll.filter(r => ((r['구간'] || '').trim() || '미지정') === grp.name)
-        : invAll;
-
-      if(grouped){
-        if(gi > 0) children.push(new Paragraph({ children:[ new PageBreak() ] }));
-        // "1구간"처럼 이름 자체에 이미 "구간"이 들어있으면 중복으로 안 붙인다("1구간 구간" 방지).
-        const grpLabel = /구간$/.test(grp.name) ? grp.name : grp.name + ' 구간';
-        children.push(new Paragraph({ text: grpLabel, heading: HeadingLevel.HEADING_1, spacing:{ before:200, after:150 }, thematicBreak:true }));
-      }
-
-    // ---- 가. 단일구간 외관조사 결과 ----
-      children.push(new Paragraph({ text:'가. 단일구간 외관조사 결과', heading: HeadingLevel.HEADING_1, spacing:{ before:200, after:120 } }));
-      children.push(new Paragraph({ children:[ new TextRun({ text:'<표> 단일구간 외관조사 결과', bold:true, size:16 }) ], spacing:{ after:100 } }));
-
-      // 절토사면 표는 「세부지침」 14장 양식(상부자연비탈면/비탈면부/비탈면하부 및
-      // 부대시설물[보호시설·보강·배수처리시설]/기타시설/공중이용하는 부위) 고정 행
-      // 구조를 그대로 쓴다 — 데이터가 없어도 행 자체는 항상 나오고 칸만 "-"로 빈다.
-      // (조사자가 부위/구성요소에 입력한 텍스트를 키워드로 대략 분류한다 — 완벽하지
-      // 않을 수 있으니 필요하면 표를 직접 옮겨 적어도 된다는 안내를 하단에 남긴다.)
-      const SLOPE_APPEARANCE_CATEGORIES = [
-        { group:'상부자연비탈면', sub:null, keywords:['자연비탈면'] },
-        { group:'비탈면부', sub:null, keywords:['비탈면','사면','풍화','암반'] },
-        { group:'비탈면하부 및 부대시설물', sub:'보호시설', keywords:['보호공','식생','록볼트','격자블럭','격자블록'] },
-        { group:'비탈면하부 및 부대시설물', sub:'보강', keywords:['보강','앵커','네일','pap','패널'] },
-        { group:'비탈면하부 및 부대시설물', sub:'배수처리시설', keywords:['배수','측구','도수로'] },
-        { group:'기타시설', sub:null, keywords:['계단','점검문','낙석방지','울타리','시험'] },
-        { group:'공중이용하는 부위', sub:null, keywords:['포장','보도','도로'] }
-      ];
-      function classifySlopeCategory(r){
-        const text = ((r['구성요소']||'') + ' ' + (r['손상명']||'')).toLowerCase();
-        for(let i=0;i<SLOPE_APPEARANCE_CATEGORIES.length;i++){
-          if(SLOPE_APPEARANCE_CATEGORIES[i].keywords.some(k => text.includes(k.toLowerCase()))) return i;
-        }
-        return 1; // 매칭 안 되면 가장 일반적인 "비탈면부"로 기본 분류
-      }
-      function resultTextFor(r){
-        const scale = r['현재규모'] || r['기존규모'] || '';
-        const loc = r['위치'] ? ' (' + r['위치'] + ')' : (r['조사지점'] ? ' [' + r['조사지점'] + ']' : '');
-        let tag = '';
-        if(r['구분'] === '신규') tag = ' — 신규';
-        else if(r['구분'] === '미분류') tag = ' — ⚠구분필요(신규/기존)';
-        else if(r['구분'] === '기존(미조사)') tag = ' — 미조사(' + (r['증감여부'] || '') + ')';
-        else if(r['증감여부'] && !['동일','미확인'].includes(r['증감여부'])) tag = ' — ' + r['증감여부'] + (r['증감치수'] ? ' ' + r['증감치수'] : '');
-        return '· ' + (r['손상명'] || '(손상명 없음)') + loc + (scale ? ', ' + scale : '') + tag;
-      }
-      function resultParasFor(items){
-        return items.length
-          ? items.map(r => new Paragraph({ children:[ new TextRun({ text: resultTextFor(r), size:15 }) ] }))
-          : [ new Paragraph({ children:[ new TextRun({ text:'-', size:15 }) ] }) ];
-      }
-      function causeParasFor(items){
-        const causes = Array.from(new Set(items.map(r=>r['원인']).filter(Boolean)));
-        return causes.length
-          ? causes.map(c => new Paragraph({ children:[ new TextRun({ text:'· ' + c, size:15 }) ] }))
-          : [ new Paragraph({ children:[ new TextRun({ text:'-', size:15 }) ] }) ];
-      }
-
-      const apRows = [];
-      let apNote = '';
-      if(site.facilityType === '절토사면'){
-        // 4개 그리드 열의 폭 — 반드시 합이 100이어야 한다(전에는 50+62.5+37.5=150로
-        // 잘못 계산해서 한글/워드가 표를 정상 폭으로 못 그리고 글자가 세로로 한 자씩
-        // 찌그러져 나오는 문제가 있었다). 그룹칸+소분류칸(각 8%, 단일행은 16%로 병합)
-        // + 외관조사결과(60%) + 원인추정(24%) = 100%.
-        const GROUP_COL = 8, SUB_COL = 8, RESULT_COL = 60, CAUSE_COL = 24;
-        apRows.push(new TableRow({ children: [
-          new TableCell({ columnSpan:2, width:{size:GROUP_COL+SUB_COL,type:WidthType.PERCENTAGE}, shading:{fill:'D9E2F3'}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:'구분', bold:true, size:16}) ] }) ] }),
-          new TableCell({ width:{size:RESULT_COL,type:WidthType.PERCENTAGE}, shading:{fill:'D9E2F3'}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:'외관조사 결과', bold:true, size:16}) ] }) ] }),
-          new TableCell({ width:{size:CAUSE_COL,type:WidthType.PERCENTAGE}, shading:{fill:'D9E2F3'}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:'원인추정', bold:true, size:16}) ] }) ] })
-        ]}));
-
-        const buckets = SLOPE_APPEARANCE_CATEGORIES.map(()=>[]);
-        inv.forEach(r=> buckets[classifySlopeCategory(r)].push(r));
-
-        SLOPE_APPEARANCE_CATEGORIES.forEach((cat, i)=>{
-          const items = buckets[i];
-          const cells = [];
-          if(cat.sub === null){
-            cells.push(new TableCell({ columnSpan:2, width:{size:GROUP_COL+SUB_COL,type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:cat.group, bold:true, size:15}) ] }) ] }));
-          } else {
-            if(cat.sub === '보호시설'){
-              cells.push(new TableCell({ rowSpan:3, width:{size:GROUP_COL,type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:cat.group, bold:true, size:14}) ] }) ] }));
-            }
-            cells.push(new TableCell({ width:{size:SUB_COL,type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:cat.sub, size:15}) ] }) ] }));
-          }
-          cells.push(new TableCell({ width:{size:RESULT_COL,type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children: resultParasFor(items) }));
-          cells.push(new TableCell({ width:{size:CAUSE_COL,type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children: causeParasFor(items) }));
-          apRows.push(new TableRow({ children: cells }));
-        });
-        apNote = '※ 「시설물의 안전 및 유지관리 실시 세부지침」 14장 절토사면 양식의 고정된 구분 행입니다. 조사 데이터가 없는 항목은 "-"로 비워 두었으니 필요한 내용을 직접 채워 넣으시면 됩니다. 구분 배정은 부위(구성요소) 입력값을 기준으로 자동 분류한 것이라 대략적일 수 있습니다.';
-      } else if(inv.length === 0){
-        apRows.push(new TableRow({ children: [
-          new TableCell({ width:{size:16,type:WidthType.PERCENTAGE}, shading:{fill:'D9E2F3'}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:'구분', bold:true, size:16}) ] }) ] }),
-          new TableCell({ width:{size:60,type:WidthType.PERCENTAGE}, shading:{fill:'D9E2F3'}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:'외관조사 결과', bold:true, size:16}) ] }) ] }),
-          new TableCell({ width:{size:24,type:WidthType.PERCENTAGE}, shading:{fill:'D9E2F3'}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:'원인추정', bold:true, size:16}) ] }) ] })
-        ]}));
-        apRows.push(new TableRow({ children:[ labelCell('전체'), textCell('조사된 손상 없음 — 전반적으로 양호한 상태로 확인됨.'), textCell('-') ] }));
-        apNote = '※ 손상데이터에서 자동 생성된 표입니다.';
-      } else {
-        apRows.push(new TableRow({ children: [
-          new TableCell({ width:{size:16,type:WidthType.PERCENTAGE}, shading:{fill:'D9E2F3'}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:'구분', bold:true, size:16}) ] }) ] }),
-          new TableCell({ width:{size:60,type:WidthType.PERCENTAGE}, shading:{fill:'D9E2F3'}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:'외관조사 결과', bold:true, size:16}) ] }) ] }),
-          new TableCell({ width:{size:24,type:WidthType.PERCENTAGE}, shading:{fill:'D9E2F3'}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:'원인추정', bold:true, size:16}) ] }) ] })
-        ]}));
-        const byPart = {};
-        const partOrder = [];
-        inv.forEach(r=>{
-          const part = r['구성요소'] || '기타';
-          if(!byPart[part]){ byPart[part] = []; partOrder.push(part); }
-          byPart[part].push(r);
-        });
-        partOrder.forEach(part=>{
-          const items = byPart[part];
-          apRows.push(new TableRow({ children:[ labelCell(part), textCell(resultParasFor(items), 60), textCell(causeParasFor(items), 24) ] }));
-        });
-        apNote = '※ 손상데이터에서 자동 생성된 표입니다. 구분은 손상의 구성요소(부위) 기준으로 묶었습니다.';
-      }
-      children.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows: apRows }));
-      children.push(new Paragraph({ children:[ new TextRun({ text: apNote, italics:true, size:13, color:'808080' }) ], spacing:{ before:80, after:250 } }));
-
-      // ---- 나. 조사위치도 ----
-      children.push(new Paragraph({ text:'나. 조사위치도', heading: HeadingLevel.HEADING_1, spacing:{ before:200, after:120 } }));
-      let anyLocationImg = false;
-      const sortedDrawings = (siteDrawings || []).slice().sort((a,b)=>(a.order||0)-(b.order||0));
-      for(const d of sortedDrawings){
-        if(!d.imageSrc) continue;
-        const marked = await buildMarkedImageFor(d.imageSrc, d.id, gMarkers);
-        if(!marked) continue;
+    if(siteMarkers.some(m => m.lat != null && m.lng != null)){
+      let mapImg = null;
+      try{ mapImg = await buildRealMapImage(siteMarkers); }catch(e){ mapImg = null; }
+      if(!mapImg){ try{ mapImg = buildMapOverviewImage(siteMarkers); }catch(e){} }
+      if(mapImg){
         anyLocationImg = true;
-        children.push(new Paragraph({ children:[ new TextRun({ text:'· ' + (d.name || '도면') + (d.type ? ' (' + d.type + ')' : ''), size:15, bold:true }) ], spacing:{ before:120, after:80 } }));
-        children.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: await toBytes(marked), transformation: await imgDims(marked, 560) }) ], spacing:{ after:120 } }));
+        children.push(new Paragraph({ children:[ new TextRun({ text:'· 지도 위치도', size:15, bold:true }) ], spacing:{ before:120, after:80 } }));
+        children.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: await toBytes(mapImg), transformation: await imgDims(mapImg, 560) }) ], spacing:{ after:120 } }));
       }
-      if(gMarkers.some(m => m.lat != null && m.lng != null)){
-        let mapImg = null;
-        try{ mapImg = await buildRealMapImage(gMarkers); }catch(e){ mapImg = null; }
-        if(!mapImg){ try{ mapImg = buildMapOverviewImage(gMarkers); }catch(e){} }
-        if(mapImg){
-          anyLocationImg = true;
-          children.push(new Paragraph({ children:[ new TextRun({ text:'· 지도 위치도', size:15, bold:true }) ], spacing:{ before:120, after:80 } }));
-          children.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: await toBytes(mapImg), transformation: await imgDims(mapImg, 560) }) ], spacing:{ after:120 } }));
+    }
+    if(!anyLocationImg){
+      children.push(new Paragraph({ children:[ new TextRun({ text:'등록된 위치도(도면/지도)가 없습니다.', size:15 }) ], spacing:{ after:150 } }));
+    }
+
+    // ---- 지점별 조사결과 ----
+    // 지점(사진) 하나당 칸 하나를 만들고, 2칸씩 짝지어 한 쌍을 이룬다. 표는
+    // 쌍마다 2행(위: 사진 2장, 아래: 손상내용 2칸)으로 구성한다 — 사진 칸과
+    // 내용 칸을 분리해서, 사진은 사진끼리 나란히 비교해 보고 내용은 내용끼리
+    // 바로 아래에서 읽을 수 있게 한다. 한 지점에 손상이 여러 개면 그 지점의
+    // 내용 칸 안에 전부 나열한다(지점을 여러 칸으로 쪼개지 않는다).
+    children.push(new Paragraph({ text:'지점별 조사결과', heading: HeadingLevel.HEADING_1, spacing:{ before:300, after:120 } }));
+
+    const points = [];
+    const markersSorted = siteMarkers.slice().sort((a,b)=>(a.num||0)-(b.num||0));
+    for(const m of markersSorted){
+      const photos = m.photos || [];
+      for(let pi=0; pi<photos.length; pi++){
+        const p = photos[pi];
+        const dmgs = p.damages || [];
+        const damageLines = dmgs.length
+          ? dmgs.map(d=>{
+              const nm = d.damageType || d.damageName || '(종류 미지정)';
+              const comp = d.component ? ' (' + d.component + ')' : '';
+              const meas = d.measurement ? ', ' + d.measurement : '';
+              const cause = d.cause ? ' — 원인: ' + d.cause : '';
+              const measure = d.repairMethod ? ' / 대책: ' + d.repairMethod : '';
+              return nm + comp + meas + cause + measure;
+            })
+          : [ (p.note && p.note.trim()) ? p.note.trim() : '특이 손상 없음(현황 사진)' ];
+        points.push({ num: m.num || (points.length + 1), photoSrc: p.src, pending: p.pendingCloudDownload, damageLines });
+      }
+    }
+
+    if(points.length === 0){
+      children.push(new Paragraph({ children:[ new TextRun({ text:'촬영된 지점 사진이 없습니다.', size:15 }) ] }));
+    } else {
+      const COL = 50;
+      async function photoCellFor(pt){
+        const kids = [];
+        if(pt.photoSrc){
+          kids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text: circledNum(pt.num), bold:true, size:16 }) ], spacing:{ after:40 } }));
+          kids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: await toBytes(pt.photoSrc), transformation: await imgDims(pt.photoSrc, 250) }) ] }));
+        } else {
+          const reason = pt.pending ? '(사진 없음 — 클라우드에서 아직 못 받음, 온라인 상태에서 다시 시도해주세요)' : '(사진 없음)';
+          kids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text: circledNum(pt.num) + ' ', bold:true, size:16 }), new TextRun({ text: reason, italics:true, size:14, color:'999999' }) ] }));
         }
+        return new TableCell({ width:{size:COL,type:WidthType.PERCENTAGE}, shading:{fill:'FAFAFA'}, margins:{top:100,bottom:80,left:100,right:100}, children: kids });
       }
-      if(!anyLocationImg){
-        children.push(new Paragraph({ children:[ new TextRun({ text:'등록된 위치도(도면/지도)가 없습니다.', size:15 }) ], spacing:{ after:150 } }));
+      function contentCellFor(pt){
+        const paras = pt.damageLines.map(line => new Paragraph({ children:[ new TextRun({ text:'· ' + line, size:15 }) ], spacing:{ after:40 } }));
+        return new TableCell({ width:{size:COL,type:WidthType.PERCENTAGE}, margins:{top:80,bottom:100,left:100,right:100}, children: paras });
       }
+      const blankCell = ()=> new TableCell({ width:{size:COL,type:WidthType.PERCENTAGE}, children:[ new Paragraph({ text:'' }) ] });
 
-      // ---- 다. 지점별 세부 조사결과 ----
-      children.push(new Paragraph({ text:'다. 지점별 세부 조사결과', heading: HeadingLevel.HEADING_1, spacing:{ before:300, after:120 } }));
-
-      const photoCells = [];
-      const markersSorted = gMarkers.slice().sort((a,b)=>(a.num||0)-(b.num||0));
-      for(const m of markersSorted){
-        const photos = m.photos || [];
-        for(let pi=0; pi<photos.length; pi++){
-          const p = photos[pi];
-          const dmgs = p.damages || [];
-          const hyeonhwang = dmgs.length
-            ? dmgs.map(d=>{
-                const nm = d.damageType || d.damageName || '(종류 미지정)';
-                const comp = d.component ? ' (' + d.component + ')' : '';
-                const meas = d.measurement ? ', ' + d.measurement : '';
-                return nm + comp + meas;
-              }).join(' / ')
-            : (p.note && p.note.trim() ? p.note.trim() : '현황 사진');
-          const causes = Array.from(new Set(dmgs.map(d=>d.cause).filter(Boolean))).join(', ');
-          const measures = Array.from(new Set(dmgs.map(d=>d.repairMethod).filter(Boolean))).join(', ');
-          const numText = circledNum(m.num || (photoCells.length + 1));
-
-          const cellKids = [];
-          if(p.src){
-            cellKids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: await toBytes(p.src), transformation: await imgDims(p.src, 250) }) ], spacing:{ after:60 } }));
-          } else {
-            // 하이드레이션을 시도했는데도 사진을 못 채웠다면(클라우드 다운로드 실패 등)
-            // 조용히 빈칸으로 나가지 않고 이유를 남긴다 — 나중에 재시도할 수 있게.
-            const reason = p.pendingCloudDownload ? '(사진 없음 — 클라우드에서 아직 못 받음, 온라인 상태에서 다시 시도해주세요)' : '(사진 없음)';
-            cellKids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text: reason, italics:true, size:14, color:'999999' }) ], spacing:{ after:60 } }));
-          }
-          cellKids.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows:[
-            new TableRow({ children:[ labelCell('현황'), textCell([ new Paragraph({ children:[ new TextRun({ text: numText + ' ', bold:true, size:16 }), new TextRun({ text: hyeonhwang, size:15 }) ] }) ]) ] }),
-            new TableRow({ children:[ labelCell('원인'), textCell(causes || '-') ] }),
-            new TableRow({ children:[ labelCell('대책'), textCell(measures || '주의관찰') ] })
-          ]}));
-          photoCells.push(new TableCell({ width:{size:50,type:WidthType.PERCENTAGE}, margins:{top:100,bottom:140,left:100,right:100}, children: cellKids }));
-        }
+      const gridRows = [];
+      for(let i=0; i<points.length; i+=2){
+        const a = points[i], b = points[i+1];
+        gridRows.push(new TableRow({ children: b ? [ await photoCellFor(a), await photoCellFor(b) ] : [ await photoCellFor(a), blankCell() ] }));
+        gridRows.push(new TableRow({ children: b ? [ contentCellFor(a), contentCellFor(b) ] : [ contentCellFor(a), blankCell() ] }));
       }
-
-      if(photoCells.length === 0){
-        children.push(new Paragraph({ children:[ new TextRun({ text:'촬영된 지점 사진이 없습니다.', size:15 }) ] }));
-      } else {
-        const gridRows = [];
-        for(let i=0; i<photoCells.length; i+=2){
-          const rowCells = [ photoCells[i] ];
-          rowCells.push(photoCells[i+1] || new TableCell({ width:{size:50,type:WidthType.PERCENTAGE}, children:[ new Paragraph({ text:'' }) ] }));
-          gridRows.push(new TableRow({ children: rowCells }));
-        }
-        children.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows: gridRows }));
-      }
-    } // end of per-구간 loop (for(let gi=0; gi<sectionGroups.length; gi++))
+      children.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows: gridRows }));
+    }
 
     return children;
   }
