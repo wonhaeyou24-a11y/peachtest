@@ -5965,6 +5965,62 @@
     }
   }
 
+  // 사진 원본만 가볍게 클라우드에 올린다 — pushProjectToCloud와 달리 프로젝트/
+  // 시설물 행 전체를 다시 올리지 않고, 아직 cloudRef가 없는 사진만 Storage에
+  // 업로드한 뒤 그 지점만 재큐잉한다. 일반 저장(queueCloudSync)은 지점
+  // 메타데이터만 자동으로 클라우드에 올리고 사진 원본은 안 올리므로("지금
+  // 클라우드에 백업"을 누르거나 오프라인→온라인 전환이 있을 때만 pushProjectToCloud가
+  // 올림), 인터넷이 계속 연결된 채로 조사만 계속하면 사진이 영영 클라우드에
+  // 안 올라가 팀원이 못 받아가는 문제가 있었다 — 이 함수를 주기적으로/조사완료
+  // 시점에 불러서 그 틈을 메운다.
+  async function uploadPendingPhotosForProject(project){
+    if(!supabaseClient || !supabaseSession) return { ok:false, reason:'로그인이 필요합니다.' };
+    if(!navigator.onLine) return { ok:false, reason:'오프라인 상태입니다.' };
+    if(!project) return { ok:false, reason:'프로젝트 없음' };
+    const psites = sites.filter(s => s.projectId === project.id);
+    const userId = supabaseSession.user.id;
+    let uploadedCount = 0;
+    try{
+      for(const s of psites){
+        await hydratePhotoBlobs(s.markers || []);
+        let siteChanged = false;
+        for(const m of (s.markers || [])){
+          for(const p of (m.photos || [])){
+            if(p.src && !p.cloudRef){
+              const photoId = p.id || genId();
+              const path = userId + '/' + photoId;
+              const blob = dataUrlToBlob(p.src);
+              const { error: upErr } = await supabaseClient.storage
+                .from('ps-photos')
+                .upload(path, blob, { upsert: true, contentType: blob.type || 'image/jpeg' });
+              if(!upErr){
+                p.id = photoId; p.cloudRef = path;
+                uploadedCount++; siteChanged = true;
+                try{
+                  await supabaseClient.from('ps_photo_index').upsert({
+                    photo_id: photoId, owner_user_id: userId,
+                    project_id: project.id, organization_id: project.organizationId || null
+                  });
+                }catch(idxErr){ console.warn('사진 인덱스 기록 실패(무시하고 계속)', idxErr); }
+              } else {
+                console.warn('사진 자동 업로드 실패(다음에 재시도)', upErr);
+              }
+            }
+          }
+        }
+        if(siteChanged) queueEntitySyncForFacility(s); // 방금 생긴 cloudRef를 지점 데이터에도 실어 보낸다
+      }
+      if(uploadedCount > 0){
+        try{ await processSyncQueue(); }catch(e){}
+        try{ await saveState(); }catch(e){}
+      }
+      return { ok:true, uploadedCount };
+    }catch(e){
+      console.warn('사진 자동 업로드 중 오류(로컬 데이터는 안전합니다)', e);
+      return { ok:false, reason: (e && e.message) || '알 수 없는 오류' };
+    }
+  }
+
   async function listCloudProjects(){
     if(!supabaseClient || !supabaseSession) return [];
     try{
@@ -12353,6 +12409,14 @@
     const ok2 = await saveState();
     updateCompleteMenuLabel();
     refreshStageHeader();
+    // 시설물 조사완료 시점 — 팀원이 곧 이 시설물 자료를 가져갈 가능성이 높은
+    // 시점이므로, 아직 클라우드에 안 올라간 사진 원본을 여기서 한 번 올려둔다
+    // (실패해도 완료 처리 자체는 이미 끝난 뒤라 조용히 넘어간다 — 다음 2분
+    // 주기 자동 업로드가 다시 시도한다).
+    if(navigator.onLine && supabaseClient && supabaseSession){
+      const proj = projects.find(p => p.id === site.projectId);
+      if(proj){ try{ await uploadPendingPhotosForProject(proj); }catch(e){} }
+    }
     if(ok2){
       alert('시설물 조사가 완료되었습니다.\n현재 조사자료가 기기에 안전하게 저장되었습니다.');
     } else {
@@ -17194,6 +17258,21 @@
       }
     }catch(e){}
   }, 20 * 1000);
+
+  // 2분마다 아직 클라우드에 안 올라간 사진 원본이 있으면 조용히 올린다.
+  // 지점 메타데이터는 위 20초 타이머(processSyncQueue)로 계속 자동 동기화되지만,
+  // 사진 원본은 pushProjectToCloud류 함수가 아니면 안 올라가서(오프라인→온라인
+  // 전환 없이 계속 온라인 상태로만 조사하면 그런 함수가 한 번도 안 불림),
+  // 사진이 클라우드에 영영 안 올라가 팀원이 못 받아가는 문제가 있었다.
+  let _photoUploadTimerRunning = false;
+  setInterval(()=>{
+    if(_photoUploadTimerRunning) return;
+    if(!(navigator.onLine && supabaseClient && supabaseSession && currentProjectId)) return;
+    const proj = projects.find(p => p.id === currentProjectId);
+    if(!proj) return;
+    _photoUploadTimerRunning = true;
+    uploadPendingPhotosForProject(proj).catch(()=>{}).finally(()=>{ _photoUploadTimerRunning = false; });
+  }, 2 * 60 * 1000);
 
   // 45초마다 "팀원이 올린 새 자료가 있는지"만 가볍게 확인해서, 동기화 대시보드를
   // 열지 않아도 상단 상태줄에 "🟢 팀원 새 자료 있음 — 가져오기"가 뜨게 한다.
