@@ -15295,10 +15295,11 @@
           rec.appendChild(sectionWrap);
 
           // 기존손상을 선택하면, 이 시설물의 ExistingDamage 목록에서 어떤 기록과
-          // 연결되는지 고를 수 있다. 이건 추천/자동매칭이 아니라 조사자가 직접
-          // 고르는 것이며, 골랐다고 해서 필드 값을 자동으로 채우지 않는다 —
-          // ExistingDamage 원본은 그대로 두고, 지금 조사한 값은 이 손상기록에
-          // 그대로 남아 나중에 "기존 vs 현재" 비교에 쓰인다.
+          // 연결되는지 고를 수 있다. 연결하는 순간 그 기존손상의 내용(부위·손상명·
+          // 규모·원인·보수방안)을 이번 조사 손상기록에 그대로 복사해 채워 넣고,
+          // 조사자는 금회 조사로 실제 달라진 부분만 고쳐 쓰면 된다. ExistingDamage
+          // 원본(site.existingDamages)은 여기서 전혀 수정하지 않는다 — 복사만 해올 뿐,
+          // 나중에 "기존 vs 현재" 비교는 이번 조사 손상기록 쪽 값을 기준으로 한다.
           if(d.damageOrigin === 'EXISTING'){
             const linkWrap = document.createElement('div');
             linkWrap.className = 'damage-field';
@@ -15327,7 +15328,18 @@
             linkSelect.addEventListener('change', ()=>{
               d.existingDamageId = linkSelect.value || null;
               const linked = linkSelect.value ? visibleExisting.find(ed => ed.id === linkSelect.value) : null;
+              if(linked){
+                // 기존손상 내용을 이번 조사 손상기록에 그대로 복사한다 — 이후
+                // 조사자는 금회 조사로 실제 달라진 값만 고쳐 쓰면 된다(전체 재입력 불필요).
+                d.component = linked.component || d.component;
+                if(linked.section) d.section = linked.section;
+                if(linked.damageName) d.damageType = linked.damageName;
+                if(linked.measurement) d.measurement = linked.measurement;
+                if(linked.cause) d.cause = linked.cause;
+                if(linked.repairMethod) d.repairMethod = linked.repairMethod;
+              }
               logActivity('기존손상 연결', '지점 ' + m.num + ' 손상기록 ↔ ' + (linked ? (linked.id + ' ' + linked.damageName) : '연결 해제'));
+              renderDamageRecords();
               saveState();
             });
             linkWrap.appendChild(linkLab);
@@ -15592,17 +15604,25 @@
           }
           rec.appendChild(measWrap);
 
+          // 구분·구간·부위·손상명·손상규모만 기본 노출하고, 원인·보수방안·보강방안·
+          // 점검의견은 앱 모드(현장/사무실)와 무관하게 항상 접혀 있다가 "필요시 작성"
+          // 버튼(펼치기)을 눌러야 보인다. 값이 있어도 필드 자체는 지우지 않으므로
+          // 접혀 있어도 기존에 입력된 값은 그대로 보존된다.
+          const extraDetailsEl = document.createElement('details');
+          extraDetailsEl.className = 'damage-field';
+          extraDetailsEl.open = !!(d.cause || d.repairMethod || d.reinforcementMethod || d.investigatorComment);
+          const extraSummaryEl = document.createElement('summary');
+          extraSummaryEl.textContent = '필요시 작성 (원인·보수방안·보강방안·점검의견)';
+          extraSummaryEl.style.cssText = 'cursor:pointer; font-size:13px; color:var(--muted); padding:4px 0;';
+          extraDetailsEl.appendChild(extraSummaryEl);
+
           const fieldsWrap = document.createElement('div');
           fieldsWrap.className = 'damage-fields';
-          // 현장모드에서는 보수공법/보강공법을 숨긴다(명령문 섹션 5-1) — 데이터 필드(d.repairMethod 등)는
-          // 그대로 남아있고, 사무실모드로 전환하면 값이 그대로 다시 보인다. "숨김"이지 "삭제"가 아니다.
-          const isOfficeMode = (typeof appWorkMode !== 'undefined' && appWorkMode === 'office');
-          const fieldDefsAll = [
+          const fieldDefs = [
             { key:'cause', label:'손상원인' },
             { key:'repairMethod', label:'보수공법' },
             { key:'reinforcementMethod', label:'보강공법' }
           ];
-          const fieldDefs = isOfficeMode ? fieldDefsAll : fieldDefsAll.filter(f => f.key === 'cause');
           fieldDefs.forEach(f=>{
             const wrap = document.createElement('div');
             wrap.className = 'damage-field';
@@ -15715,65 +15735,25 @@
               wrap.appendChild(recoRow);
             }
             
-            wrap.appendChild(lab); 
+            wrap.appendChild(lab);
             wrap.appendChild(input);
             fieldsWrap.appendChild(wrap);
           });
-          rec.appendChild(fieldsWrap);
-
-          // ---- [상세 조사정보] 파괴요인/평가/근거 — 현장모드에서는 아예 숨김(명령문 섹션 5-1),
-          // 사무실모드에서는 기존처럼 접이식으로 표시. 값이 있어도 필드 자체는 절대 지우지 않는다 —
-          // office 모드로 전환하면 기존 값이 그대로 다시 보인다.
-          if(isOfficeMode){
-          const detailsEl = document.createElement('details');
-          detailsEl.className = 'damage-field';
-          detailsEl.open = !!(d.failureFactor || d.evaluation || d.standardReference);
-          const summaryEl = document.createElement('summary');
-          summaryEl.textContent = '상세 조사정보 (파괴요인·평가·근거)';
-          summaryEl.style.cssText = 'cursor:pointer; font-size:13px; color:var(--muted); padding:4px 0;';
-          detailsEl.appendChild(summaryEl);
-          [
-            { key:'failureFactor', label:'파괴요인' },
-            { key:'evaluation', label:'평가' },
-            { key:'standardReference', label:'근거(기준명·페이지)' }
-          ].forEach(f=>{
-            const wrap = document.createElement('div');
-            wrap.className = 'damage-field';
-            const lab = document.createElement('label'); lab.textContent = f.label;
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.value = d[f.key] || '';
-            input.placeholder = f.label + ' 입력';
-            input.addEventListener('change', ()=>{
-              const oldVal = d[f.key] || '';
-              const newVal = input.value;
-              d[f.key] = newVal;
-              if(oldVal !== newVal){
-                logActivity(f.label + ' 수정', '지점 ' + m.num + ' — "' + (oldVal || '(빈값)') + '" → "' + (newVal || '(빈값)') + '"');
-                renderLog();
-              }
-              saveState();
-            });
-            wrap.appendChild(lab);
-            wrap.appendChild(input);
-            detailsEl.appendChild(wrap);
-          });
-          rec.appendChild(detailsEl);
-          }
+          extraDetailsEl.appendChild(fieldsWrap);
 
           const commentWrap = document.createElement('div');
           commentWrap.className = 'damage-field';
           const cLab = document.createElement('label');
-          // 현장모드에서는 "조사자의견"이라는 이름 대신 더 일반적인 "비고"로 표시한다(섹션 5-2).
-          // 저장되는 데이터 필드는 기존과 동일하게 d.investigatorComment 그대로다 — 라벨만 다르다.
-          cLab.textContent = isOfficeMode ? '조사자의견' : '비고';
+          cLab.textContent = '점검의견';
           const cInput = document.createElement('textarea');
           cInput.rows = 2;
           cInput.value = d.investigatorComment || '';
           cInput.style.cssText = 'background:var(--panel-2);border:1px solid var(--line);border-radius:4px;color:var(--text);font-family:inherit;font-size:13px;padding:7px 9px;resize:vertical;width:100%;box-sizing:border-box;';
           cInput.addEventListener('change', ()=>{ d.investigatorComment = cInput.value; saveState(); });
           commentWrap.appendChild(cLab); commentWrap.appendChild(cInput);
-          rec.appendChild(commentWrap);
+          extraDetailsEl.appendChild(commentWrap);
+
+          rec.appendChild(extraDetailsEl);
 
           const delRecBtn = document.createElement('button');
           delRecBtn.className = 'log-btn role-gated';
