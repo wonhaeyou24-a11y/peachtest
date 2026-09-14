@@ -15294,23 +15294,24 @@
           sectionWrap.appendChild(sectionRow);
           rec.appendChild(sectionWrap);
 
-          // 기존손상을 선택하면, 이 시설물의 ExistingDamage 목록에서 어떤 기록과
-          // 연결되는지 고를 수 있다. 이건 추천/자동매칭이 아니라 조사자가 직접
-          // 고르는 것이며, 골랐다고 해서 필드 값을 자동으로 채우지 않는다 —
-          // ExistingDamage 원본은 그대로 두고, 지금 조사한 값은 이 손상기록에
-          // 그대로 남아 나중에 "기존 vs 현재" 비교에 쓰인다.
+          // ---- 연결된 기존손상 드롭다운 (구분=기존손상 선택 시 표시) ----
+          // 선택하면 기존손상 레코드의 부위·손상명·손상규모·원인·보수방안·보강방안을
+          // 현재 손상기록에 자동으로 세팅한다. 이후 조사자가 직접 수정 가능.
           if(d.damageOrigin === 'EXISTING'){
+            const visibleExisting = (site.existingDamages || []).filter(ed => !ed.isDeleted);
+
             const linkWrap = document.createElement('div');
             linkWrap.className = 'damage-field';
             const linkLab = document.createElement('label'); linkLab.textContent = '연결된 기존손상';
             const linkSelect = document.createElement('select');
             linkSelect.style.cssText = 'width:100%; background:var(--panel-2); border:1px solid var(--line); border-radius:4px; color:var(--text); font-family:inherit; font-size:13px; padding:7px 9px;';
+
             const emptyOpt = document.createElement('option');
             emptyOpt.value = '';
             emptyOpt.textContent = '연결 안 함';
             linkSelect.appendChild(emptyOpt);
-            const visibleExisting = (site.existingDamages || []).filter(ed => !ed.isDeleted);
-            visibleExisting.forEach(ed=>{
+
+            visibleExisting.forEach(ed => {
               const opt = document.createElement('option');
               opt.value = ed.id;
               opt.textContent = ed.id + ' · ' + (ed.section ? ed.section + ' · ' : '') + (ed.damageName || '(손상명 없음)');
@@ -15324,73 +15325,56 @@
               noneOpt.disabled = true;
               linkSelect.appendChild(noneOpt);
             }
-            linkSelect.addEventListener('change', ()=>{
-              d.existingDamageId = linkSelect.value || null;
-              const linked = linkSelect.value ? visibleExisting.find(ed => ed.id === linkSelect.value) : null;
-              logActivity('기존손상 연결', '지점 ' + m.num + ' 손상기록 ↔ ' + (linked ? (linked.id + ' ' + linked.damageName) : '연결 해제'));
+
+            linkSelect.addEventListener('change', () => {
+              const selId = linkSelect.value || null;
+              d.existingDamageId = selId;
+              const linked = selId ? visibleExisting.find(ed => ed.id === selId) : null;
+              if(linked){
+                // ---- 기존손상 정보 자동 세팅 (조사자가 이후 수정 가능) ----
+                // 부위(component)
+                if(linked.part) d.component = linked.part;
+                // 손상명(damageType) — damageName 필드에서
+                if(linked.damageName) d.damageType = linked.damageName;
+                // 손상규모(measurement)
+                if(linked.measurement) {
+                  d.measurement = linked.measurement;
+                  // measurementItems 초기화 (기존 수치 입력 필드 초기화)
+                  d.measurementItems = [];
+                }
+                // 원인(cause)
+                if(linked.cause) d.cause = linked.cause;
+                // 보수방안(repairMethod)
+                if(linked.repairMethod) d.repairMethod = linked.repairMethod;
+                // 구간(section)
+                if(linked.section && !d.section) d.section = linked.section;
+
+                logActivity('기존손상 자동세팅', '지점 ' + m.num + ' ← ' + linked.id + ' ' + (linked.damageName || ''));
+              } else {
+                logActivity('기존손상 연결 해제', '지점 ' + m.num);
+              }
+              renderDamageRecords();
               saveState();
             });
+
             linkWrap.appendChild(linkLab);
             linkWrap.appendChild(linkSelect);
             rec.appendChild(linkWrap);
 
-            // ---- 기존 vs 현재 비교 (명령문 47~49번) ----
-            // ExistingDamage 원본은 여기서 전혀 수정하지 않는다. 화면 표시용 비교일 뿐이다.
-            const linkedExisting = d.existingDamageId ? visibleExisting.find(ed => ed.id === d.existingDamageId) : null;
-            if(linkedExisting){
-              const cmpWrap = document.createElement('div');
-              cmpWrap.className = 'damage-field';
-              cmpWrap.style.cssText = 'background:var(--panel-2); border:1px solid var(--line); border-radius:6px; padding:8px 10px;';
-              const cmpTitle = document.createElement('div');
-              cmpTitle.style.cssText = 'font-weight:600; font-size:12px; margin-bottom:4px;';
-              cmpTitle.textContent = '기존 vs 현재 비교';
-              cmpWrap.appendChild(cmpTitle);
-
-              const cmpRow = document.createElement('div');
-              cmpRow.style.cssText = 'font-size:12px; color:var(--text); line-height:1.6;';
-              const oldMeasureTxt = linkedExisting.measurement || '(기록 없음)';
-              const newMeasureTxt = d.measurement || '(기록 없음)';
-              const cmp = compareMeasurements(linkedExisting.measurement, d.measurement);
-              let cmpResultTxt;
-              if(cmp.unavailable){
-                cmpResultTxt = '계산불가';
-              } else {
-                const sign = cmp.delta > 0 ? '+' : '';
-                cmpResultTxt = sign + cmp.delta.toFixed(2) + ' (' + sign + cmp.percent.toFixed(1) + '%)';
-              }
-              cmpRow.innerHTML =
-                '기존(' + (linkedExisting.surveyYear ? linkedExisting.surveyYear + '년' : '연도미상') + '): ' + escapeHtml(oldMeasureTxt) + '<br>' +
-                '현재: ' + escapeHtml(newMeasureTxt) + '<br>' +
-                '증감: ' + escapeHtml(cmpResultTxt);
-              cmpWrap.appendChild(cmpRow);
-
-              const statusLab = document.createElement('label');
-              statusLab.style.cssText = 'display:block; margin-top:6px; font-size:12px;';
-              let autoHint = '';
-              if(!cmp.unavailable && !d.changeStatus){
-                if(cmp.delta > 0) autoHint = ' (참고: 규모가 늘어난 것으로 계산됨 — 증가로 볼지 검토해주세요)';
-                else if(cmp.delta < 0) autoHint = ' (참고: 규모가 줄어든 것으로 계산됨 — 감소/보수됨 중 검토해주세요)';
-                else autoHint = ' (참고: 규모 변화 없음으로 계산됨)';
-              }
-              statusLab.textContent = '변화상태' + autoHint;
-              const statusSelect = document.createElement('select');
-              statusSelect.style.cssText = 'width:100%; margin-top:2px; background:var(--panel); border:1px solid var(--line); border-radius:4px; color:var(--text); font-family:inherit; font-size:13px; padding:6px 8px;';
-              ['미확인','동일','증가','감소','보수됨','소실','기타'].forEach(opt=>{
-                const o = document.createElement('option');
-                o.value = opt; o.textContent = opt;
-                if((d.changeStatus || '미확인') === opt) o.selected = true;
-                statusSelect.appendChild(o);
-              });
-              statusSelect.addEventListener('change', ()=>{
-                const before = d.changeStatus || '미확인';
-                d.changeStatus = statusSelect.value;
-                logActivity('변화상태 지정', '지점 ' + m.num + ' ' + linkedExisting.id, { field:'변화상태', before, after: statusSelect.value });
-                saveState();
-              });
-              statusLab.appendChild(statusSelect);
-              cmpWrap.appendChild(statusLab);
-
-              rec.appendChild(cmpWrap);
+            // 연결된 기존손상이 있으면 원본 정보를 참고용으로 한 줄 표시
+            const linked = d.existingDamageId ? visibleExisting.find(ed => ed.id === d.existingDamageId) : null;
+            if(linked){
+              const refNote = document.createElement('div');
+              refNote.className = 'std-ref-note';
+              refNote.style.cssText = 'background:var(--amber-dim); border:1px solid var(--amber); border-radius:4px; padding:6px 9px; font-size:12px; margin-top:4px;';
+              refNote.innerHTML =
+                '<b>📋 기존기록 참고</b><br>' +
+                (linked.part ? '부위: ' + escapeHtml(linked.part) + ' &nbsp;' : '') +
+                (linked.damageName ? '손상명: ' + escapeHtml(linked.damageName) + ' &nbsp;' : '') +
+                (linked.measurement ? '규모: ' + escapeHtml(linked.measurement) : '') +
+                (linked.cause ? '<br>원인: ' + escapeHtml(linked.cause) : '') +
+                '<br><span style="color:var(--muted); font-size:11px;">↑ 위 값이 아래 필드에 자동 세팅되었습니다. 수정이 필요하면 아래에서 직접 변경하세요.</span>';
+              rec.appendChild(refNote);
             }
           }
 
@@ -15505,28 +15489,8 @@
           typeWrap.appendChild(scrollRow);
           rec.appendChild(typeWrap);
 
-          if(stdEntry && stdEntry.investigationItems){
-            const refNote = document.createElement('div');
-            refNote.className = 'std-ref-note';
-            refNote.innerHTML = '<b>지침 조사항목:</b> ' + escapeHtml(stdEntry.investigationItems);
-            rec.appendChild(refNote);
-          }
-
-          const urgRow = document.createElement('div');
-          urgRow.className = 'chip-row';
-          URGENCY_LEVELS.forEach(u=>{
-            const chip = document.createElement('button');
-            chip.type = 'button';
-            chip.className = 'chip urgency-' + u + (d.urgency === u ? ' active' : '');
-            chip.textContent = u;
-            chip.addEventListener('click', ()=>{
-              d.urgency = (d.urgency === u) ? '' : u;
-              renderDamageRecords();
-              saveState();
-            });
-            urgRow.appendChild(chip);
-          });
-          rec.appendChild(urgRow);
+          // [현장조사 간소화] 지침 조사항목 참고 텍스트 및 긴급도 칩 제거.
+          // 데이터 필드(d.urgency)는 유지됨.
 
           if(d.damageType === '기타'){
             const otherWrap = document.createElement('div');
@@ -15592,18 +15556,33 @@
           }
           rec.appendChild(measWrap);
 
-          const fieldsWrap = document.createElement('div');
-          fieldsWrap.className = 'damage-fields';
-          // 현장모드에서는 보수공법/보강공법을 숨긴다(명령문 섹션 5-1) — 데이터 필드(d.repairMethod 등)는
-          // 그대로 남아있고, 사무실모드로 전환하면 값이 그대로 다시 보인다. "숨김"이지 "삭제"가 아니다.
           const isOfficeMode = (typeof appWorkMode !== 'undefined' && appWorkMode === 'office');
           const fieldDefsAll = [
-            { key:'cause', label:'손상원인' },
-            { key:'repairMethod', label:'보수공법' },
-            { key:'reinforcementMethod', label:'보강공법' }
+            { key:'cause', label:'원인' },
+            { key:'repairMethod', label:'보수방안' },
+            { key:'reinforcementMethod', label:'보강방안' }
           ];
-          const fieldDefs = isOfficeMode ? fieldDefsAll : fieldDefsAll.filter(f => f.key === 'cause');
-          fieldDefs.forEach(f=>{
+
+          // 현장모드: <details> 접이식으로 감쌈 (값이 있으면 자동 펼침)
+          // 사무실모드: 항상 펼쳐서 표시
+          const hasFieldValue = fieldDefsAll.some(f => d[f.key]);
+          const fieldsContainer = document.createElement(isOfficeMode ? 'div' : 'details');
+          if(!isOfficeMode){
+            fieldsContainer.open = hasFieldValue; // 값이 있을 때만 기본 펼침
+            const fieldsSummary = document.createElement('summary');
+            fieldsSummary.style.cssText = 'cursor:pointer; font-size:13px; color:var(--muted); padding:5px 0; list-style:none; display:flex; align-items:center; gap:4px;';
+            fieldsSummary.innerHTML =
+              '<span style="font-size:11px;">▶</span> 원인 · 보수방안 · 보강방안' +
+              (hasFieldValue ? ' <span style="font-size:11px; color:var(--amber-text);">(입력됨)</span>' : '');
+            fieldsContainer.appendChild(fieldsSummary);
+          }
+
+          const fieldsWrap = document.createElement('div');
+          fieldsWrap.className = 'damage-fields';
+          fieldsContainer.appendChild(fieldsWrap);
+          rec.appendChild(fieldsContainer);
+
+          fieldDefsAll.forEach(f=>{
             const wrap = document.createElement('div');
             wrap.className = 'damage-field';
             const lab = document.createElement('label'); lab.textContent = f.label;
@@ -15719,61 +15698,24 @@
             wrap.appendChild(input);
             fieldsWrap.appendChild(wrap);
           });
-          rec.appendChild(fieldsWrap);
+          // fieldsWrap은 fieldsContainer에 이미 포함되어 rec에 연결됨 (중복 appendChild 없음)
 
-          // ---- [상세 조사정보] 파괴요인/평가/근거 — 현장모드에서는 아예 숨김(명령문 섹션 5-1),
-          // 사무실모드에서는 기존처럼 접이식으로 표시. 값이 있어도 필드 자체는 절대 지우지 않는다 —
-          // office 모드로 전환하면 기존 값이 그대로 다시 보인다.
-          if(isOfficeMode){
-          const detailsEl = document.createElement('details');
-          detailsEl.className = 'damage-field';
-          detailsEl.open = !!(d.failureFactor || d.evaluation || d.standardReference);
-          const summaryEl = document.createElement('summary');
-          summaryEl.textContent = '상세 조사정보 (파괴요인·평가·근거)';
-          summaryEl.style.cssText = 'cursor:pointer; font-size:13px; color:var(--muted); padding:4px 0;';
-          detailsEl.appendChild(summaryEl);
-          [
-            { key:'failureFactor', label:'파괴요인' },
-            { key:'evaluation', label:'평가' },
-            { key:'standardReference', label:'근거(기준명·페이지)' }
-          ].forEach(f=>{
-            const wrap = document.createElement('div');
-            wrap.className = 'damage-field';
-            const lab = document.createElement('label'); lab.textContent = f.label;
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.value = d[f.key] || '';
-            input.placeholder = f.label + ' 입력';
-            input.addEventListener('change', ()=>{
-              const oldVal = d[f.key] || '';
-              const newVal = input.value;
-              d[f.key] = newVal;
-              if(oldVal !== newVal){
-                logActivity(f.label + ' 수정', '지점 ' + m.num + ' — "' + (oldVal || '(빈값)') + '" → "' + (newVal || '(빈값)') + '"');
-                renderLog();
-              }
-              saveState();
-            });
-            wrap.appendChild(lab);
-            wrap.appendChild(input);
-            detailsEl.appendChild(wrap);
-          });
-          rec.appendChild(detailsEl);
-          }
-
+          // ---- 비고 (조사자의견) ----
           const commentWrap = document.createElement('div');
           commentWrap.className = 'damage-field';
-          const cLab = document.createElement('label');
-          // 현장모드에서는 "조사자의견"이라는 이름 대신 더 일반적인 "비고"로 표시한다(섹션 5-2).
-          // 저장되는 데이터 필드는 기존과 동일하게 d.investigatorComment 그대로다 — 라벨만 다르다.
-          cLab.textContent = isOfficeMode ? '조사자의견' : '비고';
+          const cLab = document.createElement('label'); cLab.textContent = '비고';
           const cInput = document.createElement('textarea');
           cInput.rows = 2;
           cInput.value = d.investigatorComment || '';
+          cInput.placeholder = '추가 메모나 특이사항을 입력하세요';
           cInput.style.cssText = 'background:var(--panel-2);border:1px solid var(--line);border-radius:4px;color:var(--text);font-family:inherit;font-size:13px;padding:7px 9px;resize:vertical;width:100%;box-sizing:border-box;';
-          cInput.addEventListener('change', ()=>{ d.investigatorComment = cInput.value; saveState(); });
-          commentWrap.appendChild(cLab); commentWrap.appendChild(cInput);
+          cInput.addEventListener('change', () => { d.investigatorComment = cInput.value; saveState(); });
+          commentWrap.appendChild(cLab);
+          commentWrap.appendChild(cInput);
           rec.appendChild(commentWrap);
+
+          // [현장조사 간소화] 상세 조사정보(파괴요인·평가·근거)는 제거 유지.
+          // 데이터 필드(d.failureFactor, d.evaluation, d.standardReference)는 유지.
 
           const delRecBtn = document.createElement('button');
           delRecBtn.className = 'log-btn role-gated';
