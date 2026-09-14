@@ -17201,27 +17201,91 @@
   // 없으면 사용자 입장에서는 "고쳤다고 했는데 여전히 그대로다"로 보일 수밖에 없다.
   function showSwUpdateBanner(reg){
     if(document.getElementById('swUpdateBanner')) return;
+
+    // 현재 앱 버전 (PS_BUILD 전역 변수)
+    const currentVer = (typeof PS_BUILD !== 'undefined') ? PS_BUILD : '';
+
+    // 애니메이션 + 배너 CSS 주입 (중복 방지)
+    if(!document.getElementById('swBannerStyle')){
+      const st = document.createElement('style');
+      st.id = 'swBannerStyle';
+      st.textContent = [
+        '@keyframes swSlideDown{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}',
+        '@keyframes swSlideUp{from{transform:translateY(0);opacity:1}to{transform:translateY(-100%);opacity:0}}',
+        '#swUpdateBanner{position:fixed;top:0;left:0;right:0;z-index:999999;',
+        'background:linear-gradient(135deg,#1a6b3c 0%,#2e7d4f 100%);color:#fff;',
+        'box-shadow:0 3px 16px rgba(0,0,0,.28);font-family:inherit;',
+        'animation:swSlideDown .38s cubic-bezier(.22,1,.36,1) both;}',
+        '#swUpdateBanner .sw-inner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;',
+        'padding:10px 18px;max-width:960px;margin:0 auto;}',
+        '#swUpdateBanner .sw-icon{font-size:20px;flex-shrink:0;}',
+        '#swUpdateBanner .sw-text{flex:1 1 200px;font-size:13px;line-height:1.5;}',
+        '#swUpdateBanner .sw-text strong{font-size:14px;}',
+        '#swUpdateBanner .sw-ver{display:inline-block;background:rgba(255,255,255,.2);',
+        'border-radius:3px;padding:1px 6px;font-size:11px;',
+        "font-family:'JetBrains Mono',monospace;letter-spacing:.5px;margin:0 2px;}",
+        '#swUpdateBanner .sw-btns{display:flex;gap:8px;flex-shrink:0;align-items:center;flex-wrap:wrap;}',
+        '#swUpdateBanner .sw-saving{font-size:12px;color:rgba(255,255,255,.8);display:none;}',
+        '#swUpdateBanner .sw-btn-now{padding:7px 18px;border-radius:6px;border:none;',
+        'background:#fff;color:#1a6b3c;cursor:pointer;font-weight:700;font-size:13px;font-family:inherit;',
+        'box-shadow:0 2px 8px rgba(0,0,0,.2);transition:transform .1s,box-shadow .1s;}',
+        '#swUpdateBanner .sw-btn-now:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(0,0,0,.25);}',
+        '#swUpdateBanner .sw-btn-now:disabled{opacity:.6;cursor:not-allowed;}',
+        '#swUpdateBanner .sw-btn-later{padding:7px 14px;border-radius:6px;',
+        'border:1px solid rgba(255,255,255,.45);background:transparent;',
+        'color:#fff;cursor:pointer;font-size:13px;font-family:inherit;transition:background .15s;}',
+        '#swUpdateBanner .sw-btn-later:hover{background:rgba(255,255,255,.12);}'
+      ].join('');
+      document.head.appendChild(st);
+    }
+
     const bar = document.createElement('div');
     bar.id = 'swUpdateBanner';
-    bar.style.cssText = 'position:fixed; left:0; right:0; bottom:0; z-index:99999; background:var(--amber,#f0ad4e); color:#1a1206; padding:10px 14px; display:flex; gap:10px; align-items:center; justify-content:center; flex-wrap:wrap; font-size:13px; box-shadow:0 -2px 8px rgba(0,0,0,.25);';
-    const span = document.createElement('span');
-    span.textContent = '⟳ 새 버전이 준비됐습니다(저장 안정성 개선 포함). 지금 조사 중인 내용은 자동 저장된 뒤 반영됩니다.';
-    const refreshBtn = document.createElement('button');
-    refreshBtn.type = 'button';
-    refreshBtn.textContent = '지금 새로고침';
-    refreshBtn.style.cssText = 'padding:6px 12px; border-radius:4px; border:none; background:#1a1206; color:#fff; cursor:pointer; font-weight:600;';
-    refreshBtn.addEventListener('click', async ()=>{
+    const verHtml = currentVer
+      ? '&nbsp;<span class="sw-ver">' + currentVer + '</span> → <span class="sw-ver">NEW</span>'
+      : '';
+    bar.innerHTML =
+      '<div class="sw-inner">' +
+        '<div class="sw-icon">🔄</div>' +
+        '<div class="sw-text">' +
+          '<strong>새 업데이트가 준비됐습니다</strong>' + verHtml + '<br>' +
+          '<span style="font-size:12px;opacity:.85;">조사 중인 데이터는 자동 저장 후 새로고침됩니다.</span>' +
+        '</div>' +
+        '<div class="sw-btns">' +
+          '<span class="sw-saving" id="swSavingMsg">💾 저장 중…</span>' +
+          '<button class="sw-btn-now" id="swUpdateBtn">지금 업데이트</button>' +
+          '<button class="sw-btn-later" id="swLaterBtn">나중에</button>' +
+        '</div>' +
+      '</div>';
+    document.body.prepend(bar);
+
+    // 배너 높이만큼 body 상단 여백 추가 (topbar가 배너에 가리지 않도록)
+    setTimeout(() => {
+      const h = bar.offsetHeight || 52;
+      const cur = parseInt(document.body.style.paddingTop || '0');
+      document.body.style.paddingTop = (cur + h) + 'px';
+    }, 60);
+
+    document.getElementById('swUpdateBtn').addEventListener('click', async () => {
+      const btn = document.getElementById('swUpdateBtn');
+      const msg = document.getElementById('swSavingMsg');
+      if(btn){ btn.disabled = true; btn.textContent = '준비 중…'; }
+      if(msg) msg.style.display = 'inline';
       try{ await saveState(); }catch(e){}
       location.reload();
     });
-    const laterBtn = document.createElement('button');
-    laterBtn.type = 'button';
-    laterBtn.textContent = '나중에';
-    laterBtn.style.cssText = 'padding:6px 12px; border-radius:4px; border:1px solid #1a1206; background:transparent; color:#1a1206; cursor:pointer;';
-    laterBtn.addEventListener('click', ()=> bar.remove());
-    bar.appendChild(span); bar.appendChild(refreshBtn); bar.appendChild(laterBtn);
-    document.body.appendChild(bar);
+
+    document.getElementById('swLaterBtn').addEventListener('click', () => {
+      const h = bar.offsetHeight || 52;
+      bar.style.animation = 'swSlideUp .25s ease forwards';
+      setTimeout(() => {
+        bar.remove();
+        const cur = parseInt(document.body.style.paddingTop || '0');
+        document.body.style.paddingTop = Math.max(0, cur - h) + 'px';
+      }, 260);
+    });
   }
+
 
   if('serviceWorker' in navigator){
     window.addEventListener('load', ()=>{
