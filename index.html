@@ -17259,11 +17259,13 @@
     }catch(e){}
   }, 20 * 1000);
 
-  // 2분마다 아직 클라우드에 안 올라간 사진 원본이 있으면 조용히 올린다.
+  // 10분마다 아직 클라우드에 안 올라간 사진 원본이 있으면 조용히 올린다.
   // 지점 메타데이터는 위 20초 타이머(processSyncQueue)로 계속 자동 동기화되지만,
   // 사진 원본은 pushProjectToCloud류 함수가 아니면 안 올라가서(오프라인→온라인
   // 전환 없이 계속 온라인 상태로만 조사하면 그런 함수가 한 번도 안 불림),
   // 사진이 클라우드에 영영 안 올라가 팀원이 못 받아가는 문제가 있었다.
+  // (10분 간격 — 현장에서 모바일 데이터로 계속 조사 중일 때 배경 업로드가 너무
+  // 자주 데이터를 쓰지 않도록. "시설물 조사완료" 시점엔 별도로 즉시 업로드된다.)
   let _photoUploadTimerRunning = false;
   setInterval(()=>{
     if(_photoUploadTimerRunning) return;
@@ -17272,7 +17274,7 @@
     if(!proj) return;
     _photoUploadTimerRunning = true;
     uploadPendingPhotosForProject(proj).catch(()=>{}).finally(()=>{ _photoUploadTimerRunning = false; });
-  }, 2 * 60 * 1000);
+  }, 10 * 60 * 1000);
 
   // 45초마다 "팀원이 올린 새 자료가 있는지"만 가볍게 확인해서, 동기화 대시보드를
   // 열지 않아도 상단 상태줄에 "🟢 팀원 새 자료 있음 — 가져오기"가 뜨게 한다.
