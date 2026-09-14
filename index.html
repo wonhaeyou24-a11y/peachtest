@@ -3506,7 +3506,51 @@
     </div>
   </div>
 
+<<<<<<< HEAD
+<script>
+(function(){
+  // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
+  // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
+  // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
+  const PS_BUILD = 'v59';
+  try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
+  function updateBuildTagUI(){
+    try{
+      const t1 = document.getElementById('buildTag');
+      const t2 = document.getElementById('buildTagMobile');
+      if(t1) t1.textContent = PS_BUILD;
+      if(t2) t2.textContent = 'PeachShot ' + PS_BUILD;
+    }catch(e){}
+  }
+  try{
+    if(document.readyState === 'loading'){
+      document.addEventListener('DOMContentLoaded', updateBuildTagUI);
+    }else{
+      updateBuildTagUI();
+    }
+  }catch(e){}
+  const stage = document.getElementById('stage');
+  const emptyMsg = document.getElementById('emptyMsg');
+  const stageStatus = document.getElementById('stageStatus');
+  const stageCount = document.getElementById('stageCount');
+  const sideCount = document.getElementById('sideCount');
+  const log = document.getElementById('log');
+  const logSearch = document.getElementById('logSearch');
+  const urgencyFilter = document.getElementById('urgencyFilter');
+  const btnToggleLogFilter = document.getElementById('btnToggleLogFilter');
+  const mobileBottomBar = document.getElementById('mobileBottomBar');
+  const mbtnLog = document.getElementById('mbtnLog');
+  const mbtnFilter = document.getElementById('mbtnFilter');
+  const mbtnSearch = document.getElementById('mbtnSearch');
+  const mbtnSort = document.getElementById('mbtnSort');
+  const mbtnPhoto = document.getElementById('mbtnPhoto');
+  const logFilterWrap = document.getElementById('logFilterWrap');
+  let logFilterText = '';
+  let logFilterUrgency = '';
+  let logSortMode = 'num'; // 'num' | 'recent' — MOBILE UI 명령문 하단바 "정렬" 버튼용
+=======
   <input type="file" id="bulkImportInput" accept="image/*" multiple>
+>>>>>>> 524686d1a1a360a5bcf9962dff28eb8e44d1390a
 
   <script>
     (function () {
@@ -17063,6 +17107,190 @@
             ctx.fillText(String(m.num), x, y + 1);
           });
 
+<<<<<<< HEAD
+  // 상단 새 버전 안내 팝업창 — 화면 상단(Top)에 플로팅 형태로 업데이트 선택 제공.
+  // 왜 필요한가: service-worker.js는 CACHE_NAME이 바뀌어야만 새 버전으로 인식되고
+  // install/activate가 실행되는데, 새 버전이 백그라운드에서 조용히 설치되어도
+  // 이미 열려 있는 브라우저 창은 예전 JS로 실행 중이므로 새로고침을 거쳐야 새 코드가 반영된다.
+  // 상단 팝업창을 통해 사용자가 작업 데이터를 안전 저장하고 즉시 최신 버전으로 전환할 수 있게 한다.
+  function showSwUpdateBanner(reg){
+    try{
+      if(document.getElementById('swUpdateBanner')) return;
+
+      // 애니메이션 스타일 주입 (중복 주입 방지)
+      if(!document.getElementById('swUpdateAnimStyle')){
+        const styleEl = document.createElement('style');
+        styleEl.id = 'swUpdateAnimStyle';
+        styleEl.textContent = `
+          @keyframes swSlideDown {
+            0% { transform: translate(-50%, -24px); opacity: 0; }
+            100% { transform: translate(-50%, 0); opacity: 1; }
+          }
+          @keyframes swFadeOut {
+            0% { transform: translate(-50%, 0); opacity: 1; }
+            100% { transform: translate(-50%, -20px); opacity: 0; }
+          }
+          .sw-btn-update:hover { background: #1d4ed8 !important; }
+          .sw-btn-update:active { transform: scale(0.98); }
+          .sw-btn-later:hover { background: rgba(255,255,255,0.12) !important; color: #fff !important; }
+          .sw-btn-later:active { transform: scale(0.98); }
+        `;
+        document.head.appendChild(styleEl);
+      }
+
+      const popup = document.createElement('div');
+      popup.id = 'swUpdateBanner';
+      popup.setAttribute('role', 'alertdialog');
+      popup.setAttribute('aria-modal', 'false');
+      popup.setAttribute('aria-label', '앱 업데이트 알림');
+      popup.style.cssText = [
+        'position: fixed',
+        'top: calc(14px + env(safe-area-inset-top, 0px))',
+        'left: 50%',
+        'transform: translateX(-50%)',
+        'z-index: 100000',
+        'width: calc(100% - 28px)',
+        'max-width: 440px',
+        'background: linear-gradient(145deg, #1b2230 0%, #111723 100%)',
+        'color: #f1f5f9',
+        'border: 1px solid rgba(59, 130, 246, 0.45)',
+        'box-shadow: 0 16px 40px -4px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 24px rgba(37, 99, 235, 0.22)',
+        'border-radius: 14px',
+        'padding: 14px 16px',
+        'box-sizing: border-box',
+        'display: flex',
+        'flex-direction: column',
+        'gap: 10px',
+        'backdrop-filter: blur(14px)',
+        '-webkit-backdrop-filter: blur(14px)',
+        'font-family: inherit',
+        'animation: swSlideDown 0.32s cubic-bezier(0.16, 1, 0.3, 1) forwards'
+      ].join(';');
+
+      // 1. 헤더: 아이콘 + 제목 + 닫기(X) 버튼
+      const headerRow = document.createElement('div');
+      headerRow.style.cssText = 'display: flex; align-items: center; justify-content: space-between; gap: 8px;';
+
+      const titleWrap = document.createElement('div');
+      titleWrap.style.cssText = 'display: flex; align-items: center; gap: 8px;';
+
+      const iconBadge = document.createElement('span');
+      iconBadge.textContent = '🚀';
+      iconBadge.style.cssText = 'font-size: 16px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 6px; background: rgba(59, 130, 246, 0.2); border: 1px solid rgba(59, 130, 246, 0.35);';
+
+      const title = document.createElement('strong');
+      title.textContent = '새로운 버전 업데이트 알림';
+      title.style.cssText = 'font-size: 14px; font-weight: 700; color: #ffffff; letter-spacing: -0.2px;';
+
+      titleWrap.appendChild(iconBadge);
+      titleWrap.appendChild(title);
+
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.setAttribute('aria-label', '닫기');
+      closeBtn.innerHTML = '&times;';
+      closeBtn.style.cssText = 'background: transparent; border: none; color: #94a3b8; font-size: 20px; line-height: 1; cursor: pointer; padding: 2px 6px; border-radius: 4px;';
+      
+      const closePopup = () => {
+        try{
+          popup.style.animation = 'swFadeOut 0.22s ease forwards';
+          setTimeout(() => { if(popup.parentNode) popup.remove(); }, 220);
+        }catch(e){
+          if(popup.parentNode) popup.remove();
+        }
+      };
+      closeBtn.addEventListener('click', closePopup);
+
+      headerRow.appendChild(titleWrap);
+      headerRow.appendChild(closeBtn);
+
+      // 2. 메시지 설명 (직관적인 안내 및 데이터 무손실 강조)
+      const desc = document.createElement('div');
+      desc.style.cssText = 'font-size: 12.5px; line-height: 1.45; color: #cbd5e1; word-break: keep-all;';
+      desc.textContent = '최신 기능 및 안정성 개선이 준비되었습니다. 현재 조사 중인 내용은 안전하게 자동 저장된 후 즉시 최신 버전으로 새로고침됩니다.';
+
+      // 3. 버튼 영역: [지금 업데이트] / [나중에]
+      const btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display: flex; gap: 8px; margin-top: 2px;';
+
+      const updateBtn = document.createElement('button');
+      updateBtn.type = 'button';
+      updateBtn.className = 'sw-btn-update';
+      updateBtn.textContent = '지금 업데이트';
+      updateBtn.style.cssText = 'flex: 1; padding: 9px 14px; border-radius: 8px; border: none; background: #2563eb; color: #ffffff; cursor: pointer; font-weight: 700; font-size: 13px; box-shadow: 0 2px 8px rgba(37,99,235,0.4); transition: background 0.15s ease, transform 0.1s ease;';
+
+      updateBtn.addEventListener('click', async ()=>{
+        try{
+          updateBtn.disabled = true;
+          updateBtn.textContent = '저장 및 업데이트 중...';
+          updateBtn.style.opacity = '0.85';
+          updateBtn.style.cursor = 'wait';
+          
+          // 1) 무조건 데이터 안전 저장 (Zero-Data-Loss)
+          if(typeof saveState === 'function'){
+            try{ await saveState(); }catch(err){ console.warn('[SW Update] saveState 경고:', err); }
+          }
+          
+          // 2) 서비스워커 대기 작업 활성화 전송
+          if(reg && reg.waiting){
+            try{ reg.waiting.postMessage({ type: 'SKIP_WAITING' }); }catch(e){}
+          }
+          
+          // 3) 최신 버전으로 즉시 새로고침
+          setTimeout(()=>{
+            try{ window.location.reload(); }catch(e){ window.location.href = window.location.href; }
+          }, 200);
+        }catch(err){
+          console.error('[SW Update] 새로고침 실패:', err);
+          window.location.reload();
+        }
+      });
+
+      const laterBtn = document.createElement('button');
+      laterBtn.type = 'button';
+      laterBtn.className = 'sw-btn-later';
+      laterBtn.textContent = '나중에';
+      laterBtn.style.cssText = 'padding: 9px 14px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.18); background: rgba(255,255,255,0.06); color: #cbd5e1; cursor: pointer; font-weight: 500; font-size: 13px; transition: background 0.15s ease, color 0.15s ease;';
+      laterBtn.addEventListener('click', closePopup);
+
+      btnRow.appendChild(laterBtn);
+      btnRow.appendChild(updateBtn);
+
+      popup.appendChild(headerRow);
+      popup.appendChild(desc);
+      popup.appendChild(btnRow);
+
+      document.body.appendChild(popup);
+    }catch(err){
+      console.warn('[SW Update] 팝업 생성 오류 방어:', err);
+    }
+  }
+
+  // 서비스 워커 등록 및 업데이트 감지 로직
+  if('serviceWorker' in navigator){
+    window.addEventListener('load', ()=>{
+      try{
+        navigator.serviceWorker.register('./service-worker.js').then(reg=>{
+          if(!reg) return;
+          
+          // 이미 대기 중인 새 워커가 있고 기존 컨트롤러가 있을 때 상단 팝업 표시
+          if(reg.waiting && navigator.serviceWorker.controller){
+            showSwUpdateBanner(reg);
+          }
+
+          // 새 서비스워커 다운로드 감지
+          reg.addEventListener('updatefound', ()=>{
+            try{
+              const nw = reg.installing;
+              if(!nw) return;
+              nw.addEventListener('statechange', ()=>{
+                // installed 상태가 되고 이미 컨트롤러가 있다면 업데이트임
+                if(nw.state === 'installed' && navigator.serviceWorker.controller){
+                  showSwUpdateBanner(reg);
+                }
+              });
+            }catch(e){}
+=======
           // 북쪽 방향
           const nx = TARGET_W - 70, ny = 60;
           ctx.fillStyle = '#1a1a1a';
@@ -18198,10 +18426,92 @@
             const g = globalDamageMaster[type] && globalDamageMaster[type][form];
             const list = (Array.isArray(g) && g.length) ? g : ((STANDARD_DB[type] && STANDARD_DB[type][form]) || []);
             dmRowsToExcel(list).forEach(r => rows.push(Object.assign({ '시설물종류': type, '시설물형식': form }, r)));
+>>>>>>> 524686d1a1a360a5bcf9962dff28eb8e44d1390a
           });
+
+          // 새 컨트롤러가 제어권을 가져왔을 때 자동 반영
+          let refreshing = false;
+          navigator.serviceWorker.addEventListener('controllerchange', ()=>{
+            if(refreshing) return;
+            // 사용자가 [지금 업데이트]를 눌렀거나 SW가 교체되었을 때
+          });
+
+          // 주기적 새 버전 체크 (네트워크 연결 시 및 탭 재진입 시)
+          try{
+            // 앱 로드 15초 후 백그라운드 1회 점검
+            setTimeout(()=>{
+              try{ reg.update().catch(()=>{}); }catch(e){}
+            }, 15000);
+
+            // 사용자가 화면으로 돌아올 때 새 버전 확인
+            document.addEventListener('visibilitychange', ()=>{
+              if(document.visibilityState === 'visible'){
+                try{ reg.update().catch(()=>{}); }catch(e){}
+              }
+            });
+          }catch(e){}
+
+          // 수동 테스트 및 진단용 전역 함수 제공
+          try{
+            window.__checkAppUpdate = () => {
+              try{
+                reg.update().then(()=> console.log('[SW] 업데이트 체크 완료')).catch(err=> console.warn('[SW] 체크 실패:', err));
+              }catch(e){}
+            };
+            window.__showUpdatePopupTest = () => showSwUpdateBanner(reg);
+          }catch(e){}
+
+        }).catch(err=>{
+          console.warn('[SW] 서비스워커 등록 실패:', err);
         });
+<<<<<<< HEAD
+      }catch(e){
+        console.warn('[SW] 예외 차단:', e);
+      }
+    });
+  }
+  // ==========================================
+  // Damage Master Config Logic
+  // ==========================================
+  let dmCurrentData = null;
+  let dmIsDirty = false;
+  const dmCollapsedParts = new Set(); // "손상명 관리" 탭 부위별 아코디언 — 접힌 부위 이름들
+
+  const dmModal = document.getElementById('damageMasterModal');
+  const dmTypeSel = document.getElementById('dmFacilityType');
+  const dmFormSel = document.getElementById('dmFacilityForm');
+  const dmList = document.getElementById('dmDamageList');
+  const btnDamageMaster = document.getElementById('btnDamageMaster');
+
+  if (btnDamageMaster) {
+    btnDamageMaster.addEventListener('click', openDamageMaster);
+  }
+
+  // ---- 손상마스터 Excel 양식 내보내기 / 가져오기 (기존손상 방식과 동일 패턴) ----
+  const DM_EXCEL_COLUMNS = [
+    { key:'component', label:'부위' },
+    { key:'damageType', label:'손상명' },
+    { key:'measurementFields', label:'규모세팅', measurementFields:true },
+    { key:'cause', label:'손상원인' },
+    { key:'repairOptions', label:'보수방안', array:true },
+    { key:'reinforcementOptions', label:'보강방안', array:true },
+    { key:'investigationItems', label:'조사항목' },
+    { key:'sourcePage', label:'근거' },
+    { key:'enabled', label:'사용' }
+  ];
+
+  function dmRowsToExcel(items){
+    return (items || []).map(it=>{
+      const r = {};
+      DM_EXCEL_COLUMNS.forEach(c=>{
+        if(c.measurementFields) r[c.label] = formatDmMeasurementFieldsText(it[c.key]);
+        else if(c.array) r[c.label] = (Array.isArray(it[c.key]) ? it[c.key] : []).join(', ');
+        else if(c.key === 'enabled') r[c.label] = (it.enabled === false) ? 'N' : 'Y';
+        else r[c.label] = it[c.key] != null ? it[c.key] : '';
+=======
         if (rows.length === 0) { alert('내보낼 손상마스터가 없습니다.'); return; }
         downloadWorkbook(rows, DM_ALL_EXCEL_COLUMNS, '전체_손상마스터.xlsx');
+>>>>>>> 524686d1a1a360a5bcf9962dff28eb8e44d1390a
       });
 
       if (btnDmAllImport) btnDmAllImport.addEventListener('click', () => { dmAllExcelInput.value = ''; dmAllExcelInput.click(); });
