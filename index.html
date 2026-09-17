@@ -2786,7 +2786,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v60';
+  const PS_BUILD = 'v61';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -15190,6 +15190,12 @@
     }
   }
 
+  // 손상기록의 "필요시 작성" 접이식 섹션을 사용자가 직접 펼친 상태를 기억한다(손상기록
+  // id 기준). renderDamageRecords가 필드 변경마다 화면을 통째로 다시 그리는데, 이 Set이
+  // 없으면 펼쳐서 편집하는 도중에도 매번 새로 접혀버린다. 저장 데이터가 아니라 화면
+  // 상태일 뿐이므로 markers 등 저장 대상 객체에는 넣지 않는다(새로고침하면 다시 접힘).
+  const expandedDamageExtras = new Set();
+
   // ---------- preview / delete ----------
   function openPreview(markerId){
     activeMarkerId = markerId;
@@ -15736,9 +15742,17 @@
           // 점검의견은 앱 모드(현장/사무실)와 무관하게 항상 접혀 있다가 "필요시 작성"
           // 버튼(펼치기)을 눌러야 보인다. 값이 있어도 필드 자체는 지우지 않으므로
           // 접혀 있어도 기존에 입력된 값은 그대로 보존된다.
+          // ★ "값이 있으면 자동으로 펼침" 로직을 넣었었는데, 손상명을 고르면 손상마스터의
+          // 원인·보수·보강값이 자동으로 채워지는 기존 기능 때문에 거의 매번 곧바로
+          // 펼쳐져 버렸다("자꾸 열린다" 문제) — 값 유무와 상관없이 기본은 항상 접힌
+          // 채로 시작하고, 사용자가 직접 펼친 경우에만(expandedDamageExtras) 그 상태를
+          // 기억해서 이 손상기록을 계속 편집하는 동안(재렌더링 사이) 다시 접히지 않게 한다.
           const extraDetailsEl = document.createElement('details');
           extraDetailsEl.className = 'damage-field';
-          extraDetailsEl.open = !!(d.cause || d.repairMethod || d.reinforcementMethod || d.investigatorComment);
+          extraDetailsEl.open = expandedDamageExtras.has(d.id);
+          extraDetailsEl.addEventListener('toggle', ()=>{
+            if(extraDetailsEl.open) expandedDamageExtras.add(d.id); else expandedDamageExtras.delete(d.id);
+          });
           const extraSummaryEl = document.createElement('summary');
           extraSummaryEl.textContent = '필요시 작성 (원인·보수방안·보강방안·점검의견)';
           extraSummaryEl.style.cssText = 'cursor:pointer; font-size:13px; color:var(--muted); padding:4px 0;';
