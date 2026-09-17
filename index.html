@@ -2004,6 +2004,58 @@
       border-color: var(--amber) !important;
       font-weight: 700 !important;
     }
+
+    /* 카드 하나에 정보+버튼 4개가 한꺼번에 보여 정신없어 보이던 것 개선:
+       버튼은 평소엔 숨겨두고, 마우스를 올리거나(hover) 선택된 카드일 때만 보여준다.
+       (버튼 자체의 클릭 동작·핸들러는 전혀 안 바꿈 — 보이는 시점만 CSS로 조정) */
+    .log-item .log-btn-group {
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .12s ease;
+    }
+    .log-item:hover .log-btn-group,
+    .log-item.selected .log-btn-group {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    /* 상태 표시 점(완료/사진없음/손상정보 미입력) — 카드 목록과 표 보기가 공유 */
+    .log-status-dot {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      margin-right: 2px;
+    }
+    .log-status-dot.status-ok { background: #34C759; }
+    .log-status-dot.status-warn { background: var(--amber, #F2A93B); }
+    .log-status-dot.status-danger { background: #FF3B30; }
+
+    /* ---- 표(스프레드시트) 보기 — 보고서 작성 시 지점을 쭉 훑어보기 위한 옵션 화면.
+       기존 카드 목록(.log-item)은 그대로 두고, 토글로 바꿔 끼우는 별도 뷰다. ---- */
+    .log-table-wrap { overflow-x: auto; }
+    .log-table { width: 100%; min-width: 620px; border-collapse: collapse; font-size: 12px; }
+    .log-table th {
+      position: sticky; top: 0; background: var(--panel);
+      text-align: left; padding: 6px 8px; border-bottom: 2px solid var(--line);
+      font-size: 11px; color: var(--muted); white-space: nowrap;
+    }
+    .log-table td {
+      padding: 6px 8px; border-bottom: 1px solid var(--line);
+      vertical-align: middle; max-width: 160px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .log-table tr.log-table-row { cursor: pointer; }
+    .log-table tr.log-table-row:hover { background: var(--panel-2); }
+    .log-table tr.log-table-row.selected { background: rgba(46,109,164,0.08); box-shadow: inset 0 0 0 1px #2E6DA4; }
+    .log-table-thumb { width: 34px; height: 34px; border-radius: 5px; object-fit: cover; vertical-align: middle; }
+    .log-table-more { font-size: 10px; color: var(--muted); margin-left: 3px; }
+    .log-table-detail-btn {
+      padding: 3px 8px; font-size: 11px; border-radius: 6px;
+      border: 1px solid var(--amber); background: var(--amber-dim); color: var(--amber-text);
+      font-weight: 700; cursor: pointer;
+    }
+    #btnToggleLogTable.active { background: var(--amber-dim); border-color: var(--amber); color: var(--amber-text); }
   }
 
   @media (prefers-reduced-motion: reduce){
@@ -2120,6 +2172,7 @@
     <div class="side-head">
       <span style="display:flex; align-items:center; gap:6px;">기록 목록
         <button class="ghost icon-btn" id="btnToggleLogFilter" title="검색 · 중요도 필터" style="padding:2px 7px; font-size:12px;">🔍</button>
+        <button class="ghost icon-btn" id="btnToggleLogTable" title="표로 보기 (사진 포함 · 보고서 참고자료용)" style="padding:2px 7px; font-size:12px; display:none;">▦ 표로</button>
         <button class="ghost icon-btn" id="btnToggleInspector" title="Inspector 접기/펼치기" style="padding:2px 7px; font-size:12px; display:none;">▶</button>
       </span>
       <span id="sideCount">0 / 0 촬영됨</span>
@@ -2808,7 +2861,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v65';
+  const PS_BUILD = 'v66';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -2837,6 +2890,7 @@
   let logFilterText = '';
   let logFilterUrgency = '';
   let logSortMode = 'num'; // 'num' | 'recent' — MOBILE UI 명령문 하단바 "정렬" 버튼용
+  let logViewMode = 'cards'; // 'cards' | 'table' — PC 전용 "표로 보기" 토글(보고서 참고용)
 
   btnToggleLogFilter.addEventListener('click', ()=>{
     const nowHidden = logFilterWrap.style.display === 'none';
@@ -5139,6 +5193,7 @@
     updatePcExplorerDocking();
     if(typeof updateInspectorCollapse === 'function') updateInspectorCollapse();
     if(typeof updateWideModeButton === 'function') updateWideModeButton();
+    if(typeof updateLogTableButton === 'function') updateLogTableButton();
   }
 
   // STEP15 태블릿 최적화: 기존 .layout 2열 그리드가 이미 880px부터 활성화되므로,
@@ -5209,6 +5264,25 @@
     updateWideModeButton();
   });
   window.addEventListener('resize', updateWideModeButton);
+
+  // "표로 보기" — 기록목록을 카드 대신 사진 포함 표로 보여주는 PC 전용 옵션
+  // (보고서 작성 전 지점을 훑어보기 위함). 기존 카드 목록은 그대로 두고 토글로
+  // 바꿔 끼우는 것뿐이라, 꺼두면 지금까지와 완전히 동일하다.
+  const btnToggleLogTable = document.getElementById('btnToggleLogTable');
+  function updateLogTableButton(){
+    if(!btnToggleLogTable) return;
+    const canShow = (appWorkMode === 'office') && window.innerWidth > 880;
+    btnToggleLogTable.style.display = canShow ? '' : 'none';
+    if(!canShow && logViewMode === 'table') logViewMode = 'cards';
+    btnToggleLogTable.textContent = logViewMode === 'table' ? '▦ 카드로' : '▦ 표로';
+    btnToggleLogTable.classList.toggle('active', logViewMode === 'table');
+  }
+  if(btnToggleLogTable) btnToggleLogTable.addEventListener('click', ()=>{
+    logViewMode = logViewMode === 'table' ? 'cards' : 'table';
+    updateLogTableButton();
+    if(typeof renderLog === 'function') renderLog();
+  });
+  window.addEventListener('resize', updateLogTableButton);
 
   // 안전장치: 앞으로 다른 버튼이 새로 추가되면서 siteModal을 숨기고 다시 켜주는 걸
   // 또 깜빡할 수 있다(실제로 두 번 있었다 — "+시설물"과 "열기" 버튼). 매번 호출부를
@@ -14560,6 +14634,13 @@
     const sorted = filtered.slice().sort((a,b)=>
       logSortMode === 'recent' ? (b.createdAt||'').localeCompare(a.createdAt||'') : a.num-b.num
     );
+    // PC 전용 "표로 보기" — 카드 목록을 대체하는 게 아니라 토글로 바꿔 끼우는
+    // 옵션 화면이다(보고서 작성 시 지점을 쭉 훑어보기 위함). 좁은 화면에서는
+    // 켜져 있어도 무시하고 기존 카드/모바일 목록을 그대로 쓴다.
+    if(window.innerWidth > 880 && logViewMode === 'table'){
+      renderLogTable(sorted);
+      return;
+    }
     sorted.forEach(m=>{
       if(window.innerWidth <= 880){
         renderLogItemMobile(m);
@@ -14567,6 +14648,100 @@
         renderLogItemDesktop(m);
       }
     });
+  }
+
+  // 지점의 "완료 상태"를 색으로 나타낸다 — 카드 목록·표 보기가 함께 쓴다.
+  //   danger(빨강): 사진이 아예 없음 / warn(주황): 사진은 있는데 손상명 미입력 / ok(초록): 정상
+  function computePointStatus(m){
+    const photos = m.photos || [];
+    if(photos.length === 0) return 'status-danger';
+    const allDamages = [];
+    photos.forEach(p => (p.damages || []).forEach(d => allDamages.push(d)));
+    if(allDamages.length === 0 || allDamages.every(d => !d.damageType)) return 'status-warn';
+    return 'status-ok';
+  }
+
+  // 표(스프레드시트) 보기 — 번호·사진·부위·손상명·규모·원인을 한 행에 펼쳐서
+  // 보고서 작성 전에 지점을 빠르게 훑어보기 위한 화면. 지점 하나당 한 행이며,
+  // 그 지점의 손상이 여러 개면 콤마로 이어붙인다(카드 목록과 동일하게 "지점
+  // 단위"로 본다 — 손상 단위로 쪼개지 않음). 데이터는 markers를 읽기만 하고
+  // 손대지 않으며, 행 클릭은 기존 focusRecordPoint를 그대로 재사용한다.
+  function renderLogTable(sorted){
+    const wrap = document.createElement('div');
+    wrap.className = 'log-table-wrap';
+    const table = document.createElement('table');
+    table.className = 'log-table';
+    const thead = document.createElement('thead');
+    thead.innerHTML = '<tr><th>#</th><th>사진</th><th>부위</th><th>손상명</th><th>규모</th><th>원인</th><th></th></tr>';
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+
+    sorted.forEach(m=>{
+      const photos = m.photos || [];
+      const allDamages = [];
+      photos.forEach(p => (p.damages || []).forEach(d => allDamages.push(d)));
+
+      const tr = document.createElement('tr');
+      tr.className = 'log-table-row' + (activeMarkerId === m.id ? ' selected' : '');
+      tr.dataset.markerId = m.id;
+      tr.addEventListener('click', ()=> focusRecordPoint(m.id));
+
+      const tdNum = document.createElement('td');
+      const dot = document.createElement('span');
+      dot.className = 'log-status-dot ' + computePointStatus(m);
+      tdNum.appendChild(dot);
+      tdNum.appendChild(document.createTextNode('#' + m.num));
+      tr.appendChild(tdNum);
+
+      const tdPhoto = document.createElement('td');
+      if(photos[0] && photos[0].src){
+        const img = document.createElement('img');
+        img.className = 'log-table-thumb';
+        img.src = photos[0].src;
+        img.alt = '지점 ' + m.num;
+        tdPhoto.appendChild(img);
+        if(photos.length > 1){
+          const more = document.createElement('span');
+          more.className = 'log-table-more';
+          more.textContent = '+' + (photos.length - 1);
+          tdPhoto.appendChild(more);
+        }
+      } else {
+        tdPhoto.textContent = '—';
+      }
+      tr.appendChild(tdPhoto);
+
+      const tdComp = document.createElement('td');
+      tdComp.textContent = Array.from(new Set(allDamages.map(d=>d.component).filter(Boolean))).join(', ') || '-';
+      tr.appendChild(tdComp);
+
+      const tdType = document.createElement('td');
+      tdType.textContent = allDamages.map(d=>d.damageType).filter(Boolean).join(', ') || (photos.length ? '손상 미입력' : '미촬영');
+      tr.appendChild(tdType);
+
+      const tdMeas = document.createElement('td');
+      tdMeas.textContent = allDamages.map(d=>d.measurement).filter(Boolean).join(', ') || '-';
+      tr.appendChild(tdMeas);
+
+      const tdCause = document.createElement('td');
+      tdCause.textContent = Array.from(new Set(allDamages.map(d=>d.cause).filter(Boolean))).join(', ') || '-';
+      tr.appendChild(tdCause);
+
+      const tdAction = document.createElement('td');
+      const detailBtn = document.createElement('button');
+      detailBtn.type = 'button';
+      detailBtn.className = 'log-table-detail-btn';
+      detailBtn.textContent = '상세';
+      detailBtn.addEventListener('click', (e)=>{ e.stopPropagation(); openPreview(m.id); });
+      tdAction.appendChild(detailBtn);
+      tr.appendChild(tdAction);
+
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    log.appendChild(wrap);
   }
 
   // MOBILE UI 명령문 섹션16·17: 기록목록을 한 줄(번호·신규/기존·부위·손상명·시간·화살표)로
@@ -14648,8 +14823,10 @@
   // 스크롤 위치가 튀므로, 재렌더 없이 클래스만 옮겨서 표시한다.
   function highlightSelectedLogItem(markerId){
     if(!log) return;
-    Array.from(log.children).forEach(el=>{
-      el.classList.toggle('selected', el.dataset && el.dataset.markerId === markerId);
+    // querySelectorAll('[data-marker-id]')로 일반화 — 카드 목록(log의 직계 자식)은 물론
+    // 표 보기(테이블 안에 중첩된 tr[data-marker-id])에서도 동일하게 선택 표시가 되게 한다.
+    log.querySelectorAll('[data-marker-id]').forEach(el=>{
+      el.classList.toggle('selected', el.dataset.markerId === markerId);
     });
   }
 
@@ -14739,6 +14916,9 @@
 
     const titleRow = document.createElement('div');
     titleRow.className = 'log-title-row';
+    const statusDot = document.createElement('span');
+    statusDot.className = 'log-status-dot ' + computePointStatus(m);
+    statusDot.title = { 'status-danger':'사진 없음', 'status-warn':'손상정보 미입력', 'status-ok':'완료' }[computePointStatus(m)];
     const idx = document.createElement('span');
     idx.className = 'log-index';
     idx.style.fontFamily = "'JetBrains Mono', monospace";
@@ -14746,6 +14926,7 @@
     const dmg = document.createElement('span');
     dmg.className = 'log-damage';
     dmg.textContent = (rep && rep.damageType) || (hasPhoto ? '손상 미입력' : '미촬영');
+    titleRow.appendChild(statusDot);
     titleRow.appendChild(idx);
     titleRow.appendChild(dmg);
 
