@@ -338,6 +338,20 @@
     background:transparent;
     color: var(--muted);
   }
+  /* 도면 탭에 삭제(✕)를 직접 붙여서, 잘못 올린 도면을 "이미지 교체"로 덮어쓰지
+     않고 탭 자체를 바로 지울 수 있게 한다. 평소엔 흐리게 두다가 탭에 마우스를
+     올리면 또렷해진다. */
+  .drawing-tab-del{
+    flex-shrink:0;
+    width:16px; height:16px;
+    display:flex; align-items:center; justify-content:center;
+    border-radius:50%;
+    font-size:11px; line-height:1;
+    opacity:0.35;
+  }
+  .drawing-tab:hover .drawing-tab-del{ opacity:0.85; }
+  .drawing-tab-del:hover{ opacity:1 !important; background:rgba(0,0,0,0.12); }
+  .drawing-tab.active .drawing-tab-del:hover{ background:rgba(0,0,0,0.2); }
 
   /* ---------- MOBILE UI 명령문 섹션6: 뷰스위처 통합(모바일 전용) ----------
      .mode-tabs와 #drawingTabs는 원래 DOM상 형제라, 여기서는 JS(switchMode/
@@ -2917,7 +2931,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v67';
+  const PS_BUILD = 'v68';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -14463,11 +14477,26 @@
     (drawings || []).slice().sort((a,b)=>(a.order||0)-(b.order||0)).forEach(d=>{
       const tab = document.createElement('button');
       tab.className = 'drawing-tab' + (d.id === currentDrawingId ? ' active' : '');
-      tab.textContent = d.name + (d.type ? ' · ' + d.type : '');
       tab.addEventListener('click', ()=>{
         if(d.id === currentDrawingId){ openDrawingOptions(d); return; }
         switchToDrawing(d.id);
       });
+
+      const label = document.createElement('span');
+      label.textContent = d.name + (d.type ? ' · ' + d.type : '');
+      tab.appendChild(label);
+
+      // 잘못 올린 도면을 "이미지 교체"로 덮어쓰는 대신 탭에서 바로 삭제할 수 있게.
+      // 도면이 1개뿐이면(최소 1개는 있어야 하므로) 버튼을 아예 안 보여준다.
+      if(drawings.length > 1){
+        const delBtn = document.createElement('span');
+        delBtn.className = 'drawing-tab-del';
+        delBtn.textContent = '✕';
+        delBtn.title = '이 도면 삭제';
+        delBtn.addEventListener('click', (e)=>{ e.stopPropagation(); deleteDrawing(d); });
+        tab.appendChild(delBtn);
+      }
+
       drawingTabs.appendChild(tab);
     });
     const addBtn = document.createElement('button');
@@ -14595,6 +14624,27 @@
     updatePcExplorerDocking();
   });
 
+  // 도면 하나를 통째로 삭제한다(이미지 교체와 다름 — 교체는 같은 도면 슬롯의
+  // 사진만 바꾸고, 이건 그 도면 탭 자체를 없앤다). 잘못 올린 도면을 지울 때는
+  // "이미지 교체"보다 이쪽이 맞다. 도면 탭의 ✕ 버튼과 openDrawingOptions(이름
+  // 변경 메뉴)가 이 함수를 공유한다.
+  function deleteDrawing(d){
+    if(drawings.length <= 1){ alert('시설물에는 최소 1개의 도면이 있어야 합니다.'); return; }
+    const affected = markers.filter(m => m.xPct != null && m.drawingId === d.id);
+    if(!confirm('도면 "' + d.name + '"을(를) 삭제할까요?\n이 도면의 조사점 ' + affected.length + '개는 휴지통으로 이동되어 복원할 수 있습니다.')) return;
+    affected.forEach(m => trash.push({ type:'marker', data: m, deletedAt: new Date().toISOString() }));
+    markers = markers.filter(m => !(m.xPct != null && m.drawingId === d.id));
+    drawings = drawings.filter(x => x.id !== d.id);
+    if(currentDrawingId === d.id){
+      currentDrawingId = null; // switchToDrawing의 '이미 같은 도면' 가드를 피하기 위해 비워둠
+      switchToDrawing(drawings[0].id);
+    }
+    renderDrawingTabs();
+    renderLog();
+    updateCounts();
+    saveState();
+  }
+
   function openDrawingOptions(d){
     const action = prompt(
       '도면 "' + d.name + '" 관리\n\n' +
@@ -14613,20 +14663,7 @@
         saveState();
       }
     } else if(trimmed === '2'){
-      if(drawings.length <= 1){ alert('시설물에는 최소 1개의 도면이 있어야 합니다.'); return; }
-      const affected = markers.filter(m => m.xPct != null && m.drawingId === d.id);
-      if(!confirm('도면 "' + d.name + '"을(를) 삭제할까요?\n이 도면의 조사점 ' + affected.length + '개는 휴지통으로 이동되어 복원할 수 있습니다.')) return;
-      affected.forEach(m => trash.push({ type:'marker', data: m, deletedAt: new Date().toISOString() }));
-      markers = markers.filter(m => !(m.xPct != null && m.drawingId === d.id));
-      drawings = drawings.filter(x => x.id !== d.id);
-      if(currentDrawingId === d.id){
-        currentDrawingId = null; // switchToDrawing의 '이미 같은 도면' 가드를 피하기 위해 비워둠
-        switchToDrawing(drawings[0].id);
-      }
-      renderDrawingTabs();
-      renderLog();
-      updateCounts();
-      saveState();
+      deleteDrawing(d);
     }
   }
 
