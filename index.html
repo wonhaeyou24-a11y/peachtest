@@ -2956,7 +2956,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v69';
+  const PS_BUILD = 'v70';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -15125,11 +15125,19 @@
     item.appendChild(photoWrap);
 
     // 2. 손상내용(구분·구간·손상명·규모)만 — 드래그로 직접 선택해서 복사할 수도
-    // 있다(클릭해도 카드 클릭이 안 걸리게 stopPropagation 처리).
+    // 있다. 처음엔 클릭 자체를 막아버렸더니(stopPropagation) 텍스트 영역을
+    // 클릭해서 지점 이동하던 게 안 돼서 불편했다 — 이제는 "드래그로 실제 글자를
+    // 선택했는지"를 보고 판단한다: 선택된 텍스트가 있으면 그대로 두고(복사 가능),
+    // 없으면(그냥 클릭) 카드 클릭과 동일하게 위치 이동을 실행한다.
     const contentBlock = document.createElement('div');
     contentBlock.className = 'log-copy-content';
-    contentBlock.addEventListener('mousedown', (e)=> e.stopPropagation());
-    contentBlock.addEventListener('click', (e)=> e.stopPropagation());
+    contentBlock.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const sel = window.getSelection();
+      if(!sel || sel.toString().trim() === ''){
+        focusRecordPoint(m.id);
+      }
+    });
     const lines = formatDamageLinesForCopy(allDamages, hasPhoto);
     lines.forEach((text, i)=>{
       const line = document.createElement('div');
