@@ -1176,6 +1176,28 @@
     z-index: 2000;
     padding: 20px;
   }
+  /* 기록목록 카드의 큰 사진을 클릭하면 뜨는 전체화면 사진 뷰어 — 편집화면 없이
+     사진만 크게 보는 용도라 별도의 가벼운 오버레이로 둔다(previewModal과 무관). */
+  #photoLightbox{
+    position:fixed; inset:0;
+    background: rgba(0,0,0,0.92);
+    z-index: 3000;
+    display:none;
+    align-items:center; justify-content:center;
+    cursor: zoom-out;
+    padding: 24px;
+  }
+  #photoLightbox img{
+    max-width: 100%; max-height: 100%;
+    object-fit: contain;
+    box-shadow: 0 4px 30px rgba(0,0,0,0.5);
+  }
+  #photoLightbox .lightbox-close{
+    position:absolute; top:16px; right:20px;
+    background: rgba(255,255,255,0.12); color:#fff; border:none;
+    width:36px; height:36px; border-radius:50%;
+    font-size:18px; cursor:pointer;
+  }
   .modal{
     background: var(--panel);
     border: 1px solid var(--line);
@@ -1921,14 +1943,18 @@
     /* ----------------------------------------------------
        [2번] 우측 기록 목록 카드 높이 압축 (한 화면 6~8개 노출)
        ---------------------------------------------------- */
+    /* 사진을 크게, 내용은 손상내용 한 줄만 — 텍스트 위주 카드에서 사진 중심
+       카드로 전환(요청 반영). 사진을 클릭하면 카드 클릭(위치이동)과는 별개로
+       전체화면 큰 사진(라이트박스)이 뜬다. */
     .log-item {
-      padding: 8px 10px !important;
-      margin-bottom: 6px !important;
-      border-radius: 8px !important;
+      padding: 0 0 8px !important;
+      margin-bottom: 8px !important;
+      border-radius: 10px !important;
       display: flex !important;
-      align-items: center !important;
-      gap: 8px !important;
-      min-height: 52px !important; /* 과도한 높이 압축 */
+      flex-direction: column !important;
+      align-items: stretch !important;
+      gap: 6px !important;
+      overflow: hidden;
       border: 1px solid var(--line);
       background: var(--panel);
       cursor: pointer;
@@ -1946,41 +1972,65 @@
       box-shadow: inset 0 0 0 1px #2E6DA4;
     }
 
+    .log-item .log-photo-wrap { position: relative; }
+
     .log-item .log-thumb {
-      width: 40px !important;
-      height: 40px !important;
-      border-radius: 6px !important;
+      width: 100% !important;
+      height: 150px !important;
+      border-radius: 0 !important;
       flex-shrink: 0 !important;
       object-fit: cover;
+      display: block;
+      cursor: zoom-in;
     }
+    .log-item .log-thumb.placeholder {
+      display: flex !important;
+      align-items: center;
+      justify-content: center;
+      background: var(--panel-2);
+      color: var(--muted);
+      font-size: 22px;
+      cursor: default;
+    }
+
+    /* 상태점+번호를 사진 위에 작은 배지로 올려서, 사진을 키우면서 없어진
+       자리를 대신한다. */
+    .log-item .log-photo-badge {
+      position: absolute; top: 6px; left: 6px;
+      display: flex; align-items: center; gap: 5px;
+      background: rgba(0,0,0,0.55); color: #fff;
+      padding: 3px 8px; border-radius: 999px;
+      font-size: 11px; font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .log-item .log-photo-badge .log-status-dot { margin-right: 0; }
 
     .log-item .log-info {
       flex: 1 1 0% !important;
       min-width: 0 !important;
+      padding: 0 10px !important;
     }
 
+    /* 예전엔 번호·손상명(1줄) + 부위·사진장수·시간·신뢰도(2줄)로 나뉘어 있었는데,
+       "손상내용만 필요하다"는 요청에 따라 손상내용 한 줄로 합친다. */
     .log-item .log-title-row {
       display: flex;
       align-items: center;
       gap: 6px;
       font-size: 13px;
-      font-weight: 700;
+      font-weight: 600;
+      white-space: normal;
+      line-height: 1.4;
     }
 
-    .log-item .log-sub-row {
-      font-size: 11px;
-      color: #8E8E93;
-      margin-top: 2px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
+    .log-item .log-sub-row { display: none !important; }
 
     /* 복잡한 4버튼 그리드 -> 인라인 컴팩트 액션으로 간소화 */
     .log-item .log-btn-group {
       display: flex !important;
       gap: 4px !important;
       flex-shrink: 0 !important;
+      padding: 0 10px !important;
     }
 
     .log-item .log-action-btn {
@@ -2195,6 +2245,12 @@
          모달 그대로 사용 — inspectorInlineSlot은 그때는 항상 비어있고 숨겨져 있다. -->
     <div id="inspectorInlineSlot" style="display:none;"></div>
   </div>
+</div>
+
+<!-- 기록목록 카드 사진 전체화면 뷰어 -->
+<div id="photoLightbox">
+  <button type="button" class="lightbox-close" id="closeLightbox" aria-label="닫기">✕</button>
+  <img id="photoLightboxImg" src="" alt="">
 </div>
 
 <!-- Capture Modal -->
@@ -2861,7 +2917,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v66';
+  const PS_BUILD = 'v67';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -14877,6 +14933,26 @@
     saveState();
   }
 
+  // 기록목록 카드의 큰 사진을 클릭했을 때 뜨는 가벼운 전체화면 뷰어 — 편집화면
+  // 없이 사진만 크게 본다(previewModal의 손상입력 폼과는 완전히 별개).
+  const photoLightbox = document.getElementById('photoLightbox');
+  const photoLightboxImg = document.getElementById('photoLightboxImg');
+  function openPhotoLightbox(src){
+    if(!src || !photoLightbox || !photoLightboxImg) return;
+    photoLightboxImg.src = src;
+    photoLightbox.style.display = 'flex';
+  }
+  function closePhotoLightbox(){
+    if(!photoLightbox) return;
+    photoLightbox.style.display = 'none';
+    photoLightboxImg.src = '';
+  }
+  if(photoLightbox){
+    photoLightbox.addEventListener('click', closePhotoLightbox);
+    document.getElementById('closeLightbox').addEventListener('click', (e)=>{ e.stopPropagation(); closePhotoLightbox(); });
+    photoLightboxImg.addEventListener('click', (e)=> e.stopPropagation());
+  }
+
   function renderLogItemDesktop(m){
     const item = document.createElement('div');
     item.className = 'log-item' + (activeMarkerId === m.id ? ' selected' : '');
@@ -14892,53 +14968,60 @@
     });
 
     const photos = m.photos || [];
-    let rep = null;
-    for(const p of photos){ if(p.damages && p.damages.length){ rep = p.damages[0]; break; } }
+    const allDamages = [];
+    photos.forEach(p => (p.damages || []).forEach(d => allDamages.push(d)));
+    const rep = allDamages.find(d => d.damageType) || null;
     const hasPhoto = photos.length > 0;
+    const status = computePointStatus(m);
 
-    // 1. 썸네일
+    // 1. 사진(크게) — 클릭하면 카드 클릭(위치이동)과 별개로 전체화면 사진 뷰어가 뜬다.
+    const photoWrap = document.createElement('div');
+    photoWrap.className = 'log-photo-wrap';
+
     let thumb;
     if(hasPhoto){
       thumb = document.createElement('img');
       thumb.className = 'log-thumb';
       thumb.src = photos[0].src;
       thumb.alt = '지점 ' + m.num;
+      thumb.addEventListener('click', (e)=>{
+        e.stopPropagation();
+        openPhotoLightbox(photos[0].src);
+      });
     } else {
       thumb = document.createElement('div');
       thumb.className = 'log-thumb placeholder';
       thumb.textContent = '—';
     }
-    item.appendChild(thumb);
+    photoWrap.appendChild(thumb);
 
-    // 2. 지점 정보
+    const badge = document.createElement('div');
+    badge.className = 'log-photo-badge';
+    const statusDot = document.createElement('span');
+    statusDot.className = 'log-status-dot ' + status;
+    statusDot.title = { 'status-danger':'사진 없음', 'status-warn':'손상정보 미입력', 'status-ok':'완료' }[status];
+    badge.appendChild(statusDot);
+    badge.appendChild(document.createTextNode('#' + m.num));
+    photoWrap.appendChild(badge);
+
+    item.appendChild(photoWrap);
+
+    // 2. 손상내용 한 줄만 — 부위·사진장수·시간·신뢰도 등 부가정보는 뺐다(요청 반영).
     const info = document.createElement('div');
     info.className = 'log-info';
 
     const titleRow = document.createElement('div');
     titleRow.className = 'log-title-row';
-    const statusDot = document.createElement('span');
-    statusDot.className = 'log-status-dot ' + computePointStatus(m);
-    statusDot.title = { 'status-danger':'사진 없음', 'status-warn':'손상정보 미입력', 'status-ok':'완료' }[computePointStatus(m)];
-    const idx = document.createElement('span');
-    idx.className = 'log-index';
-    idx.style.fontFamily = "'JetBrains Mono', monospace";
-    idx.textContent = '#' + m.num;
     const dmg = document.createElement('span');
     dmg.className = 'log-damage';
-    dmg.textContent = (rep && rep.damageType) || (hasPhoto ? '손상 미입력' : '미촬영');
-    titleRow.appendChild(statusDot);
-    titleRow.appendChild(idx);
+    if(rep){
+      dmg.textContent = rep.damageType + (rep.component ? ' (' + rep.component + ')' : '') + (rep.measurement ? ', ' + rep.measurement : '') +
+        (allDamages.length > 1 ? ' 외 ' + (allDamages.length - 1) + '건' : '');
+    } else {
+      dmg.textContent = hasPhoto ? '손상 미입력' : '미촬영';
+    }
     titleRow.appendChild(dmg);
-
-    const subRow = document.createElement('div');
-    subRow.className = 'log-sub-row';
-    const compText = (rep && rep.component) || '부위 미입력';
-    const t = m.createdAt ? new Date(m.createdAt).toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit'}) : '기록됨';
-    const trust = computeLocationTrust(m);
-    subRow.textContent = compText + ' · ' + (hasPhoto ? photos.length + '장' : '미촬영') + ' · ' + t + (trust ? ' (' + trust + ')' : '');
-
     info.appendChild(titleRow);
-    info.appendChild(subRow);
     item.appendChild(info);
 
     // 3. 압축 액션 버튼 그룹 (촬영/위치/삭제)
