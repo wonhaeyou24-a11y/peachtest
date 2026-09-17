@@ -555,6 +555,12 @@
     cursor: crosshair;
     touch-action: none;
   }
+  /* 도면 여러 장을 드래그앤드롭으로 끌어다 놓을 때 시각적 피드백 */
+  .stage.drag-over{
+    outline: 3px dashed var(--amber);
+    outline-offset: -3px;
+    background-color: var(--amber-dim);
+  }
   @media (max-width: 880px) {
     /* 4. 안내 텍스트 바 */
     .stage-head {
@@ -2797,7 +2803,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v63';
+  const PS_BUILD = 'v64';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -14271,6 +14277,103 @@
     pendingNewDrawing = true;
     fileInput.click();
   }
+
+  // 도면 여러 장을 한 번에 드래그앤드롭으로 불러온다 — "도면 추가"를 파일 개수만큼
+  // 반복 클릭하지 않아도 되게 한다. fileInput의 change 핸들러(클릭으로 도면을 불러올
+  // 때 쓰는 기존 경로)는 "현재 도면 교체" 등 3갈래 분기가 있어 손대지 않고, 여기서는
+  // 항상 "새 도면으로 추가"하는 경우만 별도 함수로 처리한다(기존 첫 도면/교체 흐름과
+  // 완전히 분리돼 있어 기존 클릭 방식 동작에는 영향이 없다).
+  async function importDroppedDrawingFile(file){
+    if(!currentSiteId){
+      const site = { id: genId(), name: '시설물 ' + (sites.length + 1), savedAt: new Date().toISOString(), baseImageSrc:null, markers:[], nextNum:1, projectId: currentProjectId };
+      sites.push(site);
+      currentSiteId = site.id;
+      drawings = [];
+      currentDrawingId = null;
+    }
+    const check = await validateUploadedFile(file, ['image', 'pdf'], 100);
+    if(!check.ok){ alert('불러올 수 없는 도면 파일입니다: ' + file.name + '\n' + check.reason); return; }
+
+    const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+    let convertedPages = [];
+    try{
+      if(isPdf){
+        convertedPages = await pdfToDataUrls(file, 2000);
+        if(!convertedPages || convertedPages.length === 0){
+          alert('PDF에서 도면 이미지를 추출하지 못했습니다: ' + file.name);
+          return;
+        }
+      } else {
+        const dataUrl = await fileToDataUrl(file, 2000);
+        convertedPages = [{ pageNum: 1, dataUrl, totalPages: 1 }];
+      }
+    }catch(err){
+      alert('도면 파일 변환 중 오류가 발생했습니다(' + file.name + '): ' + (err.message || err));
+      return;
+    }
+
+    const baseNameInput = file.name.replace(/\.[^/.]+$/, '').trim();
+    const defaultName = baseNameInput || ('도면 ' + (drawings.length + 1));
+    // 드래그앤드롭으로 여러 장을 한 번에 끌어다 놓으면 파일마다 prompt()가 뜨는데,
+    // 브라우저가 (반복된 팝업 등의 이유로) prompt 자체를 막아 예외를 던지는 경우가
+    // 있을 수 있다 — 그런 경우에도 파일명 기반 기본 이름으로 조용히 계속 진행한다.
+    let userBaseName = defaultName;
+    try{
+      userBaseName = (prompt('새 도면의 이름을 입력하세요 (예: 정면도, 평면도, 1층 도면) — ' + file.name, defaultName) || defaultName).trim() || defaultName;
+    }catch(e){ userBaseName = defaultName; }
+
+    let firstNewId = null;
+    convertedPages.forEach((page, pIdx) => {
+      const dName = convertedPages.length > 1 ? `${userBaseName} (${page.pageNum}p)` : userBaseName;
+      const d = {
+        id: genId(),
+        name: dName,
+        type: isPdf ? 'PDF 도면' : '',
+        order: drawings.length + 1,
+        imageSrc: page.dataUrl,
+        description: '',
+        createdAt: new Date().toISOString()
+      };
+      drawings.push(d);
+      if(pIdx === 0) firstNewId = d.id;
+    });
+    if(firstNewId){
+      currentDrawingId = firstNewId;
+      const activeD = drawings.find(x => x.id === firstNewId);
+      baseImageSrc = activeD ? activeD.imageSrc : convertedPages[0].dataUrl;
+    }
+  }
+
+  stage.addEventListener('dragover', (e)=>{
+    if(currentMode !== 'image') return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    stage.classList.add('drag-over');
+  });
+  stage.addEventListener('dragleave', (e)=>{
+    if(e.target === stage) stage.classList.remove('drag-over');
+  });
+  stage.addEventListener('drop', async (e)=>{
+    if(currentMode !== 'image') return;
+    e.preventDefault();
+    stage.classList.remove('drag-over');
+    const files = Array.from((e.dataTransfer && e.dataTransfer.files) || [])
+      .filter(f => f.type === 'application/pdf' || f.type.startsWith('image/') || /\.pdf$/i.test(f.name));
+    if(files.length === 0) return;
+    // 파일마다 이름 확인 prompt()가 뜨므로(브라우저 특성상 동시에 여러 개 못 띄움)
+    // 반드시 순서대로 하나씩 처리한다 — Promise.all로 동시에 돌리면 안 됨.
+    for(const file of files){
+      await importDroppedDrawingFile(file);
+    }
+    renderBaseImage();
+    renderMarkers();
+    renderDrawingTabs();
+    renderLog();
+    updateCounts();
+    refreshStageHeader();
+    saveState();
+    updatePcExplorerDocking();
+  });
 
   function openDrawingOptions(d){
     const action = prompt(
