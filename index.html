@@ -2018,6 +2018,7 @@
       font-family: 'JetBrains Mono', monospace;
     }
     .log-item .log-photo-badge .log-status-dot { margin-right: 0; }
+    .log-item .log-photo-wrap .log-copy-btn { position: absolute; top: 6px; right: 6px; }
 
     .log-item .log-info {
       flex: 1 1 0% !important;
@@ -2094,6 +2095,29 @@
     .log-status-dot.status-ok { background: #34C759; }
     .log-status-dot.status-warn { background: var(--amber, #F2A93B); }
     .log-status-dot.status-danger { background: #FF3B30; }
+
+    /* 카드에서 바로 복사해서 보고서에 붙여넣기 위한 내용 블록 — 클릭해도 카드
+       클릭(위치이동)이 안 걸리게 해서 텍스트를 자유롭게 드래그 선택할 수 있고,
+       옆의 📋 버튼을 누르면 선택 없이 바로 클립보드에 복사된다. */
+    .log-copy-content {
+      padding: 6px 10px 2px !important;
+      cursor: text;
+      user-select: text;
+    }
+    .log-copy-line {
+      font-size: 12px;
+      color: var(--text);
+      line-height: 1.5;
+      white-space: normal;
+    }
+    .log-copy-line.muted { color: var(--muted); }
+    .log-copy-btn {
+      flex-shrink: 0;
+      background: rgba(0,0,0,0.55); color:#fff; border:none;
+      width: 22px; height: 22px; border-radius: 50%;
+      font-size: 11px; cursor: pointer;
+      display:flex; align-items:center; justify-content:center;
+    }
 
     /* ---- 표(스프레드시트) 보기 — 보고서 작성 시 지점을 쭉 훑어보기 위한 옵션 화면.
        기존 카드 목록(.log-item)은 그대로 두고, 토글로 바꿔 끼우는 별도 뷰다. ---- */
@@ -2237,6 +2261,7 @@
       <span style="display:flex; align-items:center; gap:6px;">기록 목록
         <button class="ghost icon-btn" id="btnToggleLogFilter" title="검색 · 중요도 필터" style="padding:2px 7px; font-size:12px;">🔍</button>
         <button class="ghost icon-btn" id="btnToggleLogTable" title="표로 보기 (사진 포함 · 보고서 참고자료용)" style="padding:2px 7px; font-size:12px; display:none;">▦ 표로</button>
+        <button class="ghost icon-btn" id="btnCopyAllLog" title="목록 전체를 표 형식(탭 구분)으로 복사 — 엑셀·워드에 바로 붙여넣기" style="padding:2px 7px; font-size:12px; display:none;">📋 전체 복사</button>
         <button class="ghost icon-btn" id="btnToggleInspector" title="Inspector 접기/펼치기" style="padding:2px 7px; font-size:12px; display:none;">▶</button>
       </span>
       <span id="sideCount">0 / 0 촬영됨</span>
@@ -2931,7 +2956,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v68';
+  const PS_BUILD = 'v69';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -5264,6 +5289,7 @@
     if(typeof updateInspectorCollapse === 'function') updateInspectorCollapse();
     if(typeof updateWideModeButton === 'function') updateWideModeButton();
     if(typeof updateLogTableButton === 'function') updateLogTableButton();
+    if(typeof updateCopyAllLogButton === 'function') updateCopyAllLogButton();
   }
 
   // STEP15 태블릿 최적화: 기존 .layout 2열 그리드가 이미 880px부터 활성화되므로,
@@ -5353,6 +5379,42 @@
     if(typeof renderLog === 'function') renderLog();
   });
   window.addEventListener('resize', updateLogTableButton);
+
+  // "📋 전체 복사" — 지금 보이는(필터·정렬 반영) 지점 전체를 번호·구분·구간·
+  // 부위·손상명·규모 열의 탭 구분 표로 클립보드에 담는다. 엑셀·워드 표에
+  // 그대로 붙여넣을 수 있다(각 셀이 탭으로 구분돼 있으면 대부분의 표 프로그램이
+  // 자동으로 열을 나눠 채운다).
+  const btnCopyAllLog = document.getElementById('btnCopyAllLog');
+  function updateCopyAllLogButton(){
+    if(!btnCopyAllLog) return;
+    btnCopyAllLog.style.display = ((appWorkMode === 'office') && window.innerWidth > 880) ? '' : 'none';
+  }
+  if(btnCopyAllLog) btnCopyAllLog.addEventListener('click', ()=>{
+    const filtered = markers.filter(markerMatchesFilter);
+    const sorted = filtered.slice().sort((a,b)=>
+      logSortMode === 'recent' ? (b.createdAt||'').localeCompare(a.createdAt||'') : a.num-b.num
+    );
+    const rows = [['번호','구분','구간','부위','손상명','규모'].join('\t')];
+    sorted.forEach(m=>{
+      const photos = m.photos || [];
+      const allDamages = [];
+      photos.forEach(p => (p.damages || []).forEach(d => allDamages.push(d)));
+      if(allDamages.length === 0){
+        rows.push(['#'+m.num, '-', '-', '-', (photos.length ? '손상정보 미입력' : '미촬영'), '-'].join('\t'));
+      } else {
+        allDamages.forEach(d=>{
+          const origin = d.damageOrigin === 'NEW' ? '신규' : d.damageOrigin === 'EXISTING' ? '기존' : '-';
+          rows.push(['#'+m.num, origin, d.section||'-', d.component||'-', d.damageType||'-', d.measurement||'-'].join('\t'));
+        });
+      }
+    });
+    navigator.clipboard.writeText(rows.join('\n')).then(()=>{
+      const orig = btnCopyAllLog.textContent;
+      btnCopyAllLog.textContent = '✅ 복사됨';
+      setTimeout(()=>{ btnCopyAllLog.textContent = orig; }, 1200);
+    }).catch(()=> alert('복사에 실패했습니다. 브라우저의 클립보드 권한을 확인해주세요.'));
+  });
+  window.addEventListener('resize', updateCopyAllLogButton);
 
   // 안전장치: 앞으로 다른 버튼이 새로 추가되면서 siteModal을 숨기고 다시 켜주는 걸
   // 또 깜빡할 수 있다(실제로 두 번 있었다 — "+시설물"과 "열기" 버튼). 매번 호출부를
@@ -14998,16 +15060,18 @@
       item.style.borderLeft = '4px solid ' + surveyorColorFor(m.createdBy);
       item.title = '조사자: ' + surveyorLabelFor(m.createdBy);
     }
-    // 한 번 클릭하면 지점 위치로 이동/강조만 하고, 상세창은 아래 "상세" 버튼을
-    // 눌러야 열리도록 분리 — 목록을 훑어보다 실수로 상세창이 열리는 것을 방지.
+    // 한 번 클릭하면 지점 위치로 이동/강조만 한다. 상세(전체 편집)창은 이제
+    // 버튼이 아니라 더블클릭으로 연다 — 카드에서 바로 내용을 읽고 복사하는 게
+    // 주 용도라, 자주 안 쓰는 편집 진입은 한 단계 뒤로 뺐다(재촬영·위치이동·삭제는
+    // 상세창 안에 그대로 다 있음 — 기능이 없어진 게 아니라 접근 경로만 바뀜).
     item.addEventListener('click', ()=>{
       focusRecordPoint(m.id);
     });
+    item.addEventListener('dblclick', ()=> openPreview(m.id));
 
     const photos = m.photos || [];
     const allDamages = [];
     photos.forEach(p => (p.damages || []).forEach(d => allDamages.push(d)));
-    const rep = allDamages.find(d => d.damageType) || null;
     const hasPhoto = photos.length > 0;
     const status = computePointStatus(m);
 
@@ -15041,59 +15105,55 @@
     badge.appendChild(document.createTextNode('#' + m.num));
     photoWrap.appendChild(badge);
 
+    // 사진 위 오른쪽 모서리 "📋 복사" — 이 지점의 구분·구간·손상명·규모를
+    // 드래그 선택 없이 바로 클립보드로 복사해서 보고서에 붙여넣을 수 있게.
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'log-copy-btn';
+    copyBtn.textContent = '📋';
+    copyBtn.title = '이 지점 내용 복사';
+    copyBtn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const text = '#' + m.num + '\n' + formatDamageLinesForCopy(allDamages, hasPhoto).join('\n');
+      navigator.clipboard.writeText(text).then(()=>{
+        copyBtn.textContent = '✅';
+        setTimeout(()=>{ copyBtn.textContent = '📋'; }, 1000);
+      }).catch(()=> alert('복사에 실패했습니다. 브라우저의 클립보드 권한을 확인해주세요.'));
+    });
+    photoWrap.appendChild(copyBtn);
+
     item.appendChild(photoWrap);
 
-    // 2. 손상내용 한 줄만 — 부위·사진장수·시간·신뢰도 등 부가정보는 뺐다(요청 반영).
-    const info = document.createElement('div');
-    info.className = 'log-info';
-
-    const titleRow = document.createElement('div');
-    titleRow.className = 'log-title-row';
-    const dmg = document.createElement('span');
-    dmg.className = 'log-damage';
-    if(rep){
-      dmg.textContent = rep.damageType + (rep.component ? ' (' + rep.component + ')' : '') + (rep.measurement ? ', ' + rep.measurement : '') +
-        (allDamages.length > 1 ? ' 외 ' + (allDamages.length - 1) + '건' : '');
-    } else {
-      dmg.textContent = hasPhoto ? '손상 미입력' : '미촬영';
-    }
-    titleRow.appendChild(dmg);
-    info.appendChild(titleRow);
-    item.appendChild(info);
-
-    // 3. 압축 액션 버튼 그룹 (촬영/위치/삭제)
-    const btnGroup = document.createElement('div');
-    btnGroup.className = 'log-btn-group';
-    btnGroup.addEventListener('click', (e)=> e.stopPropagation());
-
-    const detailBtn = document.createElement('button');
-    detailBtn.className = 'log-action-btn accent';
-    detailBtn.textContent = '상세';
-    detailBtn.addEventListener('click', ()=> openPreview(m.id));
-    btnGroup.appendChild(detailBtn);
-
-    const photoBtn = document.createElement('button');
-    photoBtn.className = 'log-action-btn';
-    photoBtn.textContent = hasPhoto ? '재촬영' : '촬영';
-    photoBtn.addEventListener('click', ()=> openCapture(m.id));
-    btnGroup.appendChild(photoBtn);
-
-    const locBtn = document.createElement('button');
-    locBtn.className = 'log-action-btn';
-    locBtn.textContent = '위치';
-    locBtn.addEventListener('click', ()=>{
-      focusRecordPoint(m.id);
+    // 2. 손상내용(구분·구간·손상명·규모)만 — 드래그로 직접 선택해서 복사할 수도
+    // 있다(클릭해도 카드 클릭이 안 걸리게 stopPropagation 처리).
+    const contentBlock = document.createElement('div');
+    contentBlock.className = 'log-copy-content';
+    contentBlock.addEventListener('mousedown', (e)=> e.stopPropagation());
+    contentBlock.addEventListener('click', (e)=> e.stopPropagation());
+    const lines = formatDamageLinesForCopy(allDamages, hasPhoto);
+    lines.forEach((text, i)=>{
+      const line = document.createElement('div');
+      line.className = 'log-copy-line' + (allDamages.length === 0 ? ' muted' : '');
+      line.textContent = text;
+      contentBlock.appendChild(line);
     });
-    btnGroup.appendChild(locBtn);
+    item.appendChild(contentBlock);
 
-    const delBtn = document.createElement('button');
-    delBtn.className = 'log-action-btn danger';
-    delBtn.textContent = '삭제';
-    delBtn.addEventListener('click', ()=> deleteMarker(m.id));
-    btnGroup.appendChild(delBtn);
-
-    item.appendChild(btnGroup);
     log.appendChild(item);
+  }
+
+  // 카드/전체 복사가 공유하는 포맷터 — "구분 · 구간 · 손상명(부위), 규모" 한 줄씩.
+  function formatDamageLinesForCopy(allDamages, hasPhoto){
+    if(!allDamages || allDamages.length === 0){
+      return [ hasPhoto ? '손상정보 미입력' : '미촬영' ];
+    }
+    return allDamages.map(d=>{
+      const origin = d.damageOrigin === 'NEW' ? '신규' : d.damageOrigin === 'EXISTING' ? '기존' : '-';
+      const type = d.damageType || '(손상명 없음)';
+      const comp = d.component ? ' (' + d.component + ')' : '';
+      const meas = d.measurement ? ', ' + d.measurement : '';
+      return origin + ' · ' + (d.section || '-') + ' · ' + type + comp + meas;
+    });
   }
 
   // ---------- camera capture ----------
