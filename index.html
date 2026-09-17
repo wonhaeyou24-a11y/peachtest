@@ -156,6 +156,10 @@
     max-width: 1400px;
     margin: 0 auto;
   }
+  /* PC 전용 "화면 넓게" 옵션 — 큰 모니터에서 도면 캔버스를 더 키우고 싶을 때만
+     켜는 선택 사항이다(기본은 지금처럼 1400px로 유지). 사이드 칼럼은 그대로 두고
+     전체 폭 제한만 풀어서, 도면 칸(1fr)이 남는 공간을 그대로 가져가게 한다. */
+  .layout.wide-mode{ max-width: none; }
   @media (max-width: 880px){
     /* 1. 검색창 및 중요도 필터칩 완전 제거 (ID 및 하위 요소 강제 숨김) */
     #logFilter,
@@ -2042,6 +2046,7 @@
     <button class="primary" id="btnNewSite" title="새 시설물 추가">＋ 시설물</button>
     <button class="ghost" id="btnSiteList" title="저장된 시설물 목록 보기">시설물 목록</button>
     <button class="ghost office-only" id="btnToggleExplorer" title="탐색기 접기/펼치기" style="display:none;">◀ 탐색기</button>
+    <button class="ghost office-only" id="btnToggleWideMode" title="화면을 더 넓게 써서 도면 캔버스 확대" style="display:none;">⤢ 화면 넓게</button>
     <button class="ghost" id="btnResetImage" title="현재 시설물의 이미지를 불러오거나 교체">이미지</button>
   </div>
   <input type="file" id="fileInput" accept="image/*,application/pdf,.pdf">
@@ -2803,7 +2808,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v64';
+  const PS_BUILD = 'v65';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -3070,6 +3075,10 @@
   let currentDrawingId = null;
   let nextNum = 1;
   let activeMarkerId = null;
+  // PC 편의: 방금 한 지점 찍기/삭제만 Ctrl+Z로 되돌릴 수 있게(1단계만 기억 —
+  // 손상입력·구간변경 등 다른 편집까지 되돌리는 범용 undo는 아니다). 실행되면 즉시
+  // 비워서 두 번 연속 Ctrl+Z를 눌러도 같은 동작이 반복 취소되지 않게 한다.
+  let lastPointAction = null; // { type:'create', markerId } | { type:'delete', trashItem }
   let mediaStream = null;
   let currentMode = 'image'; // 'image' | 'map'
 
@@ -5129,6 +5138,7 @@
     document.querySelectorAll('.office-only').forEach(el=>{ el.style.display = ''; });
     updatePcExplorerDocking();
     if(typeof updateInspectorCollapse === 'function') updateInspectorCollapse();
+    if(typeof updateWideModeButton === 'function') updateWideModeButton();
   }
 
   // STEP15 태블릿 최적화: 기존 .layout 2열 그리드가 이미 880px부터 활성화되므로,
@@ -5180,6 +5190,25 @@
   });
   window.addEventListener('resize', updateInspectorCollapse);
   window.addEventListener('resize', ()=>{ if(typeof renderLog === 'function') renderLog(); });
+
+  // "화면 넓게" — 큰 모니터에서 .layout의 1400px 폭 제한을 풀어 도면 캔버스를
+  // 더 키우는 선택 옵션. Explorer/Inspector 접기와 마찬가지로 새로고침하면
+  // 기본값(꺼짐)으로 돌아간다(다른 두 토글도 저장하지 않는 것과 동일하게 맞춤).
+  const btnToggleWideMode = document.getElementById('btnToggleWideMode');
+  function updateWideModeButton(){
+    if(!btnToggleWideMode || !mainLayout) return;
+    const canShow = (appWorkMode === 'office') && window.innerWidth >= 880;
+    btnToggleWideMode.style.display = canShow ? '' : 'none';
+    if(!canShow){ mainLayout.classList.remove('wide-mode'); return; }
+    const wide = document.body.classList.contains('wide-mode-on');
+    mainLayout.classList.toggle('wide-mode', wide);
+    btnToggleWideMode.textContent = wide ? '⤡ 기본 폭' : '⤢ 화면 넓게';
+  }
+  if(btnToggleWideMode) btnToggleWideMode.addEventListener('click', ()=>{
+    document.body.classList.toggle('wide-mode-on');
+    updateWideModeButton();
+  });
+  window.addEventListener('resize', updateWideModeButton);
 
   // 안전장치: 앞으로 다른 버튼이 새로 추가되면서 siteModal을 숨기고 다시 켜주는 걸
   // 또 깜빡할 수 있다(실제로 두 번 있었다 — "+시설물"과 "열기" 버튼). 매번 호출부를
@@ -13847,7 +13876,9 @@
     if(!m) return;
     if(!confirm('지점 ' + m.num + '을(를) 삭제할까요?\n삭제해도 "휴지통"에서 복원할 수 있습니다.')) return;
     markers = markers.filter(x => x.id !== markerId);
-    trash.push({ type:'marker', data: m, deletedAt: new Date().toISOString() });
+    const trashItem = { type:'marker', data: m, deletedAt: new Date().toISOString() };
+    trash.push(trashItem);
+    lastPointAction = { type:'delete', trashItem };
     try{ await idbDeleteInspectionPoint(markerId, false); }catch(e){}
     logActivity('지점 삭제', '지점 ' + m.num + ' (휴지통으로 이동)');
     if(movingMarkerId === markerId) cancelMoveMode();
@@ -13858,6 +13889,62 @@
     saveState();
     if(previewModal.style.display !== 'none'){ previewModal.style.display = 'none'; }
   }
+
+  // ---------- PC 편의: Ctrl+Z(방금 지점 찍기/삭제 취소) + 방향키(선택 지점 미세이동) ----------
+  async function undoLastPointAction(){
+    const action = lastPointAction;
+    if(!action) return;
+    lastPointAction = null; // 1단계만 기억하는 되돌리기이므로 실행 즉시 비운다.
+    if(action.type === 'create'){
+      const m = markers.find(x => x.id === action.markerId);
+      if(!m) return;
+      if(activeMarkerId === action.markerId) closeCaptureModal();
+      markers = markers.filter(x => x.id !== action.markerId);
+      try{ await idbDeleteInspectionPoint(action.markerId, true); }catch(e){}
+      logActivity('되돌리기(Ctrl+Z)', '지점 ' + m.num + ' 찍기 취소');
+      renderMarkers(); renderMapMarkers(); renderLog(); updateCounts();
+      saveState();
+    } else if(action.type === 'delete'){
+      if(!trash.includes(action.trashItem)) return; // 이미 휴지통 화면 등에서 다른 방식으로 처리됨
+      restoreTrashItem(action.trashItem);
+    }
+  }
+
+  const NUDGE_ARROW_DELTA = { ArrowUp:[0,-1], ArrowDown:[0,1], ArrowLeft:[-1,0], ArrowRight:[1,0] };
+  let nudgeSaveTimer = null;
+  document.addEventListener('keydown', (e)=>{
+    const activeTag = (document.activeElement && document.activeElement.tagName) || '';
+    const isTypingContext = /INPUT|TEXTAREA|SELECT/.test(activeTag) || (document.activeElement && document.activeElement.isContentEditable);
+    if(isTypingContext) return; // 텍스트 입력 중에는 브라우저 기본 동작(되돌리기·커서 이동)을 건드리지 않는다.
+
+    // Ctrl/Cmd+Z — 방금 지점 찍기/삭제 취소
+    if((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && !e.shiftKey){
+      if(!lastPointAction) return;
+      e.preventDefault();
+      undoLastPointAction();
+      return;
+    }
+
+    // 방향키 — 도면모드에서 선택된(하이라이트된) 지점을 미세 이동. 기록목록에서 지점을
+    // 클릭하면(상세창 없이) 도면에 표시만 되므로, 그 상태에서 화살표로 정밀 배치할 수 있다.
+    // Shift+방향키 = 큰 폭(1%), 그냥 방향키 = 미세 폭(0.15%). 지도모드/GPS 지점은 대상 아님.
+    if(e.key in NUDGE_ARROW_DELTA){
+      if(currentMode !== 'image' || !activeMarkerId) return;
+      const m = markers.find(x => x.id === activeMarkerId);
+      if(!m || m.xPct == null) return;
+      e.preventDefault();
+      const [dx, dy] = NUDGE_ARROW_DELTA[e.key];
+      const step = e.shiftKey ? 1 : 0.15;
+      m.xPct = Math.min(100, Math.max(0, m.xPct + dx * step));
+      m.yPct = Math.min(100, Math.max(0, m.yPct + dy * step));
+      renderMarkers();
+      clearTimeout(nudgeSaveTimer);
+      nudgeSaveTimer = setTimeout(()=>{
+        idbPutInspectionPoint(m, currentSiteObj()).catch(()=>{});
+        saveState();
+      }, 400);
+    }
+  });
 
   // ---------- 지점 위치 이동 모드 ----------
   let movingMarkerId = null;
@@ -14001,7 +14088,9 @@
       cancelMoveMode();
       return;
     }
-    commitNewMarker(newMarkerBase({ xPct, yPct, drawingId: currentDrawingId }));
+    const newImgMarker = newMarkerBase({ xPct, yPct, drawingId: currentDrawingId });
+    lastPointAction = { type:'create', markerId: newImgMarker.id };
+    commitNewMarker(newImgMarker);
   }
 
   // ---------- 조사자별 색상 구분 ----------
@@ -14135,6 +14224,7 @@
         return;
       }
       const marker = newMarkerBase({ lat: e.latlng.lat, lng: e.latlng.lng });
+      lastPointAction = { type:'create', markerId: marker.id };
       commitNewMarker(marker);
     });
 
@@ -14417,6 +14507,7 @@
   btnAddAtGps.addEventListener('click', ()=>{
     if(!lastGps){ alert('아직 GPS 위치를 확인하지 못했습니다. 잠시 후 다시 시도해주세요.'); return; }
     const marker = newMarkerBase({ lat: lastGps.lat, lng: lastGps.lng }, 'device-gps');
+    lastPointAction = { type:'create', markerId: marker.id };
     commitNewMarker(marker);
   });
 
