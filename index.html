@@ -521,6 +521,8 @@
   /* 빌드 버전 표시 — PC는 상단 stage-head 우측, 모바일은 화면 하단 우측에 작게 */
   #buildTag{ flex:0 0 auto; font-size:10px; color:var(--muted); opacity:0.55; letter-spacing:0.3px; }
   #buildTagMobile{ display:none; }
+  /* 개발자 표시 — 모바일 도면모드 화면 하단 왼쪽 모서리, 버전 표시(우측)와 짝을 이룸 */
+  #devTagMobile{ display:none; }
   @media (max-width: 880px){
     #buildTag{ display:none; }
     #buildTagMobile{
@@ -531,6 +533,14 @@
       background:rgba(255,255,255,0.62); padding:1px 6px; border-radius:7px;
     }
     body.is-map-mode #buildTagMobile{ display:none; }
+    #devTagMobile{
+      display:block; position:fixed; left:8px;
+      bottom:calc(4px + env(safe-area-inset-bottom));
+      z-index:350; pointer-events:none;
+      font-size:10px; color:var(--muted); opacity:0.5;
+      background:rgba(255,255,255,0.62); padding:1px 6px; border-radius:7px;
+    }
+    body.is-map-mode #devTagMobile{ display:none; }
   }
   .stage{
     position: relative;
@@ -2053,6 +2063,7 @@
   <button type="button" class="map-action" id="mbtnPhoto"><span>📷</span>사진 촬영</button>
 </div>
 <div id="buildTagMobile"></div>
+<div id="devTagMobile">개발자 허원기</div>
 
 <div class="layout" id="mainLayout">
   <div class="stage-wrap">
@@ -2786,7 +2797,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v62';
+  const PS_BUILD = 'v63';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
