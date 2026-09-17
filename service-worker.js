@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-shot-v61-fix-extra-details-autoopen'; // 필요시 작성 섹션이 자꾸 자동으로 열리던 문제 수정
+const CACHE_NAME = 'point-shot-v62-remove-investigation-note-urgency'; // 지침 조사항목 문구·긴급도 칩 화면에서 제거
 // 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
 // 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
 // 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.
