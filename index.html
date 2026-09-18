@@ -2985,7 +2985,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v72';
+  const PS_BUILD = 'v73';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -15114,12 +15114,36 @@
     log.appendChild(item);
   }
 
+  // 도면(이미지) 모드에서도 지도 모드처럼 선택한 지점으로 화면을 이동/확대한다.
+  // 지도는 leafletMap.setView로 이미 되고 있었는데 도면 쪽엔 대응하는 게 없어서
+  // "카드 클릭 → 위치 확인"이 도면에서는 그 지점이 화면 밖에 있으면 안 통했다.
+  // 좌표 데이터(xPct/yPct)는 읽기만 하고 전혀 바꾸지 않는다.
+  function panImageToMarker(m){
+    if(!frameW || !frameH || m.xPct == null) return;
+    const sw = stage.clientWidth, sh = stage.clientHeight;
+    if(!sw || !sh) return;
+    const targetScale = Math.max(zScale, 1.5); // 이미 더 확대돼 있으면 그 배율 유지, 아니면 조금 확대
+    const contentX = (m.xPct / 100) * frameW;
+    const contentY = (m.yPct / 100) * frameH;
+    zScale = Math.min(ZMAX, Math.max(ZMIN, targetScale));
+    zTx = sw/2 - contentX * zScale;
+    zTy = sh/2 - contentY * zScale;
+    applyTransform();
+  }
+
   function focusRecordPoint(markerId){
     activeMarkerId = markerId;
     const m = markers.find(x => x.id === markerId);
     if(!m) return;
     if(m.xPct != null){
       if(currentMode !== 'image') switchMode('image');
+      // 지점이 지금 보고 있는 도면이 아니라 다른 도면 소속이면 그 도면으로 먼저 전환.
+      if(m.drawingId && m.drawingId !== currentDrawingId && drawings.some(d => d.id === m.drawingId)){
+        switchToDrawing(m.drawingId);
+      }
+      // 도면 전환/모드 전환 직후엔 이미지가 아직 로드 중일 수 있어(frameW/frameH 미확정),
+      // 지도 모드와 동일하게 한 틱 늦춰서 실행한다.
+      setTimeout(()=> panImageToMarker(m), 60);
     } else if(m.lat != null){
       if(currentMode !== 'map') switchMode('map');
       setTimeout(()=>{ if(leafletMap) leafletMap.setView([m.lat, m.lng], 19); }, 60);
@@ -15136,7 +15160,13 @@
     // querySelectorAll('[data-marker-id]')로 일반화 — 카드 목록(log의 직계 자식)은 물론
     // 표 보기(테이블 안에 중첩된 tr[data-marker-id])에서도 동일하게 선택 표시가 되게 한다.
     log.querySelectorAll('[data-marker-id]').forEach(el=>{
-      el.classList.toggle('selected', el.dataset.markerId === markerId);
+      const isSel = el.dataset.markerId === markerId;
+      el.classList.toggle('selected', isSel);
+      // 도면/지도에서 지점을 클릭했을 때도 목록에서 해당 카드가 화면 밖에 있으면
+      // 자동으로 스크롤해서 보여준다(이미 보이는 위치면 안 움직임 — block:'nearest').
+      if(isSel && typeof el.scrollIntoView === 'function'){
+        try{ el.scrollIntoView({ block:'nearest', behavior:'smooth' }); }catch(e){}
+      }
     });
   }
 
