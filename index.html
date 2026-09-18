@@ -2118,6 +2118,34 @@
       font-size: 11px; cursor: pointer;
       display:flex; align-items:center; justify-content:center;
     }
+    .log-copy-line { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .log-worklist-add-btn {
+      flex-shrink:0;
+      font-size: 10px; padding: 2px 7px; border-radius: 999px;
+      border: 1px solid var(--amber); background: var(--amber-dim); color: var(--amber-text);
+      font-weight: 700; cursor: pointer;
+    }
+    .log-worklist-add-btn.added {
+      border-color: #34C759; background: rgba(52,199,89,0.12); color: #1D7A34;
+    }
+
+    /* ---- 보고서 작업목록 화면 ---- */
+    .worklist-export-row { padding: 4px 10px 10px; }
+    .worklist-export-btn {
+      width: 100%; padding: 8px; border-radius: 8px; font-size: 13px; font-weight:700;
+      border: 1px solid var(--amber); background: var(--amber); color:#1a1206; cursor:pointer;
+    }
+    .worklist-export-btn:disabled { opacity:0.5; cursor:default; }
+    .worklist-group-title {
+      font-size: 12px; font-weight:700; color: var(--muted);
+      padding: 10px 10px 4px; border-top: 1px solid var(--line);
+    }
+    .worklist-row {
+      display:flex; align-items:center; gap:8px;
+      padding: 6px 10px; cursor:pointer; font-size:13px;
+    }
+    .worklist-row:hover { background: var(--panel-2); }
+    .worklist-row-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
     /* ---- 표(스프레드시트) 보기 — 보고서 작성 시 지점을 쭉 훑어보기 위한 옵션 화면.
        기존 카드 목록(.log-item)은 그대로 두고, 토글로 바꿔 끼우는 별도 뷰다. ---- */
@@ -2262,6 +2290,7 @@
         <button class="ghost icon-btn" id="btnToggleLogFilter" title="검색 · 중요도 필터" style="padding:2px 7px; font-size:12px;">🔍</button>
         <button class="ghost icon-btn" id="btnToggleLogTable" title="표로 보기 (사진 포함 · 보고서 참고자료용)" style="padding:2px 7px; font-size:12px; display:none;">▦ 표로</button>
         <button class="ghost icon-btn" id="btnCopyAllLog" title="목록 전체를 표 형식(탭 구분)으로 복사 — 엑셀·워드에 바로 붙여넣기" style="padding:2px 7px; font-size:12px; display:none;">📋 전체 복사</button>
+        <button class="ghost icon-btn" id="btnToggleWorklist" title="보고서 작업목록" style="padding:2px 7px; font-size:12px; display:none;">📑 작업목록</button>
         <button class="ghost icon-btn" id="btnToggleInspector" title="Inspector 접기/펼치기" style="padding:2px 7px; font-size:12px; display:none;">▶</button>
       </span>
       <span id="sideCount">0 / 0 촬영됨</span>
@@ -2956,7 +2985,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v70';
+  const PS_BUILD = 'v71';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -5290,6 +5319,7 @@
     if(typeof updateWideModeButton === 'function') updateWideModeButton();
     if(typeof updateLogTableButton === 'function') updateLogTableButton();
     if(typeof updateCopyAllLogButton === 'function') updateCopyAllLogButton();
+    if(typeof updateWorklistButton === 'function') updateWorklistButton();
   }
 
   // STEP15 태블릿 최적화: 기존 .layout 2열 그리드가 이미 880px부터 활성화되므로,
@@ -5415,6 +5445,16 @@
     }).catch(()=> alert('복사에 실패했습니다. 브라우저의 클립보드 권한을 확인해주세요.'));
   });
   window.addEventListener('resize', updateCopyAllLogButton);
+
+  // "📑 작업목록" — 보고서 작업목록 화면으로 전환하는 토글. 실제 렌더링(구간별
+  // 그룹핑 등)은 renderLogWorklist()가 담당하고, 여기서는 버튼 상태만 관리한다.
+  const btnToggleWorklist = document.getElementById('btnToggleWorklist');
+  if(btnToggleWorklist) btnToggleWorklist.addEventListener('click', ()=>{
+    logViewMode = logViewMode === 'worklist' ? 'cards' : 'worklist';
+    updateWorklistButton();
+    if(typeof renderLog === 'function') renderLog();
+  });
+  window.addEventListener('resize', updateWorklistButton);
 
   // 안전장치: 앞으로 다른 버튼이 새로 추가되면서 siteModal을 숨기고 다시 켜주는 걸
   // 또 깜빡할 수 있다(실제로 두 번 있었다 — "+시설물"과 "열기" 버튼). 매번 호출부를
@@ -14775,6 +14815,11 @@
   }
 
   function renderLog(){
+    // 보고서 작업목록 화면은 markers 검색/필터와 무관한 별도 뷰라 가장 먼저 분기한다.
+    if(window.innerWidth > 880 && logViewMode === 'worklist'){
+      renderLogWorklist();
+      return;
+    }
     const filtered = markers.filter(markerMatchesFilter);
     if(markers.length === 0){
       log.innerHTML = '<div class="log-empty">아직 지정된 지점이 없습니다. 왼쪽 이미지를 클릭해 첫 지점을 추가해보세요.</div>';
@@ -14814,6 +14859,116 @@
     photos.forEach(p => (p.damages || []).forEach(d => allDamages.push(d)));
     if(allDamages.length === 0 || allDamages.every(d => !d.damageType)) return 'status-warn';
     return 'status-ok';
+  }
+
+  // ---------- 보고서 작업목록 ----------
+  // 사진을 확인하다가 "이건 보고서에 넣어야겠다" 싶은 손상만 따로 모아두는 목록.
+  // 새 DB를 만들지 않고 site 객체에 아주 작은 배열 하나만 추가한다 — 실제 사진/
+  // 손상 데이터는 전혀 복제하지 않고, {markerId, photoIndex, damageIndex}로
+  // 원본을 가리키기만 한다(원본이 지워지면 내보내기에서 조용히 제외됨).
+  function ensureReportWorklist(site){
+    if(!site) return [];
+    if(!Array.isArray(site.reportWorklist)) site.reportWorklist = [];
+    return site.reportWorklist;
+  }
+  function worklistIndexOf(site, markerId, photoIndex, damageIndex){
+    const list = ensureReportWorklist(site);
+    return list.findIndex(it => it.markerId === markerId && it.photoIndex === photoIndex && it.damageIndex === damageIndex);
+  }
+  // 있으면 빼고 없으면 넣는다(토글). 반환값 true=지금 목록에 있음, false=방금 제거됨.
+  function toggleWorklistItem(markerId, photoIndex, damageIndex){
+    const site = currentSiteObj();
+    if(!site) return false;
+    const list = ensureReportWorklist(site);
+    const idx = worklistIndexOf(site, markerId, photoIndex, damageIndex);
+    if(idx >= 0){
+      list.splice(idx, 1);
+      saveState();
+      return false;
+    }
+    list.push({ id: genId(), markerId, photoIndex, damageIndex, addedAt: new Date().toISOString() });
+    saveState();
+    return true;
+  }
+  function updateWorklistButton(){
+    if(!btnToggleWorklist) return;
+    const canShow = (appWorkMode === 'office') && window.innerWidth > 880;
+    btnToggleWorklist.style.display = canShow ? '' : 'none';
+    if(!canShow && logViewMode === 'worklist') logViewMode = 'cards';
+    const site = currentSiteObj();
+    const count = site ? ensureReportWorklist(site).length : 0;
+    btnToggleWorklist.textContent = logViewMode === 'worklist' ? '◀ 목록으로' : ('📑 작업목록 (' + count + ')');
+    btnToggleWorklist.classList.toggle('active', logViewMode === 'worklist');
+  }
+
+  // 작업목록을 구간별로 묶어서 보여준다. 체크 해제 = 목록에서 제거(원본 손상은
+  // 그대로 있음, 다시 "+보고서"를 누르면 재등록 가능). 항목 클릭은 기존
+  // focusRecordPoint를 그대로 재사용해 지도/도면에서 위치를 확인할 수 있게 한다.
+  function renderLogWorklist(){
+    const site = currentSiteObj();
+    const list = site ? ensureReportWorklist(site) : [];
+    log.innerHTML = '';
+
+    const exportRow = document.createElement('div');
+    exportRow.className = 'worklist-export-row';
+    const exportBtn = document.createElement('button');
+    exportBtn.type = 'button';
+    exportBtn.className = 'worklist-export-btn';
+    exportBtn.textContent = '📄 구간별 표로 Word 내보내기';
+    exportBtn.disabled = list.length === 0;
+    exportBtn.addEventListener('click', ()=> exportWorklistReport());
+    exportRow.appendChild(exportBtn);
+    log.appendChild(exportRow);
+
+    if(list.length === 0){
+      const empty = document.createElement('div');
+      empty.className = 'log-empty';
+      empty.innerHTML = '보고서 작업목록이 비어 있습니다.<br>카드의 "+ 보고서" 버튼으로 손상항목을 추가해보세요.';
+      log.appendChild(empty);
+      return;
+    }
+
+    const groups = {};
+    const order = [];
+    list.forEach(entry=>{
+      const m = markers.find(x => x.id === entry.markerId);
+      const p = m && m.photos && m.photos[entry.photoIndex];
+      const d = p && p.damages && p.damages[entry.damageIndex];
+      const section = (d && d.section && d.section.trim()) || '구간 미지정';
+      if(!groups[section]){ groups[section] = []; order.push(section); }
+      groups[section].push({ entry, m, p, d });
+    });
+
+    order.forEach(section=>{
+      const groupTitle = document.createElement('div');
+      groupTitle.className = 'worklist-group-title';
+      groupTitle.textContent = section + ' (' + groups[section].length + '건)';
+      log.appendChild(groupTitle);
+
+      groups[section].forEach(({ entry, m, d })=>{
+        const row = document.createElement('div');
+        row.className = 'worklist-row';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = true;
+        cb.title = '체크 해제하면 작업목록에서 제거됩니다';
+        cb.addEventListener('click', (e)=>{
+          e.stopPropagation();
+          toggleWorklistItem(entry.markerId, entry.photoIndex, entry.damageIndex);
+          updateWorklistButton();
+          renderLogWorklist();
+        });
+        const label = document.createElement('span');
+        label.className = 'worklist-row-label';
+        label.textContent = (m ? '#' + m.num + ' · ' : '(삭제된 지점) · ') + (d ? (d.damageType || '(손상명 없음)') : '(삭제된 항목)');
+        row.appendChild(cb);
+        row.appendChild(label);
+        if(m){
+          row.addEventListener('click', ()=> focusRecordPoint(m.id));
+        }
+        log.appendChild(row);
+      });
+    });
   }
 
   // 표(스프레드시트) 보기 — 번호·사진·부위·손상명·규모·원인을 한 행에 펼쳐서
@@ -15071,7 +15226,11 @@
 
     const photos = m.photos || [];
     const allDamages = [];
-    photos.forEach(p => (p.damages || []).forEach(d => allDamages.push(d)));
+    const damageRefs = []; // allDamages와 같은 순서로 {pIdx,dIdx} 병렬 저장 — 보고서 작업목록 추가 시 원본 위치 식별용
+    photos.forEach((p, pIdx) => (p.damages || []).forEach((d, dIdx) => {
+      allDamages.push(d);
+      damageRefs.push({ pIdx, dIdx });
+    }));
     const hasPhoto = photos.length > 0;
     const status = computePointStatus(m);
 
@@ -15139,10 +15298,34 @@
       }
     });
     const lines = formatDamageLinesForCopy(allDamages, hasPhoto);
+    const site = currentSiteObj();
     lines.forEach((text, i)=>{
       const line = document.createElement('div');
       line.className = 'log-copy-line' + (allDamages.length === 0 ? ' muted' : '');
-      line.textContent = text;
+      const span = document.createElement('span');
+      span.textContent = text;
+      line.appendChild(span);
+
+      // 손상 항목별로 "+ 보고서" — 이 손상 하나를 보고서 작업목록에 추가/제거한다.
+      // 사진이 없거나(allDamages 비어있음) 손상이 아예 없는 지점은 추가할 대상이
+      // 없으므로 버튼을 안 보여준다.
+      if(allDamages.length > 0 && site){
+        const ref = damageRefs[i];
+        const addBtn = document.createElement('button');
+        addBtn.type = 'button';
+        const inList = worklistIndexOf(site, m.id, ref.pIdx, ref.dIdx) >= 0;
+        addBtn.className = 'log-worklist-add-btn' + (inList ? ' added' : '');
+        addBtn.textContent = inList ? '✓ 추가됨' : '+ 보고서';
+        addBtn.addEventListener('click', (e)=>{
+          e.stopPropagation();
+          const nowIn = toggleWorklistItem(m.id, ref.pIdx, ref.dIdx);
+          addBtn.textContent = nowIn ? '✓ 추가됨' : '+ 보고서';
+          addBtn.classList.toggle('added', nowIn);
+          updateWorklistButton();
+        });
+        line.appendChild(addBtn);
+      }
+
       contentBlock.appendChild(line);
     });
     item.appendChild(contentBlock);
@@ -17466,6 +17649,120 @@
     if(n >= 21 && n <= 35) return String.fromCharCode(0x3251 + n - 21);
     if(n >= 36 && n <= 50) return String.fromCharCode(0x32B1 + n - 36);
     return '(' + n + ')';
+  }
+
+  // ================================================================
+  // 보고서 작업목록 → Word 내보내기 — 사용자가 지정한 참고 양식(구간별 표,
+  // 사진 2장씩+원문자 번호+현황/원인/대책)을 그대로 따른다. buildAppearanceReportSections
+  // (전체 지점 자동 생성용)와는 별개다 — 여기는 사용자가 "+보고서"로 직접 고른
+  // 항목만, 구간별로 나눠서 담는다.
+  // ================================================================
+  async function exportWorklistReport(){
+    const site = currentSiteObj();
+    if(!site) return;
+    const list = ensureReportWorklist(site);
+    if(list.length === 0){ alert('보고서 작업목록이 비어 있습니다.'); return; }
+    if(!(await ensureDocxLoaded())){ alert('문서 생성 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인해주세요.'); return; }
+
+    const worklistExportBtn = document.querySelector('.worklist-export-btn');
+    if(worklistExportBtn){ worklistExportBtn.disabled = true; worklistExportBtn.textContent = '문서 생성 중…'; }
+
+    try{
+      const { Document, Packer, Paragraph, TextRun, ImageRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, PageBreak } = docx;
+
+      function imgDims(dataUrl, maxW){
+        return new Promise((resolve)=>{
+          const im = new Image();
+          im.onload = ()=>{
+            const w = Math.min(maxW, im.naturalWidth || maxW);
+            const h = Math.round((im.naturalHeight || maxW*0.75) * (w / (im.naturalWidth || maxW)));
+            resolve({ width:w, height:h });
+          };
+          im.onerror = ()=> resolve({ width:maxW, height:Math.round(maxW*0.75) });
+          im.src = dataUrl;
+        });
+      }
+      async function toBytes(dataUrl){
+        const buf = await dataUrlToBlob(dataUrl).arrayBuffer();
+        return new Uint8Array(buf);
+      }
+      const labelCell = (t)=> new TableCell({ width:{size:14,type:WidthType.PERCENTAGE}, shading:{fill:'F2F2F2'}, margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:t, bold:true, size:15}) ] }) ] });
+      const textCell = (text, span)=> new TableCell({ columnSpan: span||1, width:{size: span?72:58, type:WidthType.PERCENTAGE}, margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ children:[ new TextRun({text:String(text||'-'), size:15}) ] }) ] });
+      const numCell = (n)=> new TableCell({ width:{size:14,type:WidthType.PERCENTAGE}, margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:circledNum(n), bold:true, size:18}) ] }) ] });
+
+      // 사진이 아직 메모리에 안 채워져 있으면(다른 지점을 보는 중이었거나 등) 미리 채운다.
+      await hydratePhotoBlobs(site.markers || []);
+      if(supabaseClient && supabaseSession && navigator.onLine){
+        try{ await downloadPendingCloudPhotos([site]); }catch(e){}
+      }
+
+      // 구간별로 묶는다. 지점/사진/손상이 그 사이 삭제됐으면 조용히 건너뛴다
+      // (원본을 못 찾을 뿐 목록 자체에서 자동으로 지우지는 않음 — 다음에 열면 또 뜸).
+      const groups = {};
+      const order = [];
+      list.forEach(entry=>{
+        const m = (site.markers || []).find(x => x.id === entry.markerId);
+        const p = m && m.photos && m.photos[entry.photoIndex];
+        const d = p && p.damages && p.damages[entry.damageIndex];
+        if(!m || !p || !d) return;
+        const section = (d.section && d.section.trim()) || '구간 미지정';
+        if(!groups[section]){ groups[section] = []; order.push(section); }
+        groups[section].push({ p, d });
+      });
+
+      if(order.length === 0){
+        alert('작업목록의 항목들이 가리키는 지점/사진/손상을 찾을 수 없습니다(삭제되었을 수 있음).');
+        return;
+      }
+
+      const children = [];
+      children.push(new Paragraph({ text: (site.name || '시설물') + ' 외관조사 결과', heading: HeadingLevel.TITLE }));
+      children.push(new Paragraph({ children:[ new TextRun({ text:'작성일 ' + new Date().toLocaleDateString('ko-KR'), size:18, color:'555555' }) ], spacing:{ after:300 } }));
+
+      let seq = 1; // 구간이 바뀌어도 원문자 번호는 계속 이어간다(참고 양식과 동일)
+      for(let gi=0; gi<order.length; gi++){
+        const section = order[gi];
+        const items = groups[section];
+        if(gi > 0) children.push(new Paragraph({ children:[ new PageBreak() ] }));
+        children.push(new Paragraph({ text: section, heading: HeadingLevel.HEADING_1, spacing:{ before:100, after:150 }, thematicBreak:true }));
+
+        const cells = [];
+        for(const { p, d } of items){
+          const cellKids = [];
+          if(p.src){
+            cellKids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: await toBytes(p.src), transformation: await imgDims(p.src, 250) }) ], spacing:{ after:60 } }));
+          } else {
+            cellKids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text:'(사진 없음)', italics:true, size:14, color:'999999' }) ], spacing:{ after:60 } }));
+          }
+          const nameText = d.component ? (d.damageType || '(손상명 없음)') + ' (' + d.component + ')' : (d.damageType || '(손상명 없음)');
+          const statusText = d.measurement ? nameText + ', ' + d.measurement : nameText;
+          cellKids.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows:[
+            new TableRow({ children:[ labelCell('현황'), textCell(statusText), numCell(seq) ] }),
+            new TableRow({ children:[ labelCell('원인'), textCell(d.cause, 2) ] }),
+            new TableRow({ children:[ labelCell('대책'), textCell(d.repairMethod || '주의관찰', 2) ] })
+          ]}));
+          cells.push(new TableCell({ width:{size:50,type:WidthType.PERCENTAGE}, margins:{top:100,bottom:140,left:100,right:100}, children: cellKids }));
+          seq++;
+        }
+
+        const gridRows = [];
+        for(let i=0; i<cells.length; i+=2){
+          const rowCells = [ cells[i] ];
+          rowCells.push(cells[i+1] || new TableCell({ width:{size:50,type:WidthType.PERCENTAGE}, children:[ new Paragraph({ text:'' }) ] }));
+          gridRows.push(new TableRow({ children: rowCells }));
+        }
+        children.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows: gridRows }));
+      }
+
+      const wordDoc = new Document({ sections:[{ children }] });
+      const blob = await Packer.toBlob(wordDoc);
+      downloadDocxBlob(blob, (site.name || '시설물') + '_보고서작업목록.docx');
+    }catch(e){
+      console.error(e);
+      alert('문서 생성 중 오류가 발생했습니다.');
+    }finally{
+      if(worklistExportBtn){ worklistExportBtn.disabled = false; worklistExportBtn.textContent = '📄 구간별 표로 Word 내보내기'; }
+    }
   }
 
   // 시설물 하나의 외관조사 보고서 섹션(제목+가/나/다)을 만든다. 단일 시설물 내보내기와
