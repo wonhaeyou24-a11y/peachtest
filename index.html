@@ -243,9 +243,15 @@
      줄인다 — 이렇게 해야 접은 뒤에도 다시 펼 수 있는 진입점이 계속 보인다. */
   .layout.inspector-collapsed{ grid-template-columns: 1fr 40px; }
   .layout.inspector-collapsed .side{ padding: 16px 6px; overflow:hidden; }
-  .layout.inspector-collapsed .side-head > span:first-child,
+  /* 접힌 상태에서도 다시 펼 수 있어야 하므로 btnToggleInspector 자체는 절대 숨기지
+     않는다 — 예전엔 이 버튼을 포함한 span 전체(:first-child)를 통째로 숨겨서
+     접으면 펼치기 버튼도 같이 사라져 다시 펼 방법이 없었다(버그 수정). */
+  .layout.inspector-collapsed .side-title,
   .layout.inspector-collapsed #sideCount,
   .layout.inspector-collapsed #btnToggleLogFilter,
+  .layout.inspector-collapsed #btnToggleLogTable,
+  .layout.inspector-collapsed #btnCopyAllLog,
+  .layout.inspector-collapsed #btnToggleWorklist,
   .layout.inspector-collapsed .log-filter,
   .layout.inspector-collapsed .log,
   .layout.inspector-collapsed #inspectorInlineSlot{ display:none !important; }
@@ -2119,6 +2125,15 @@
       display:flex; align-items:center; justify-content:center;
     }
     .log-copy-line { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    /* 띄어쓰기 없는 긴 손상명(예: "지반보강(약액주입공법,고압분사교반공법)")이 있으면
+       flex 자식의 기본 min-width:auto 때문에 줄바꿈이 안 되고 폭이 카드 밖으로 밀려
+       나가던 버그 수정 — 텍스트 span이 남는 공간 안에서 강제로 줄바꿈되게 한다. */
+    .log-copy-line > span {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow-wrap: break-word;
+      word-break: break-word;
+    }
     .log-worklist-add-btn {
       flex-shrink:0;
       font-size: 10px; padding: 2px 7px; border-radius: 999px;
@@ -2286,7 +2301,7 @@
 
   <div class="side">
     <div class="side-head">
-      <span style="display:flex; align-items:center; gap:6px;">기록 목록
+      <span style="display:flex; align-items:center; gap:6px;"><span class="side-title">기록 목록</span>
         <button class="ghost icon-btn" id="btnToggleLogFilter" title="검색 · 중요도 필터" style="padding:2px 7px; font-size:12px;">🔍</button>
         <button class="ghost icon-btn" id="btnToggleLogTable" title="표로 보기 (사진 포함 · 보고서 참고자료용)" style="padding:2px 7px; font-size:12px; display:none;">▦ 표로</button>
         <button class="ghost icon-btn" id="btnCopyAllLog" title="목록 전체를 표 형식(탭 구분)으로 복사 — 엑셀·워드에 바로 붙여넣기" style="padding:2px 7px; font-size:12px; display:none;">📋 전체 복사</button>
@@ -2985,7 +3000,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v73';
+  const PS_BUILD = 'v74';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
