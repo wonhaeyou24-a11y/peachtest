@@ -3000,7 +3000,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v74';
+  const PS_BUILD = 'v75';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -17883,62 +17883,88 @@
     }
 
     // ---- 지점별 조사결과 ----
-    // 지점(사진) 하나당 칸 하나를 만들고, 2칸씩 짝지어 한 쌍을 이룬다. 표는
-    // 쌍마다 2행(위: 사진 2장, 아래: 손상내용 2칸)으로 구성한다 — 사진 칸과
-    // 내용 칸을 분리해서, 사진은 사진끼리 나란히 비교해 보고 내용은 내용끼리
-    // 바로 아래에서 읽을 수 있게 한다. 한 지점에 손상이 여러 개면 그 지점의
-    // 내용 칸 안에 전부 나열한다(지점을 여러 칸으로 쪼개지 않는다).
+    // 사용자가 제공한 참고 양식(구간별 표, 손상 하나당 사진+현황/원인/대책 3행
+    // 표+원문자 번호, 2칸씩 배치)을 그대로 따른다. 손상이 여러 개인 사진은
+    // 손상 개수만큼 칸을 나눈다(칸 하나 = 손상 하나). 구간(section)별로 표를
+    // 나누고 페이지를 넘긴다 — "보고서 작업목록" 내보내기와 같은 형식이다.
     children.push(new Paragraph({ text:'지점별 조사결과', heading: HeadingLevel.HEADING_1, spacing:{ before:300, after:120 } }));
 
-    const points = [];
+    const labelCell = (t)=> new TableCell({ width:{size:14,type:WidthType.PERCENTAGE}, shading:{fill:'F2F2F2'}, margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:t, bold:true, size:15}) ] }) ] });
+    const textCell = (text, span)=> new TableCell({ columnSpan: span||1, width:{size: span?72:58, type:WidthType.PERCENTAGE}, margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ children:[ new TextRun({text:String(text||'-'), size:15}) ] }) ] });
+    const numCell = (n)=> new TableCell({ width:{size:14,type:WidthType.PERCENTAGE}, margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:circledNum(n), bold:true, size:18}) ] }) ] });
+
+    const entries = [];
     const markersSorted = siteMarkers.slice().sort((a,b)=>(a.num||0)-(b.num||0));
     for(const m of markersSorted){
       const photos = m.photos || [];
       for(let pi=0; pi<photos.length; pi++){
         const p = photos[pi];
         const dmgs = p.damages || [];
-        const damageLines = dmgs.length
-          ? dmgs.map(d=>{
-              const nm = d.damageType || d.damageName || '(종류 미지정)';
-              const comp = d.component ? ' (' + d.component + ')' : '';
-              const meas = d.measurement ? ', ' + d.measurement : '';
-              const cause = d.cause ? ' — 원인: ' + d.cause : '';
-              const measure = d.repairMethod ? ' / 대책: ' + d.repairMethod : '';
-              return nm + comp + meas + cause + measure;
-            })
-          : [ (p.note && p.note.trim()) ? p.note.trim() : '특이 손상 없음(현황 사진)' ];
-        points.push({ num: m.num || (points.length + 1), photoSrc: p.src, pending: p.pendingCloudDownload, damageLines });
+        if(dmgs.length === 0){
+          entries.push({
+            photoSrc: p.src, pending: p.pendingCloudDownload, section: '구간 미지정',
+            statusText: (p.note && p.note.trim()) ? p.note.trim() : '특이 손상 없음(현황 사진)',
+            cause: '', repairMethod: ''
+          });
+        } else {
+          dmgs.forEach(d=>{
+            const nm = d.damageType || d.damageName || '(종류 미지정)';
+            const comp = d.component ? ' (' + d.component + ')' : '';
+            const meas = d.measurement ? ', ' + d.measurement : '';
+            entries.push({
+              photoSrc: p.src, pending: p.pendingCloudDownload,
+              section: (d.section && d.section.trim()) || '구간 미지정',
+              statusText: nm + comp + meas, cause: d.cause, repairMethod: d.repairMethod
+            });
+          });
+        }
       }
     }
 
-    if(points.length === 0){
+    if(entries.length === 0){
       children.push(new Paragraph({ children:[ new TextRun({ text:'촬영된 지점 사진이 없습니다.', size:15 }) ] }));
     } else {
-      const COL = 50;
-      async function photoCellFor(pt){
-        const kids = [];
-        if(pt.photoSrc){
-          kids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text: circledNum(pt.num), bold:true, size:16 }) ], spacing:{ after:40 } }));
-          kids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: await toBytes(pt.photoSrc), transformation: await imgDims(pt.photoSrc, 250) }) ] }));
-        } else {
-          const reason = pt.pending ? '(사진 없음 — 클라우드에서 아직 못 받음, 온라인 상태에서 다시 시도해주세요)' : '(사진 없음)';
-          kids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text: circledNum(pt.num) + ' ', bold:true, size:16 }), new TextRun({ text: reason, italics:true, size:14, color:'999999' }) ] }));
-        }
-        return new TableCell({ width:{size:COL,type:WidthType.PERCENTAGE}, shading:{fill:'FAFAFA'}, margins:{top:100,bottom:80,left:100,right:100}, children: kids });
-      }
-      function contentCellFor(pt){
-        const paras = pt.damageLines.map(line => new Paragraph({ children:[ new TextRun({ text:'· ' + line, size:15 }) ], spacing:{ after:40 } }));
-        return new TableCell({ width:{size:COL,type:WidthType.PERCENTAGE}, margins:{top:80,bottom:100,left:100,right:100}, children: paras });
-      }
-      const blankCell = ()=> new TableCell({ width:{size:COL,type:WidthType.PERCENTAGE}, children:[ new Paragraph({ text:'' }) ] });
+      const groups = {};
+      const order = [];
+      entries.forEach(en=>{
+        if(!groups[en.section]){ groups[en.section] = []; order.push(en.section); }
+        groups[en.section].push(en);
+      });
 
-      const gridRows = [];
-      for(let i=0; i<points.length; i+=2){
-        const a = points[i], b = points[i+1];
-        gridRows.push(new TableRow({ children: b ? [ await photoCellFor(a), await photoCellFor(b) ] : [ await photoCellFor(a), blankCell() ] }));
-        gridRows.push(new TableRow({ children: b ? [ contentCellFor(a), contentCellFor(b) ] : [ contentCellFor(a), blankCell() ] }));
+      async function boxCellFor(en, seq){
+        const kids = [];
+        if(en.photoSrc){
+          kids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: await toBytes(en.photoSrc), transformation: await imgDims(en.photoSrc, 250) }) ], spacing:{ after:60 } }));
+        } else {
+          const reason = en.pending ? '(사진 없음 — 클라우드에서 아직 못 받음, 온라인 상태에서 다시 시도해주세요)' : '(사진 없음)';
+          kids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text: reason, italics:true, size:14, color:'999999' }) ], spacing:{ after:60 } }));
+        }
+        kids.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows:[
+          new TableRow({ children:[ labelCell('현황'), textCell(en.statusText), numCell(seq) ] }),
+          new TableRow({ children:[ labelCell('원인'), textCell(en.cause, 2) ] }),
+          new TableRow({ children:[ labelCell('대책'), textCell(en.repairMethod || '주의관찰', 2) ] })
+        ]}));
+        return new TableCell({ width:{size:50,type:WidthType.PERCENTAGE}, margins:{top:100,bottom:140,left:100,right:100}, children: kids });
       }
-      children.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows: gridRows }));
+
+      let seq = 1; // 구간이 바뀌어도 원문자 번호는 계속 이어간다(참고 양식과 동일)
+      for(let gi=0; gi<order.length; gi++){
+        const section = order[gi];
+        const items = groups[section];
+        if(gi > 0) children.push(new Paragraph({ children:[ new PageBreak() ] }));
+        children.push(new Paragraph({ text: section, heading: HeadingLevel.HEADING_2, spacing:{ before:150, after:100 }, thematicBreak:true }));
+
+        const cells = [];
+        for(const en of items){ cells.push(await boxCellFor(en, seq)); seq++; }
+
+        const gridRows = [];
+        for(let i=0; i<cells.length; i+=2){
+          const rowCells = [ cells[i] ];
+          rowCells.push(cells[i+1] || new TableCell({ width:{size:50,type:WidthType.PERCENTAGE}, children:[ new Paragraph({ text:'' }) ] }));
+          gridRows.push(new TableRow({ children: rowCells }));
+        }
+        children.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows: gridRows }));
+      }
     }
 
     return children;
