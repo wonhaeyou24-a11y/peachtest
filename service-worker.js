@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-shot-v75-appearance-report-section-boxes'; // 외관조사 보고서(양식) 지점별 표를 구간별 사진+현황/원인/대책 박스 표로 재구성
+const CACHE_NAME = 'point-shot-v76-project-facility-flow-cloud-delete'; // 프로젝트→시설물 선택 흐름에서 더보기로 되돌아가던 문제 수정 + 클라우드 프로젝트 완전삭제(조직 리더 전용) 추가
 // 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
 // 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
 // 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.

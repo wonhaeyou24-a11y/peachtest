@@ -3000,7 +3000,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v75';
+  const PS_BUILD = 'v76';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -11501,6 +11501,11 @@
           loadSite(site);
           saveState();
         }
+        // 시설물을 선택해 조사화면(작업창)에 도착한 것이므로, "더보기 하위창을 닫으면
+        // 더보기로 복귀"하는 공용 로직(아래 moreReturnArmed)이 여기서는 발동하지 않게
+        // 막는다 — 안 그러면 시설물을 고를 때마다 더보기 창이 다시 떠서, 프로젝트/시설물을
+        // 고를 때마다 매번 더보기로 되돌아가는 불편이 있었다.
+        moreReturnArmed = false;
         siteModal.style.display = 'none';
         updatePcExplorerDocking();
       });
@@ -11663,6 +11668,69 @@
     saveState();
   }
 
+  // 프로젝트를 이 기기에서만 지운다(시설물은 로컬 휴지통으로 이동, 복원 가능) —
+  // "삭제" 버튼과 "클라우드에서 완전삭제" 버튼이 둘 다 마지막에 이 정리를 공유한다.
+  function removeProjectLocally(project){
+    const projSites = sites.filter(s => s.projectId === project.id);
+    projSites.forEach(s=>{
+      deletedSites.push({
+        site: JSON.parse(JSON.stringify(s)),
+        originalProjectId: project.id,
+        originalProjectName: project.name,
+        deletedAt: new Date().toISOString()
+      });
+    });
+    sites = sites.filter(s => s.projectId !== project.id);
+    projects = projects.filter(p => p.id !== project.id);
+    if(currentProjectId === project.id){
+      currentProjectId = null;
+      if(projects.length > 0){
+        switchToProject(projects[0].id);
+      } else {
+        // 프로젝트가 0개가 됐다 — 빈 상태로 둔다(새 프로젝트를 만들거나
+        // 클라우드에서 팀 프로젝트를 불러오면 다시 채워짐)
+        currentSiteId = null;
+        baseImageSrc = null; markers = []; nextNum = 1; trash = []; activityLog = []; trackLog = [];
+        resetStageToEmpty();
+        renderMarkers(); renderLog(); updateCounts(); refreshStageHeader();
+        applyProjectRoleGate();
+      }
+    }
+    renderProjectList();
+    renderProjectHeader();
+    saveState();
+  }
+
+  // 조직 공유 프로젝트는 리더(Owner/Admin)만, 개인 프로젝트는 본인이 곧 리더이므로
+  // 항상 클라우드 완전삭제가 가능하다. 지금까지는 "삭제" 버튼이 로컬에서만 지우고
+  // 클라우드(ps_projects 등) 행은 영구히 남는 기능적 공백이 있었다 — 이 함수로 메운다.
+  // 사진 원본(Storage 버킷 ps-photos)은 안전을 위해 여기서 지우지 않는다(다른 기기가
+  // 아직 안 받은 사진을 잘못 지울 위험이 있음) — 필요하면 별도 정리 작업으로 다룬다.
+  function canDeleteCloudCopy(project){
+    if(!supabaseClient || !supabaseSession) return false;
+    if(!project.organizationId) return true; // 개인 프로젝트: 본인이 유일한 소유자
+    const role = myRoleByOrg[project.organizationId];
+    return role === 'Owner' || role === 'Admin';
+  }
+  async function deleteCloudProjectData(projectId){
+    if(!supabaseClient || !supabaseSession) return { ok:false, reason:'로그인 상태가 아닙니다.' };
+    if(!navigator.onLine) return { ok:false, reason:'오프라인 상태입니다.' };
+    try{
+      const delRes = await Promise.all([
+        supabaseClient.from('ps_inspection_points').delete().eq('project_id', projectId),
+        supabaseClient.from('ps_existing_damages').delete().eq('project_id', projectId),
+        supabaseClient.from('ps_facilities').delete().eq('project_id', projectId)
+      ]);
+      const childErr = delRes.find(r => r && r.error);
+      if(childErr) return { ok:false, reason: childErr.error.message };
+      const { error } = await supabaseClient.from('ps_projects').delete().eq('id', projectId);
+      if(error) return { ok:false, reason: error.message };
+      return { ok:true };
+    }catch(e){
+      return { ok:false, reason: (e && e.message) || String(e) };
+    }
+  }
+
   function renderProjectList(){
     if(projects.length === 0){
       projectListBody.innerHTML = '<div class="log-empty">프로젝트가 없습니다. "＋ 새 프로젝트 만들기"로 시작하거나, 아래에서 팀 프로젝트를 받으세요.</div>';
@@ -11712,7 +11780,17 @@
           switchToProject(project.id);
         }
         projectModal.style.display = 'none';
-        if(document.body.classList.contains('pc-explorer-docked')) renderSiteList();
+        if(document.body.classList.contains('pc-explorer-docked')){
+          renderSiteList();
+        } else {
+          // 프로젝트를 고르면 바로 조사화면으로 들어가는 대신, 이 프로젝트의 시설물
+          // 목록을 이어서 보여준다 — "더보기→프로젝트 선택→시설물 선택→조사화면"
+          // 순서로 한 번에 이어지게 하기 위함(예전엔 최근 시설물로 바로 들어가버려서
+          // 원하는 시설물을 고르려면 더보기로 되돌아가 "시설물 목록"을 다시 눌러야 했다).
+          siteSearch.value = '';
+          renderSiteList();
+          siteModal.style.display = 'flex';
+        }
       });
 
       const headerRow = document.createElement('div');
@@ -11790,42 +11868,41 @@
               ? '이 프로젝트는 백업이 완료된 상태입니다.'
               : '⚠ 이 프로젝트는 아직 백업하지 않았습니다. 먼저 백업하려면 "취소"를 누른 뒤 "백업"을 이용해주세요.';
             const msg = '"' + project.name + '" 프로젝트에는 시설물이 ' + facilityCount + '개 있습니다.\n' + backupNote +
-              '\n\n삭제하면 시설물은 완전히 사라지지 않고 휴지통으로 이동됩니다 ("⋯ → 휴지통"에서 나중에 복원 가능).\n\n그래도 삭제할까요?';
+              '\n\n삭제하면 시설물은 완전히 사라지지 않고 휴지통으로 이동됩니다 ("⋯ → 휴지통"에서 나중에 복원 가능).\n\n이 기기에서만 지워지며, 클라우드 원본은 그대로 남습니다.\n\n그래도 삭제할까요?';
             if(!confirm(msg)) return;
-            const projSites = sites.filter(s => s.projectId === project.id);
-            projSites.forEach(s=>{
-              deletedSites.push({
-                site: JSON.parse(JSON.stringify(s)),
-                originalProjectId: project.id,
-                originalProjectName: project.name,
-                deletedAt: new Date().toISOString()
-              });
-            });
-            sites = sites.filter(s => s.projectId !== project.id);
           } else {
-            if(!confirm('"' + project.name + '" 프로젝트를 삭제할까요?')) return;
+            if(!confirm('"' + project.name + '" 프로젝트를 삭제할까요?\n(이 기기에서만 지워지며, 클라우드 원본은 그대로 남습니다)')) return;
           }
-
-          projects = projects.filter(p => p.id !== project.id);
-          if(currentProjectId === project.id){
-            currentProjectId = null;
-            if(projects.length > 0){
-              switchToProject(projects[0].id);
-            } else {
-              // 프로젝트가 0개가 됐다 — 빈 상태로 둔다(새 프로젝트를 만들거나
-              // 클라우드에서 팀 프로젝트를 불러오면 다시 채워짐)
-              currentSiteId = null;
-              baseImageSrc = null; markers = []; nextNum = 1; trash = []; activityLog = []; trackLog = [];
-              resetStageToEmpty();
-              renderMarkers(); renderLog(); updateCounts(); refreshStageHeader();
-              applyProjectRoleGate();
-            }
-          }
-          renderProjectList();
-          renderProjectHeader();
-          saveState();
+          removeProjectLocally(project);
         });
         actionsRow.appendChild(delBtn);
+      }
+
+      if(canDeleteCloudCopy(project)){
+        const cloudDelBtn = document.createElement('button');
+        cloudDelBtn.className = 'card-btn danger';
+        cloudDelBtn.textContent = '☁️ 클라우드 완전삭제';
+        cloudDelBtn.title = project.organizationId
+          ? '조직 리더(Owner/Admin)만 가능 — 클라우드 원본까지 영구 삭제합니다'
+          : '클라우드에 올라간 이 프로젝트를 영구 삭제합니다';
+        cloudDelBtn.addEventListener('click', async ()=>{
+          if(!navigator.onLine){ alert('온라인 상태에서만 클라우드 삭제가 가능합니다.'); return; }
+          const warn = '"' + project.name + '" 프로젝트를 클라우드에서 영구 삭제합니다.\n\n' +
+            '시설물·조사점·기존손상 기록을 포함한 클라우드 원본이 완전히 사라지며 되돌릴 수 없습니다' +
+            (project.organizationId ? '. 다른 조직원도 더 이상 이 프로젝트를 받을 수 없게 됩니다.' : '.') +
+            '\n(이미 올라간 사진 원본 파일은 저장공간 정책상 이번엔 함께 지워지지 않습니다.)\n\n' +
+            '이 기기의 시설물 자료는 그대로 남고(휴지통에서 복원 가능), 클라우드 연결만 끊어집니다.\n\n정말 삭제할까요?';
+          if(!confirm(warn)) return;
+          cloudDelBtn.disabled = true; cloudDelBtn.textContent = '삭제 중…';
+          const result = await deleteCloudProjectData(project.id);
+          if(!result.ok){
+            alert('클라우드 삭제에 실패했습니다: ' + (result.reason || '알 수 없는 오류'));
+            cloudDelBtn.disabled = false; cloudDelBtn.textContent = '☁️ 클라우드 완전삭제';
+            return;
+          }
+          removeProjectLocally(project);
+        });
+        actionsRow.appendChild(cloudDelBtn);
       }
 
       card.appendChild(headerRow);
