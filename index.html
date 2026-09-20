@@ -1590,16 +1590,26 @@
   .photo-card{
     border: 1px solid var(--line);
     border-radius:8px;
-    overflow:hidden;
     background: var(--panel-2);
-    /* 사진을 상단에 고정(position:sticky)해봤지만 iOS Safari에서 스크롤되는
-       손상 선택 영역이 사진을 뚫고 겹쳐 보이는 렌더링 버그가 재현됐고, 원격으로는
-       실제 iOS 기기에서 재현·검증할 방법이 없어 정상 동작을 확인할 수 없었다.
-       그 버그가 원천적으로 발생할 수 없는 예전의 평범한 문서 흐름(고정 없음)으로
-       되돌린다 — 사진은 확대된 채로 그대로 스크롤에 포함된다. */
+    /* overflow:hidden을 여기 두면(모서리 둥글게 자르는 용도) position:sticky의
+       스크롤 기준이 .modal-body가 아니라 이 카드 자신이 돼버려서 사진이 고정되지
+       않는다 — 그래서 모서리는 사진(.photo-card-top img)쪽에 직접 둥글게 준다. */
   }
   .photo-card-top{
-    position:relative;
+    /* iOS Safari에서 이 sticky 사진과 스크롤되는 손상 선택 영역이 겹쳐 보이는
+       렌더링 버그가 있다는 걸 알면서도, "사진 고정 + 아래만 스크롤"이 현장
+       업무 효율에 더 중요하다는 요청으로 되돌린다. isolation/transform으로
+       별도 레이어를 만들어 완화를 시도하지만 iOS에서 100% 해결된다는 보장은
+       없다 — 겹침이 남아있다면 실제 기기에서의 추가 스크린샷이 다음 시도에 필요하다. */
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--panel-2);
+    border-radius: 8px 8px 0 0;
+    overflow: hidden;
+    isolation: isolate;
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
   }
   .quality-warn{
     position:absolute;
@@ -3032,7 +3042,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v80';
+  const PS_BUILD = 'v81';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
