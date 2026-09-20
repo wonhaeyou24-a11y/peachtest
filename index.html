@@ -1814,6 +1814,10 @@
     border: 1px solid rgba(127,217,155,0.25);
     border-radius: 6px;
     padding: 7px 9px;
+    /* 모바일에서 길게 누르면 안내문구가 선택되면서 복사하기/번역 등 시스템 팝업이
+       뜨는 문제 수정 — 이 텍스트는 안내용일 뿐 복사할 이유가 없다. */
+    -webkit-user-select: none;
+    user-select: none;
   }
   details.damage-field{ border:1px solid var(--line); border-radius:6px; padding:2px 9px; background:var(--panel-2); }
   details.damage-field summary{ color:var(--muted); }
@@ -3000,7 +3004,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v76';
+  const PS_BUILD = 'v77';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -11395,7 +11399,11 @@
       return { text: '준비중', class: 'status-ready' };
     }
     
-    const allDone = projectSites.every(s => computeFacilityStatus(s).text === '조사완료');
+    // "조사완료"는 더보기 → 시설물 조사완료로 사용자가 직접 완료 처리한 경우만
+    // 뜻해야 한다(site.completedAt). 사진이 다 찍혔다고 자동으로 이 이름을 붙이면
+    // "완료한 적 없는데 완료로 나온다"는 오해가 생긴다 — computeFacilityStatus의
+    // 자동 판정("촬영완료")과는 별개로 여기서 실제 완료 여부만 본다.
+    const allDone = projectSites.every(s => s.status === '조사완료');
     if (allDone && projectSites.length > 0) {
       return { text: '조사완료', class: 'status-done' };
     }
@@ -11417,11 +11425,19 @@
   }
 
   function computeFacilityStatus(site) {
+    // 실제로 "더보기 → 시설물 조사완료"로 완료 처리한 경우만 "조사완료"라고 부른다.
+    // (예전엔 지점 사진이 다 찍히기만 해도 자동으로 "조사완료"라고 표시돼서, 완료
+    // 처리를 한 적이 없는데 완료로 나온다는 혼동이 있었다 — 사진만 다 찍힌 상태는
+    // "촬영완료"로 구분한다.)
+    if (site.status === '조사완료') {
+      return { text: '조사완료', class: 'status-done' };
+    }
+
     const siteMarkers = (site.id === currentSiteId ? markers : (site.markers || []));
     if (!siteMarkers || siteMarkers.length === 0) {
       const hasDrawings = (site.drawings && site.drawings.length > 0) || site.baseImageSrc;
       return (hasDrawings || site.facilityType)
-        ? { text: '준비완료', class: 'status-prepared' } 
+        ? { text: '준비완료', class: 'status-prepared' }
         : { text: '준비중', class: 'status-ready' };
     }
 
@@ -11429,7 +11445,7 @@
     const taken = siteMarkers.filter(m => (m.photos && m.photos.length > 0) || m.isCaptured).length;
 
     if (total > 0 && taken === total) {
-      return { text: '조사완료', class: 'status-done' };
+      return { text: '촬영완료', class: 'status-done' };
     }
     if (taken > 0) {
       return { text: '조사중 (' + taken + '/' + total + ')', class: 'status-progress' };
