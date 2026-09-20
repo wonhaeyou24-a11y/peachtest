@@ -1570,11 +1570,18 @@
   .photo-card{
     border: 1px solid var(--line);
     border-radius:8px;
-    overflow:hidden;
     background: var(--panel-2);
+    /* overflow:hidden을 여기 두면(모서리 둥글게 자르는 용도) position:sticky의
+       스크롤 기준이 .modal-body가 아니라 이 카드 자신이 돼버려서 사진이 고정되지
+       않는다 — 그래서 모서리는 사진(.photo-card-top img)쪽에 직접 둥글게 준다. */
   }
   .photo-card-top{
-    position:relative;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--panel-2);
+    border-radius: 8px 8px 0 0;
+    overflow: hidden;
   }
   .quality-warn{
     position:absolute;
@@ -1588,7 +1595,7 @@
   }
   .photo-card-top img{
     width:100%;
-    max-height: 240px;
+    max-height: 52vh;
     object-fit:cover;
     display:block;
   }
@@ -2375,11 +2382,9 @@
       <div class="preview-grid" id="previewGrid"></div>
     </div>
     <div class="modal-foot">
-      <button class="danger role-gated" id="btnDeleteMarker">지점 삭제</button>
-      <button class="danger" id="btnRemoveAllPhotos">사진 전체 삭제</button>
       <button class="ghost" id="btnMoveMarker">위치 이동</button>
-      <button class="ghost" id="btnDownloadAllPhotos">원본 전체 다운로드</button>
       <button class="ghost" id="btnAddMorePhotos">사진 추가 촬영</button>
+      <button class="danger role-gated" id="btnDeleteMarker">지점 삭제</button>
       <button class="primary" id="btnSaveClosePreview">✓ 저장하고 닫기</button>
     </div>
   </div>
@@ -3004,7 +3009,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v77';
+  const PS_BUILD = 'v78';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -3244,8 +3249,6 @@
   const previewGrid = document.getElementById('previewGrid');
   const closePreview = document.getElementById('closePreview');
   const btnAddMorePhotos = document.getElementById('btnAddMorePhotos');
-  const btnRemoveAllPhotos = document.getElementById('btnRemoveAllPhotos');
-  const btnDownloadAllPhotos = document.getElementById('btnDownloadAllPhotos');
   const btnDeleteMarker = document.getElementById('btnDeleteMarker');
   const btnMoveMarker = document.getElementById('btnMoveMarker');
   const moveBanner = document.getElementById('moveBanner');
@@ -14300,6 +14303,40 @@
     }
   });
 
+  // 구간/부위/손상명 등 가로 스크롤 칩 목록(.damage-type-scroll)에서, 스크롤하려고
+  // 드래그했는데 손가락을 떼는 순간 그 아래 있던 칩이 선택돼버리는 문제 수정.
+  // 터치 시작 후 일정 거리 이상 움직였으면 "스크롤 의도"로 보고 그 다음 click을
+  // 무시한다 — capture 단계에서 막아서 칩 버튼 자신의 click 리스너까지 도달하기
+  // 전에 차단한다.
+  (function guardDragScrollChipClicks(){
+    const DRAG_THRESHOLD = 10; // px
+    let startX = 0, startY = 0, dragged = false, tracking = false;
+    document.addEventListener('touchstart', (e)=>{
+      const scroller = e.target.closest && e.target.closest('.damage-type-scroll');
+      tracking = !!scroller;
+      dragged = false;
+      if(tracking){
+        const t = e.touches[0];
+        startX = t.clientX; startY = t.clientY;
+      }
+    }, { passive:true, capture:true });
+    document.addEventListener('touchmove', (e)=>{
+      if(!tracking) return;
+      const t = e.touches[0];
+      if(Math.abs(t.clientX - startX) > DRAG_THRESHOLD || Math.abs(t.clientY - startY) > DRAG_THRESHOLD){
+        dragged = true;
+      }
+    }, { passive:true, capture:true });
+    document.addEventListener('click', (e)=>{
+      if(dragged && e.target.closest && e.target.closest('.damage-type-scroll')){
+        e.stopPropagation();
+        e.preventDefault();
+      }
+      dragged = false;
+      tracking = false;
+    }, { capture:true });
+  })();
+
   // ---------- 지점 위치 이동 모드 ----------
   let movingMarkerId = null;
 
@@ -15747,6 +15784,13 @@
       addDamageBtn.addEventListener('click', ()=>{
         closeCaptureModal();
         openPreview(markerId);
+        // 여기서 바로 손상 선택 폼까지 열어준다 — 예전엔 지점 상세화면으로 넘어간
+        // 뒤 "+ 손상 추가"를 한 번 더 눌러야 실제 구분/구간/부위/손상명 선택 UI가
+        // 나타나서, 같은 버튼을 두 번 눌러야 하는 불편이 있었다.
+        const card = previewGrid.children[idx];
+        const innerAddBtn = card && Array.from(card.querySelectorAll('.damage-box > button'))
+          .find(b => b.textContent.trim() === '+ 손상 추가');
+        if(innerAddBtn) innerAddBtn.click();
       });
 
       const del = document.createElement('button');
@@ -16857,35 +16901,12 @@
     openCapture(activeMarkerId);
   });
 
-  btnRemoveAllPhotos.addEventListener('click', ()=>{
-    const m = markers.find(x=>x.id===activeMarkerId);
-    if(m && confirm('이 지점의 사진을 모두 삭제할까요?')){
-      const removed = m.photos || [];
-      m.photos = [];
-      deleteOrphanedPhotoBlobs(removed);
-      renderMarkers();
-      renderMapMarkers();
-      renderLog();
-      updateCounts();
-      saveState();
-      previewModal.style.display = 'none';
-    }
-  });
-
   btnDeleteMarker.addEventListener('click', ()=>{
     if(activeMarkerId) deleteMarker(activeMarkerId);
   });
 
   btnMoveMarker.addEventListener('click', ()=>{
     if(activeMarkerId) startMoveMode(activeMarkerId);
-  });
-
-  btnDownloadAllPhotos.addEventListener('click', ()=>{
-    const m = markers.find(x=>x.id===activeMarkerId);
-    if(!m || !m.photos || m.photos.length === 0){ alert('다운로드할 사진이 없습니다.'); return; }
-    m.photos.forEach((p, idx)=>{
-      setTimeout(()=> downloadDataUrl(p.src, '지점' + m.num + '_' + (idx+1) + '.jpg'), idx * 250);
-    });
   });
 
   // ---------- 사진 주석 (그리기: 펜/원/사각형/화살표/텍스트) ----------
