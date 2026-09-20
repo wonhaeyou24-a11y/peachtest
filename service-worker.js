@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-shot-v79-card-longpress-fix-sticky-zindex-fix'; // 기록목록 카드 길게누르면 뜨던 선택팝업 제거 + 사진 sticky z-index iOS 겹침버그 수정
+const CACHE_NAME = 'point-shot-v80-global-userselect-none-sticky-photo-revert'; // 입력창 제외 전체 화면 텍스트선택/길게누르기 팝업 차단 + 사진고정(sticky) iOS 겹침버그로 인해 되돌림
 // 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
 // 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
 // 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.
