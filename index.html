@@ -1780,6 +1780,12 @@
     font-size: 12px;
     padding: 7px 4px;
   }
+  /* 항목명(폭/길이/너비/깊이/개소 등) 드롭다운 — 단위 드롭다운(64px)보다 글자가
+     길어서 조금 더 넓게 준다. */
+  .measurement-row select.measurement-label-select{
+    width: auto;
+    min-width: 68px;
+  }
   .measurement-legacy-note{
     font-size:11px;
     color: var(--muted);
@@ -3042,7 +3048,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v81';
+  const PS_BUILD = 'v82';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -8339,6 +8345,12 @@
       { type:'value', label:'규모', defaultUnit:'개소', units:['mm','cm','m','㎡','㎥','개소'] }
     ]}
   };
+
+  // 손상규모 입력행의 "항목명" 칩 — 자유텍스트 라벨(예: "규모")만 있으면 어느
+  // 치수를 재는 건지 알 수 없다는 요청으로, 흔히 쓰는 항목을 드롭다운으로 고를 수
+  // 있게 한다. 손상마스터/템플릿이 이미 구체적인 라벨(예: 균열폭, 세굴폭)을 준
+  // 경우는 목록에 없어도 그 값을 그대로 선택된 채로 보여준다(데이터 손실 없음).
+  const MEASUREMENT_LABEL_OPTIONS = ['규모','폭','길이','너비','깊이','면적','개소'];
 
   // --- 새로 추가된 Resolver ---
   function resolveDamageStandard(facilityType, facilityForm) {
@@ -16660,7 +16672,16 @@
             }
             const row = document.createElement('div');
             row.className = 'measurement-row';
-            const rl = document.createElement('label'); rl.textContent = fd.label;
+            const rl = document.createElement('select');
+            rl.className = 'measurement-label-select';
+            const labelOptions = MEASUREMENT_LABEL_OPTIONS.includes(item.label)
+              ? MEASUREMENT_LABEL_OPTIONS
+              : [item.label].concat(MEASUREMENT_LABEL_OPTIONS);
+            labelOptions.forEach(lbl=>{
+              const o = document.createElement('option'); o.value = lbl; o.textContent = lbl;
+              if(item.label === lbl) o.selected = true;
+              rl.appendChild(o);
+            });
             const valInput = document.createElement('input');
             valInput.type = 'number'; valInput.step = 'any'; valInput.value = item.value;
             valInput.placeholder = '값';
@@ -16672,6 +16693,7 @@
             });
             function commitMeasurement(){
               const oldText = d.measurement || '';
+              item.label = rl.value;
               item.value = valInput.value;
               item.unit = unitSelect.value;
               syncMeasurementText(d);
@@ -16681,6 +16703,7 @@
               }
               saveState();
             }
+            rl.addEventListener('change', commitMeasurement);
             valInput.addEventListener('change', commitMeasurement);
             unitSelect.addEventListener('change', commitMeasurement);
             row.appendChild(rl); row.appendChild(valInput); row.appendChild(unitSelect);
