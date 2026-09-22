@@ -3048,7 +3048,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v82';
+  const PS_BUILD = 'v83';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -11599,15 +11599,19 @@
       metaRow.textContent = '유형: ' + (site.facilityType || '절토사면') + (site.facilityForm ? ' (' + site.facilityForm + ')' : '') +
         ' · 지점 ' + pCount + '개' + (dateStr ? ' · ' + dateStr : '');
 
+      // 버튼들이 오른쪽에만 몰려있고(justify-content:flex-end) 줄 자체는 카드
+      // 전체 폭을 차지한다 — 예전엔 이 줄 전체에 클릭 차단을 걸어서, 버튼이 없는
+      // 왼쪽 빈 공간을 눌러도 카드 선택이 씹혔다("눌림 효과만 있고 선택이 안 됨").
+      // 이제 줄 전체가 아니라 버튼 각각에만 차단을 건다.
       const actionsRow = document.createElement('div');
       actionsRow.className = 'fc-actions card-actions-row';
-      actionsRow.addEventListener('click', (e)=> e.stopPropagation());
 
       // [수정] 통합 버튼: 시설물명 및 기본정보 수정
       const editBtn = document.createElement('button');
       editBtn.className = 'fc-btn card-btn';
       editBtn.textContent = '수정';
-      editBtn.addEventListener('click', ()=>{
+      editBtn.addEventListener('click', (e)=>{
+        e.stopPropagation();
         openFacilityModalForEdit(site);
         siteModal.style.display = 'none';
       });
@@ -11615,7 +11619,8 @@
       const delBtn = document.createElement('button');
       delBtn.className = 'fc-btn card-btn danger';
       delBtn.textContent = '삭제';
-      delBtn.addEventListener('click', ()=>{
+      delBtn.addEventListener('click', (e)=>{
+        e.stopPropagation();
         const pointCount = siteMarkers.length;
         const photoCount = siteMarkers.reduce((s,m)=>s+(m.photos||[]).length,0);
         if(!confirm('"' + site.name + '" 시설물을 삭제할까요?\n(조사점 ' + pointCount + '개, 사진 ' + photoCount + '장)\n휴지통으로 이동되며, "⋯ → 휴지통"에서 복원할 수 있습니다.')) return;
@@ -11897,35 +11902,39 @@
         (project.client ? ' · ' + project.client : '') +
         (project.inspector ? ' (' + project.inspector + ')' : '') + syncNote;
 
+      // 버튼들이 오른쪽에만 몰려있고(justify-content:flex-end) 줄 자체는 카드
+      // 전체 폭을 차지한다 — 예전엔 이 줄 전체에 클릭 차단을 걸어서, 버튼이 없는
+      // 왼쪽 빈 공간을 눌러도 카드 선택이 씹혔다("눌림 효과만 있고 선택이 안 됨").
+      // 이제 줄 전체가 아니라 버튼 각각에만 차단을 건다.
       const actionsRow = document.createElement('div');
       actionsRow.className = 'card-actions-row';
-      actionsRow.addEventListener('click', (e)=> e.stopPropagation());
 
       if(canEditThisProject){
         const editBtn = document.createElement('button');
         editBtn.className = 'card-btn';
         editBtn.textContent = '수정';
-        editBtn.addEventListener('click', ()=> openProjectInfoModal(project));
+        editBtn.addEventListener('click', (e)=>{ e.stopPropagation(); openProjectInfoModal(project); });
         actionsRow.appendChild(editBtn);
       }
 
       const copyBtn = document.createElement('button');
       copyBtn.className = 'card-btn';
       copyBtn.textContent = '복사';
-      copyBtn.addEventListener('click', ()=> duplicateProject(project));
+      copyBtn.addEventListener('click', (e)=>{ e.stopPropagation(); duplicateProject(project); });
       actionsRow.appendChild(copyBtn);
 
       const backupBtn = document.createElement('button');
       backupBtn.className = 'card-btn';
       backupBtn.textContent = '백업';
-      backupBtn.addEventListener('click', ()=> exportProjectBackup(project));
+      backupBtn.addEventListener('click', (e)=>{ e.stopPropagation(); exportProjectBackup(project); });
       actionsRow.appendChild(backupBtn);
 
       if(canEditThisProject){
         const delBtn = document.createElement('button');
         delBtn.className = 'card-btn danger';
         delBtn.textContent = '삭제';
-        delBtn.addEventListener('click', ()=>{
+        delBtn.addEventListener('click', (e)=>{
+          e.stopPropagation();
           if(facilityCount > 0){
             const backedUp = project.backupStatus === '백업완료';
             const backupNote = backedUp
@@ -11949,7 +11958,8 @@
         cloudDelBtn.title = project.organizationId
           ? '조직 리더(Owner/Admin)만 가능 — 클라우드 원본까지 영구 삭제합니다'
           : '클라우드에 올라간 이 프로젝트를 영구 삭제합니다';
-        cloudDelBtn.addEventListener('click', async ()=>{
+        cloudDelBtn.addEventListener('click', async (e)=>{
+          e.stopPropagation();
           if(!navigator.onLine){ alert('온라인 상태에서만 클라우드 삭제가 가능합니다.'); return; }
           const warn = '"' + project.name + '" 프로젝트를 클라우드에서 영구 삭제합니다.\n\n' +
             '시설물·조사점·기존손상 기록을 포함한 클라우드 원본이 완전히 사라지며 되돌릴 수 없습니다' +
