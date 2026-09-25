@@ -2693,6 +2693,10 @@
             <span class="more-item-title">활동 로그</span>
             <span class="more-item-desc">생성·삭제·이동 등 변경 이력 확인</span>
           </button>
+          <button class="more-item" id="btnCleanOrphanPhotos">
+            <span class="more-item-title">고아 사진 정리</span>
+            <span class="more-item-desc">어느 지점에도 연결 안 된 사진 파일을 찾아 확인 후 정리 (휴지통 항목은 지우지 않음)</span>
+          </button>
           <button class="more-item office-only" id="btnDamageMaster" style="display:none;">
             <span class="more-item-title">손상마스터 관리</span>
             <span class="more-item-desc">시설물별 손상명, 부위, 원인, 보수·보강 커스텀 설정</span>
@@ -3048,7 +3052,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v83';
+  const PS_BUILD = 'v84';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -3244,6 +3248,7 @@
   const trashBody = document.getElementById('trashBody');
   const siteTrashBody = document.getElementById('siteTrashBody');
   const btnActivityLog = document.getElementById('btnActivityLog');
+  const btnCleanOrphanPhotos = document.getElementById('btnCleanOrphanPhotos');
   const activityLogModal = document.getElementById('activityLogModal');
   const closeActivityLog = document.getElementById('closeActivityLog');
   const activityLogBody = document.getElementById('activityLogBody');
@@ -4197,6 +4202,18 @@
     }));
   }
 
+  // 저장 실패의 원인이 "기기 저장공간이 가득 참"인지 구분한다 — 이거면 사용자가
+  // 직접 할 수 있는 조치(사진/시설물 정리)가 있는데, 그냥 "저장 실패"라고만 하면
+  // 뭘 어떻게 해야 할지 알 방법이 없었다.
+  function isQuotaError(e){
+    return !!(e && (e.name === 'QuotaExceededError' || e.code === 22 || (e.message && /quota/i.test(e.message))));
+  }
+  // performSaveState() 한 번(저장 시도 하나) 동안 겪은 실패 중에 저장공간 부족이
+  // 있었는지 기록한다 — extractPhotoBlobsFromMarkers 등 여러 내부 단계가 boolean
+  // 성공여부만 반환하므로(기존 호출부를 안 건드리기 위해 반환 타입은 그대로 둠),
+  // 실제 원인 분류는 이 변수를 통해 옆으로 전달한다.
+  let lastSaveErrorWasQuota = false;
+
   // --- photoBlobs 원본 바이너리 Store I/O (Blob/File 직접 저장) ---
   function idbPutPhotoBlob(photoId, blob, mimeType){
     return openIDB().then(db => new Promise((resolve, reject)=>{
@@ -4279,6 +4296,10 @@
       return true;
     }catch(e){
       console.warn('IndexedDB 메타데이터 저장 실패, localStorage로 전환', e);
+      // storageSet은 내부에서 대체 저장소로 넘어가며 원본 에러를 삼키므로(호출부까지
+      // throw하지 않음), 저장공간 부족 여부는 여기서 바로 기록해둬야 한다 — 안 그러면
+      // performSaveState의 catch에는 애초에 아무 에러도 안 넘어가서 quota 판정을 못 한다.
+      if(isQuotaError(e)) lastSaveErrorWasQuota = true;
     }
     try{
       localStorage.setItem(key, JSON.stringify(value));
@@ -4286,6 +4307,7 @@
       return true;
     }catch(e2){
       console.warn('localStorage 저장도 실패, 메모리로 전환', e2);
+      if(isQuotaError(e2)) lastSaveErrorWasQuota = true;
     }
     memoryFallback[key] = value;
     storageBackend = 'memory';
@@ -4340,7 +4362,7 @@
   let saveIndicatorTimer = null;
   let lastSavedAt = null;
   let permanentFailureWarned = false;
-  function setSaveIndicator(state){
+  function setSaveIndicator(state, quotaExceeded){
     if(!sbSave) return;
     clearTimeout(saveIndicatorTimer);
     if(state === 'saving'){
@@ -4358,11 +4380,15 @@
       sbSave.textContent = '⏳ 저장 대기 중 (재시도 진행 중)';
       sbSave.className = 'sb-item saving';
     } else {
-      sbSave.textContent = '⚠ 사진/조사자료 저장 실패 - 다시 시도';
+      // 저장공간이 가득 차서 실패한 경우엔 "다시 시도"가 아니라 "공간을 비워야"
+      // 해결되므로, 원인을 구분해서 사용자가 실제로 할 수 있는 조치를 알려준다.
+      sbSave.textContent = quotaExceeded ? '⚠ 저장공간 부족 - 정리 필요' : '⚠ 사진/조사자료 저장 실패 - 다시 시도';
       sbSave.className = 'sb-item failed';
       if(!permanentFailureWarned){
         permanentFailureWarned = true;
-        alert('⚠ 기기 영구 저장에 실패했습니다.\n사진 원본 또는 조사자료를 기기에 안전하게 저장하지 못했습니다.\n다시 촬영하거나 저장을 재시도하세요.');
+        alert(quotaExceeded
+          ? '⚠ 기기 저장공간이 가득 차서 저장에 실패했습니다.\n사진 원본이나 조사자료가 안전하게 저장되지 못하고 있습니다.\n사용하지 않는 시설물·사진을 정리하거나(휴지통 비우기), 기기 저장공간을 확보한 뒤 다시 시도해주세요.'
+          : '⚠ 기기 영구 저장에 실패했습니다.\n사진 원본 또는 조사자료를 기기에 안전하게 저장하지 못했습니다.\n다시 촬영하거나 저장을 재시도하세요.');
       }
     }
   }
@@ -4408,14 +4434,30 @@
   async function findOrphanPhotoBlobs(allSites){
     const targetSites = Array.isArray(allSites) ? allSites : (sites || []);
     const usedRefs = new Set();
-    targetSites.forEach(s => {
-      (s.markers || []).forEach(m => {
-        (m.photos || []).forEach(p => {
-          if(p.photoRef) usedRefs.add(p.photoRef);
-          if(p.id) usedRefs.add(p.id);
-        });
+    const addPhoto = (p)=>{
+      if(!p) return;
+      if(p.photoRef) usedRefs.add(p.photoRef);
+      if(p.id) usedRefs.add(p.id);
+    };
+    const addSite = (s)=>{
+      if(!s) return;
+      (s.markers || []).forEach(m => (m.photos || []).forEach(addPhoto));
+      // site.trash(이 시설물 안에서 개별 지점/사진 단위로 지워 휴지통에 있는 것)도
+      // "아직 복원 가능한 상태"이므로 여기서 지우면 안 된다 — 정말로 주인 없는
+      // blob만 고아로 판정해야 한다.
+      (s.trash || []).forEach(item=>{
+        if(!item || !item.data) return;
+        if(item.type === 'photo'){ addPhoto(item.data); }
+        else if(item.type === 'marker'){ (item.data.photos || []).forEach(addPhoto); }
       });
-    });
+    };
+    targetSites.forEach(addSite);
+    // 시설물째로 휴지통에 있는 것(deletedSites)도 마찬가지로 복원 가능한 상태다.
+    // 현재 화면에 열려있는 시설물의 markers는 site.markers가 아니라 전역 markers에
+    // 있을 수 있어(작업 중 메모리 상태) 별도로도 한 번 더 반영한다.
+    (deletedSites || []).forEach(entry => addSite(entry && entry.site));
+    if(currentSiteId){ (markers || []).forEach(addPhoto); }
+
     let allPhotoKeys = [];
     try{ allPhotoKeys = await idbAllPhotoBlobKeys(); }catch(e){}
     const orphanKeys = allPhotoKeys.filter(k => !usedRefs.has(k));
@@ -5046,6 +5088,7 @@
             }
           }catch(e){
             console.warn('사진 Blob 분리 저장 실패(인라인 Base64 보존)', photoId, e);
+            if(isQuotaError(e)) lastSaveErrorWasQuota = true;
             allOk = false;
           }
         }
@@ -7256,6 +7299,12 @@
     });
     syncState.photoStats = { total: totalPhotos, uploaded: uploadedPhotos, pending: pendingPhotos };
 
+    // 재시도해도 풀리지 않아 큐에서 빠진 항목(권한 문제 등) — 여태까지는 진단로그
+    // 에만 남고 화면 어디에도 안 보여서, 이 지점은 클라우드에 영영 안 올라간다는
+    // 사실을 사용자가 알 방법이 없었다.
+    const entityQueue = await loadEntitySyncQueue();
+    const permanentlyFailed = entityQueue.filter(q => q.status === 'skipped_unfixable');
+
     body.innerHTML = '';
 
     // 1. 상단 상태 요약 카드
@@ -7297,8 +7346,33 @@
         <div style="font-size:11px; color:var(--muted);">클라우드 사진</div>
         <div style="font-size:18px; font-weight:700; color:#1F8A4C; margin-top:2px;">${uploadedPhotos} / ${totalPhotos}</div>
       </div>
+      <div style="background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:10px; text-align:center;">
+        <div style="font-size:11px; color:var(--muted);">영구 실패(미반영)</div>
+        <div style="font-size:18px; font-weight:700; color:${permanentlyFailed.length ? '#e74c3c' : '#1F8A4C'}; margin-top:2px;">${permanentlyFailed.length}건</div>
+      </div>
     `;
     body.appendChild(grid);
+
+    if(permanentlyFailed.length > 0){
+      const typeCounts = {};
+      permanentlyFailed.forEach(q=>{
+        const label = { project:'프로젝트', facility:'시설물', point:'조사지점', damage:'손상기록', existingDamage:'기존손상', photo:'사진' }[q.entityType] || q.entityType;
+        typeCounts[label] = (typeCounts[label] || 0) + 1;
+      });
+      const typeSummary = Object.entries(typeCounts).map(([k,v])=> k + ' ' + v + '건').join(' · ');
+      const warnCard = document.createElement('div');
+      warnCard.style.cssText = 'background:rgba(226,96,79,0.08); border:1px solid rgba(226,96,79,0.3); border-radius:8px; padding:12px 14px; margin-bottom:14px;';
+      warnCard.innerHTML = `
+        <div style="font-weight:700; font-size:13px; color:#e74c3c;">⚠️ 클라우드에 영구히 반영되지 못한 항목이 있습니다</div>
+        <div style="font-size:12px; color:var(--text); margin-top:6px;">${escapeHtml(typeSummary)}</div>
+        <div style="font-size:11.5px; color:var(--muted); margin-top:6px; line-height:1.5;">
+          대부분 권한 문제(조직 프로젝트인데 만든 사람이 아니거나, 소속에서 빠진 경우)입니다.
+          이 기기의 데이터는 안전하게 남아있지만, 클라우드·다른 팀원에게는 전달되지 않습니다.
+          조직 관리자에게 권한을 확인해주세요.
+        </div>
+      `;
+      body.appendChild(warnCard);
+    }
 
     // 2-2. 팀원 자료 가져오기 카드 — 온라인 복귀 시 자동 pull을 없앤 대신, 여기서
     // "언제 마지막으로 가져왔는지 / 새 자료가 있는지"를 보여주고 직접 누르게 한다.
@@ -9023,6 +9097,7 @@
   // 실제 저장 1회를 수행한다. 큐를 거치지 않고 이 함수를 직접 호출하지 않는다.
   async function performSaveState(){
     const __diagT0 = Date.now();
+    lastSaveErrorWasQuota = false; // 이번 저장 시도의 실패 원인만 반영되도록 매번 초기화
     commitLiveToCurrentSite();
     setSaveIndicator('saving');
 
@@ -9055,6 +9130,7 @@
       }
     }catch(e){
       console.warn('performSaveState: inspectionPoints durable write 경고', e);
+      if(isQuotaError(e)) lastSaveErrorWasQuota = true;
       durablePointsOk = false;
     }
 
@@ -9085,11 +9161,12 @@
       metadataOk = await storageSet(STORAGE_KEY, snapshot);
     } catch(e){
       console.error('saveState 메타데이터 저장 실패:', e);
+      if(isQuotaError(e)) lastSaveErrorWasQuota = true;
       metadataOk = false;
     }
 
     const totalOk = currentSitePhotosOk && otherSitesPhotosOk && durablePointsOk && metadataOk;
-    setSaveIndicator(totalOk ? 'saved' : 'failed');
+    setSaveIndicator(totalOk ? 'saved' : 'failed', lastSaveErrorWasQuota);
     // 실패는 항상 남기고, 성공은 눈에 띄게 느렸을 때만 남긴다(정상 저장마다 남기면
     // 로그가 금방 차서 정작 필요한 기록이 밀려나므로) — "여전히 가끔 늦다"를 실제
     // 소요시간으로 확인할 수 있게 하는 목적.
@@ -9097,6 +9174,7 @@
     if(!totalOk || __diagMs > 800){
       diagLog('save', totalOk ? 'save slow' : 'save FAILED', {
         durationMs: __diagMs, currentSitePhotosOk, otherSitesPhotosOk, durablePointsOk, metadataOk,
+        quotaExceeded: lastSaveErrorWasQuota,
         markerCount: (markers || []).length,
         photoCount: (markers || []).reduce((s,m)=>s+(m.photos||[]).length, 0),
         siteCount: (sites || []).length,
@@ -11773,14 +11851,44 @@
   // 조직 공유 프로젝트는 리더(Owner/Admin)만, 개인 프로젝트는 본인이 곧 리더이므로
   // 항상 클라우드 완전삭제가 가능하다. 지금까지는 "삭제" 버튼이 로컬에서만 지우고
   // 클라우드(ps_projects 등) 행은 영구히 남는 기능적 공백이 있었다 — 이 함수로 메운다.
-  // 사진 원본(Storage 버킷 ps-photos)은 안전을 위해 여기서 지우지 않는다(다른 기기가
-  // 아직 안 받은 사진을 잘못 지울 위험이 있음) — 필요하면 별도 정리 작업으로 다룬다.
   function canDeleteCloudCopy(project){
     if(!supabaseClient || !supabaseSession) return false;
     if(!project.organizationId) return true; // 개인 프로젝트: 본인이 유일한 소유자
     const role = myRoleByOrg[project.organizationId];
     return role === 'Owner' || role === 'Admin';
   }
+
+  // 이 프로젝트의 사진 중 "내가 올린 것"만 Storage(ps-photos)에서 지운다 — 업로드
+  // 경로가 userId/photoId 형식이라(index.html 사진 업로드 코드 참고) 다른 팀원이
+  // 올린 사진은 그 사람 계정 하위 경로에 있어 내 권한으로는 애초에 지울 수 없다.
+  // 실패해도(개별 파일 오류 등) 최선을 다한 정리일 뿐 프로젝트/행 삭제 자체를
+  // 막지 않는다 — 그래서 결과를 리턴만 하고 예외를 던지지 않는다.
+  async function deleteCloudProjectPhotos(projectId){
+    const myUid = myUserId();
+    if(!myUid) return { attempted: 0, deleted: 0 };
+    const projSites = sites.filter(s => s.projectId === projectId);
+    const paths = [];
+    projSites.forEach(s=>{
+      (s.markers || []).forEach(m=>{
+        if(m.createdBy && m.createdBy !== myUid) return; // 남이 올린 사진은 건너뜀
+        (m.photos || []).forEach(p=>{
+          const photoId = p.id || p.photoRef;
+          if(photoId) paths.push(myUid + '/' + photoId);
+        });
+      });
+    });
+    if(paths.length === 0) return { attempted: 0, deleted: 0 };
+    let deleted = 0;
+    for(let i=0; i<paths.length; i+=100){ // Storage remove()는 한 번에 너무 많으면 실패할 수 있어 배치로 나눈다
+      const batch = paths.slice(i, i+100);
+      try{
+        const { data, error } = await supabaseClient.storage.from('ps-photos').remove(batch);
+        if(!error) deleted += (data ? data.length : batch.length);
+      }catch(e){}
+    }
+    return { attempted: paths.length, deleted };
+  }
+
   async function deleteCloudProjectData(projectId){
     if(!supabaseClient || !supabaseSession) return { ok:false, reason:'로그인 상태가 아닙니다.' };
     if(!navigator.onLine) return { ok:false, reason:'오프라인 상태입니다.' };
@@ -11794,7 +11902,9 @@
       if(childErr) return { ok:false, reason: childErr.error.message };
       const { error } = await supabaseClient.from('ps_projects').delete().eq('id', projectId);
       if(error) return { ok:false, reason: error.message };
-      return { ok:true };
+      let photoCleanup = { attempted: 0, deleted: 0 };
+      try{ photoCleanup = await deleteCloudProjectPhotos(projectId); }catch(e){}
+      return { ok:true, photoCleanup };
     }catch(e){
       return { ok:false, reason: (e && e.message) || String(e) };
     }
@@ -11964,7 +12074,7 @@
           const warn = '"' + project.name + '" 프로젝트를 클라우드에서 영구 삭제합니다.\n\n' +
             '시설물·조사점·기존손상 기록을 포함한 클라우드 원본이 완전히 사라지며 되돌릴 수 없습니다' +
             (project.organizationId ? '. 다른 조직원도 더 이상 이 프로젝트를 받을 수 없게 됩니다.' : '.') +
-            '\n(이미 올라간 사진 원본 파일은 저장공간 정책상 이번엔 함께 지워지지 않습니다.)\n\n' +
+            '\n(내가 올린 사진 원본도 함께 지워집니다. 다른 팀원이 올린 사진은 그 사람 권한으로만 지울 수 있어 남을 수 있습니다.)\n\n' +
             '이 기기의 시설물 자료는 그대로 남고(휴지통에서 복원 가능), 클라우드 연결만 끊어집니다.\n\n정말 삭제할까요?';
           if(!confirm(warn)) return;
           cloudDelBtn.disabled = true; cloudDelBtn.textContent = '삭제 중…';
@@ -11973,6 +12083,9 @@
             alert('클라우드 삭제에 실패했습니다: ' + (result.reason || '알 수 없는 오류'));
             cloudDelBtn.disabled = false; cloudDelBtn.textContent = '☁️ 클라우드 완전삭제';
             return;
+          }
+          if(result.photoCleanup && result.photoCleanup.attempted > 0 && result.photoCleanup.deleted < result.photoCleanup.attempted){
+            diagLog('sync', '클라우드 프로젝트 삭제: 사진 일부 정리 실패', result.photoCleanup);
           }
           removeProjectLocally(project);
         });
@@ -13592,6 +13705,40 @@
     }).join('');
   }
   btnActivityLog.addEventListener('click', ()=>{ moreModal.style.display='none'; renderActivityLog(); activityLogModal.style.display='flex'; });
+
+  // 고아 사진 정리 — findOrphanPhotoBlobs()는 휴지통(site.trash/deletedSites)까지
+  // "아직 쓰이는 중"으로 보고 제외하므로, 여기서 걸리는 건 정말로 어느 지점·휴지통
+  // 에도 안 걸린 blob뿐이다. 그래도 삭제는 되돌릴 수 없으니 자동으로 지우지 않고
+  // 사용자가 개수·용량을 직접 보고 승인한 뒤에만 지운다.
+  btnCleanOrphanPhotos.addEventListener('click', async ()=>{
+    moreModal.style.display = 'none';
+    let result;
+    try{
+      result = await findOrphanPhotoBlobs(sites);
+    }catch(e){
+      alert('고아 사진을 확인하는 중 오류가 발생했습니다: ' + (e && e.message || e));
+      return;
+    }
+    const { orphanKeys, totalBlobs } = result;
+    if(!orphanKeys || orphanKeys.length === 0){
+      alert('정리할 고아 사진이 없습니다. (전체 저장된 사진 ' + totalBlobs + '장 모두 지점 또는 휴지통에 연결되어 있습니다)');
+      return;
+    }
+    let totalBytes = 0;
+    for(const k of orphanKeys){
+      try{ const rec = await idbGetPhotoBlob(k); if(rec && rec.blob) totalBytes += rec.blob.size || 0; }catch(e){}
+    }
+    const mb = (totalBytes / 1048576).toFixed(1);
+    if(!confirm('어느 지점에도(휴지통 포함) 연결되지 않은 사진 ' + orphanKeys.length + '장(약 ' + mb + 'MB)을 찾았습니다.\n\n' +
+      '이 사진들은 이미 완전히 삭제된 지점의 흔적이거나, 저장 중 중단된 조각일 가능성이 높습니다.\n' +
+      '지금 기기에서 완전히 지울까요? (되돌릴 수 없습니다)')) return;
+    let deleted = 0;
+    for(const k of orphanKeys){
+      try{ await idbDeletePhotoBlob(k); deleted++; }catch(e){}
+    }
+    logActivity('고아 사진 정리', deleted + '장 삭제 (약 ' + mb + 'MB)');
+    alert(deleted + '장을 정리했습니다.' + (deleted < orphanKeys.length ? ' (' + (orphanKeys.length - deleted) + '장은 삭제 중 오류로 남았습니다)' : ''));
+  });
   closeActivityLog.addEventListener('click', ()=>{ activityLogModal.style.display='none'; });
   activityLogModal.addEventListener('click', (e)=>{ if(e.target===activityLogModal) activityLogModal.style.display='none'; });
 
