@@ -3052,7 +3052,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v84';
+  const PS_BUILD = 'v85';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -4460,7 +4460,18 @@
 
     let allPhotoKeys = [];
     try{ allPhotoKeys = await idbAllPhotoBlobKeys(); }catch(e){}
-    const orphanKeys = allPhotoKeys.filter(k => !usedRefs.has(k));
+    // 도면 이미지 blob('drawing:<시설물id>:<도면id>')은 사진이 아니라 시설물에 딸린 것 —
+    // 그 시설물(또는 휴지통의 시설물)이 아직 있으면 절대 고아로 보지 않는다.
+    const knownSiteIds = new Set();
+    targetSites.forEach(s => { if(s && s.id) knownSiteIds.add(s.id); });
+    (sites || []).forEach(s => { if(s && s.id) knownSiteIds.add(s.id); });
+    (deletedSites || []).forEach(e => { if(e && e.site && e.site.id) knownSiteIds.add(e.site.id); });
+    const orphanKeys = allPhotoKeys.filter(k => {
+      if(typeof k === 'string' && k.indexOf('drawing:') === 0){
+        return !knownSiteIds.has(k.split(':')[1]);
+      }
+      return !usedRefs.has(k);
+    });
     return { orphanKeys, usedCount: usedRefs.size, totalBlobs: allPhotoKeys.length };
   }
 
@@ -9035,13 +9046,107 @@
       })
     };
   }
+  // ---------- 도면 이미지 분리 저장 ----------
+  // ★ 2026-10-08 실기기 진단로그에서 확인된 "저장공간 부족" + "화면이 하얗게 변하며 재시작"의
+  // 핵심 원인: 도면 이미지(drawings[].imageSrc / baseImageSrc — PDF를 변환한 수 MB짜리
+  // base64)가 메인 스냅샷(kv)에 통째로 들어 있어서, 저장 한 번(사진 1장·손상 입력 1건)마다
+  // 시설물 10개분의 도면 수십 MB를 직렬화+IndexedDB에 다시 쓰고 있었다. iOS는 이전 사본을
+  // 바로 회수하지 않아 사용량이 수 GB까지 부풀고(앱 재시작하면 수백MB로 복귀), 그 직렬화
+  // 순간 메모리 급증으로 페이지가 강제 종료되어 흰 화면이 된다.
+  // → 도면 이미지는 photoBlobs 스토어에 Blob으로 한 번만 저장하고, 스냅샷에는 참조(imageRef)
+  //   만 남긴다. 메모리 안의 데이터 모양(imageSrc)은 그대로라 다른 기능은 영향이 없고,
+  //   불러올 때(hydrateDrawingImages) 다시 채워 넣는다. 분리 저장에 실패하면 예전처럼
+  //   스냅샷에 그대로 포함시켜(안전 우선) 데이터가 사라지지 않게 한다.
+  const DRAWING_IMG_PREFIX = 'drawing:';
+  const persistedDrawingImageSig = new Map(); // blob key -> 저장해 둔 src의 서명
+  function drawingImageKey(siteId, drawingId){ return DRAWING_IMG_PREFIX + siteId + ':' + drawingId; }
+  function drawingSrcSig(src){
+    return src.length + ':' + src.slice(100, 164) + ':' + src.slice(-64);
+  }
+  async function persistOneDrawingImage(key, src){
+    if(typeof src !== 'string' || !src.startsWith('data:')) return false;
+    const sig = drawingSrcSig(src);
+    if(persistedDrawingImageSig.get(key) === sig) return true; // 이미 저장해 둔 그대로
+    try{
+      const blob = dataUrlToBlob(src);
+      if(!blob || !blob.size) return false;
+      const ok = await idbPutPhotoBlob(key, blob, blob.type);
+      if(ok){ persistedDrawingImageSig.set(key, sig); return true; }
+    }catch(e){
+      if(isQuotaError(e)) lastSaveErrorWasQuota = true;
+      console.warn('도면 이미지 분리 저장 실패(스냅샷에 그대로 포함)', key, e);
+    }
+    return false;
+  }
+  async function persistDrawingImages(siteList){
+    for(const s of (siteList || [])){
+      if(!s || !s.id) continue;
+      const drawingsArr = Array.isArray(s.drawings) ? s.drawings : [];
+      for(const d of drawingsArr){
+        if(!d || !d.id || !d.imageSrc) continue;
+        const key = drawingImageKey(s.id, d.id);
+        if(await persistOneDrawingImage(key, d.imageSrc)) d.imageRef = key;
+      }
+      // 예전 버전 호환용 baseImageSrc — 보통 첫 도면 이미지와 같은 내용이라 같은 blob을 가리킨다
+      if(s.baseImageSrc && typeof s.baseImageSrc === 'string'){
+        const d0 = drawingsArr[0];
+        let key;
+        if(d0 && d0.imageRef && d0.imageSrc === s.baseImageSrc) key = d0.imageRef;
+        else{
+          key = drawingImageKey(s.id, '__base');
+          if(!(await persistOneDrawingImage(key, s.baseImageSrc))) key = null;
+        }
+        if(key) s.baseImageRef = key;
+      }
+    }
+  }
+  function stripDrawingImages(siteObj){
+    if(!siteObj) return siteObj;
+    const out = { ...siteObj };
+    const isSaved = (ref, src)=> !!(ref && typeof src === 'string' && src && persistedDrawingImageSig.get(ref) === drawingSrcSig(src));
+    if(Array.isArray(siteObj.drawings)){
+      out.drawings = siteObj.drawings.map(d=>{
+        if(d && isSaved(d.imageRef, d.imageSrc)) return { ...d, imageSrc: '' };
+        return d;
+      });
+    }
+    if(isSaved(siteObj.baseImageRef, siteObj.baseImageSrc)) out.baseImageSrc = '';
+    return out;
+  }
+  async function loadDrawingImage(key){
+    try{
+      const rec = await idbGetPhotoBlob(key);
+      if(rec && rec.blob) return await blobToDataUrl(rec.blob);
+    }catch(e){ console.warn('도면 이미지 복구 실패', key, e); }
+    return null;
+  }
+  async function hydrateDrawingImages(siteList){
+    for(const s of (siteList || [])){
+      if(!s) continue;
+      for(const d of (s.drawings || [])){
+        if(d && d.imageRef && !d.imageSrc){
+          const src = await loadDrawingImage(d.imageRef);
+          if(src){ d.imageSrc = src; persistedDrawingImageSig.set(d.imageRef, drawingSrcSig(src)); }
+        }
+      }
+      if(s.baseImageRef && !s.baseImageSrc){
+        const d0 = (s.drawings || [])[0];
+        if(d0 && d0.imageRef === s.baseImageRef && d0.imageSrc){
+          s.baseImageSrc = d0.imageSrc;
+        }else{
+          const src = await loadDrawingImage(s.baseImageRef);
+          if(src){ s.baseImageSrc = src; persistedDrawingImageSig.set(s.baseImageRef, drawingSrcSig(src)); }
+        }
+      }
+    }
+  }
   function lightweightSitesFor(sitesArr){
-    return (sitesArr || []).map(stripHeavyPhotoFields);
+    return (sitesArr || []).map(s => stripDrawingImages(stripHeavyPhotoFields(s)));
   }
   function lightweightDeletedSitesFor(deletedSitesArr){
     return (deletedSitesArr || []).map(entry => ({
       ...entry,
-      site: entry.site ? stripHeavyPhotoFields(entry.site) : entry.site
+      site: entry.site ? stripDrawingImages(stripHeavyPhotoFields(entry.site)) : entry.site
     }));
   }
   // 충돌 기록에 담기는 local_data/cloud_data는 엔티티 종류에 따라 모양이 다르다
@@ -9143,6 +9248,14 @@
     // 쓰느라 저장이 더 느려지고), 실기기에서 확인된 1.8~4GB 저장공간 사용량의
     // 상당 부분이 여기서 나왔을 가능성이 크다(위 lightweightSitesFor/
     // lightweightDeletedSitesFor 참고 — sites와 완전히 동일한 방식으로 스트리핑).
+    // 도면 이미지는 한 번만 별도 저장(이미 저장된 건 서명 비교로 건너뜀) — 스냅샷에서 빠진다.
+    // 실패해도 저장 전체를 실패로 보지 않는다(실패한 건 스냅샷에 그대로 남아 데이터는 안전).
+    try{
+      await persistDrawingImages(sites);
+      await persistDrawingImages((deletedSites || []).map(e => e && e.site).filter(Boolean));
+    }catch(e){
+      console.warn('performSaveState: 도면 이미지 분리 저장 경고', e);
+    }
     const lightweightSites = lightweightSitesFor(sites);
     const lightweightDeletedSites = lightweightDeletedSitesFor(deletedSites);
 
@@ -11012,6 +11125,12 @@
         projects = data.projects || [];
         currentProjectId = data.currentProjectId || null;
         deletedSites = data.deletedSites || [];
+        // 스냅샷에서 빠져 별도 저장된 도면 이미지를 먼저 채운다(다른 모든 코드는 예전처럼
+        // 메모리의 drawings[].imageSrc를 그대로 쓰므로, 이후 동작은 달라지지 않는다)
+        try{
+          await hydrateDrawingImages(sites);
+          await hydrateDrawingImages(deletedSites.map(e => e && e.site).filter(Boolean));
+        }catch(e){ console.warn('도면 이미지 복구 중 경고', e); }
         sites.forEach(s => (s.markers || []).forEach(normalizePhotos));
         const migrated = ensureProjectsIntegrity();
         if(migrated || incomingSchemaVersion !== data.schemaVersion){
@@ -11145,11 +11264,14 @@
 
 
   function fileToDataUrl(file, maxWidth){
+    // 원본 파일 전체를 base64 문자열로 먼저 만들지 않고(12MP 사진이면 십수 MB 문자열)
+    // 파일을 가리키는 임시 주소(Object URL)로 바로 읽어 메모리 급증을 피한다. 결과물
+    // (리사이즈된 JPEG data URL)은 예전과 동일하다.
     return new Promise((resolve, reject)=>{
-      const reader = new FileReader();
-      reader.onload = () => {
-        const img = new Image();
-        img.onload = () => {
+      const objUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        try{
           let w = img.width, h = img.height;
           if(maxWidth && w > maxWidth){
             h = Math.round(h * (maxWidth / w));
@@ -11159,13 +11281,17 @@
           c.width = w; c.height = h;
           const ctx = c.getContext('2d');
           ctx.drawImage(img, 0, 0, w, h);
-          resolve(c.toDataURL('image/jpeg', 0.9));
-        };
-        img.onerror = reject;
-        img.src = reader.result;
+          const out = c.toDataURL('image/jpeg', 0.9);
+          c.width = c.height = 0; // 캔버스 메모리를 바로 반환
+          resolve(out);
+        }catch(err){
+          reject(err);
+        }finally{
+          URL.revokeObjectURL(objUrl);
+        }
       };
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
+      img.onerror = (err)=>{ URL.revokeObjectURL(objUrl); reject(err); };
+      img.src = objUrl;
     });
   }
 
@@ -13786,6 +13912,8 @@
           projects = snap.projects || [];
           currentProjectId = snap.currentProjectId || null;
           deletedSites = snap.deletedSites || deletedSites || [];
+          await hydrateDrawingImages(sites);
+          await hydrateDrawingImages(deletedSites.map(e => e && e.site).filter(Boolean));
           sites.forEach(s => (s.markers || []).forEach(normalizePhotos));
           ensureProjectsIntegrity();
           renderProjectHeader();
@@ -16106,7 +16234,9 @@
     if(files.length === 0 || !activeMarkerId) return;
     for(const file of files){
       let exif = null;
-      try{ exif = parseExif(await file.arrayBuffer()); }catch(err){ exif = null; }
+      // EXIF는 파일 맨 앞부분(수십KB)에만 있다 — 12MP 원본 전체(수MB)를 ArrayBuffer로
+      // 올릴 필요가 없다(메모리가 빠듯한 iOS에서 촬영 직후 흰 화면의 원인 중 하나).
+      try{ exif = parseExif(await file.slice(0, 262144).arrayBuffer()); }catch(err){ exif = null; }
       // 사진 EXIF에 GPS가 없으면(실내 등으로 카메라 앱이 위치를 못 잡은 경우) 앱이 이미
       // 계속 추적 중인 기기 GPS(lastGps)로 보완한다. 기존 실시간 카메라(WebRTC, btnShoot)
       // 촬영 경로가 항상 하던 동작과 동일하게 맞춰서, 사진첩 선택/iOS 카메라 앱 경로에서도
@@ -16122,6 +16252,7 @@
         });
       }
       const dataUrl = await fileToDataUrl(file, 1800);
+      if(!dataUrl) continue;
       await addPhoto(activeMarkerId, dataUrl, exif);
     }
     renderCaptureStrip(activeMarkerId);
