@@ -2992,6 +2992,19 @@
 </div>
 
 <!-- Snapshot Recovery Modal -->
+<div class="modal-backdrop" id="cloudMgrModal" style="display:none;">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>클라우드 프로젝트 관리</h2>
+      <button class="close-x" id="closeCloudMgr" aria-label="닫기">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="hint">삭제하면 먼저 "삭제 보관함"으로 이동하고, 30일 뒤 자동으로 완전히 지워집니다. 그 전에는 복원할 수 있습니다. 팀 프로젝트는 조직 Owner/Admin만 삭제할 수 있습니다.</div>
+      <div id="cloudMgrBody"></div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="snapshotModal" style="display:none;">
   <div class="modal">
     <div class="modal-head">
@@ -3052,7 +3065,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v92';
+  const PS_BUILD = 'v93';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -6662,7 +6675,7 @@
   async function listCloudProjects(){
     if(!supabaseClient || !supabaseSession) return [];
     try{
-      let query = supabaseClient.from('ps_projects').select('id,name,updated_at,organization_id,user_id,data').order('updated_at', { ascending:false });
+      let query = supabaseClient.from('ps_projects').select('id,name,updated_at,organization_id,user_id,data').is('deleted_at', null).order('updated_at', { ascending:false });
       if(activeOrganizationId){
         query = query.or(`organization_id.eq.${activeOrganizationId},user_id.eq.${supabaseSession.user.id}`);
       } else {
@@ -6716,6 +6729,65 @@
   //    하면 조직과 끊긴 별개 프로젝트가 생겨 서로 자료가 절대 안 합쳐졌다.
   //  - 개인 프로젝트(organization_id 없음): 예전처럼 새 id로 복제(남의 개인 프로젝트를
   //    내 사본으로 가져오는 용도).
+  // 클라우드 프로젝트의 지점 id 집합과 사진 수 (불러오기 전 비교용)
+  async function fetchCloudProjectCounts(cloudProjectId){
+    const pointIds = new Set(); let photos = 0;
+    for(let off = 0; off < 100000; off += 1000){
+      const { data, error } = await supabaseClient.from('ps_inspection_points')
+        .select('id, ph:data->photos').eq('project_id', cloudProjectId).range(off, off + 999);
+      if(error) throw error;
+      (data || []).forEach(r => { pointIds.add(r.id); photos += Array.isArray(r.ph) ? r.ph.length : 0; });
+      if(!data || data.length < 1000) break;
+    }
+    return { pointIds, points: pointIds.size, photos };
+  }
+
+  // 같은 프로젝트가 폰에 이미 있을 때: 비교해서 보여주고, 폰에만 있는 내용이 있으면 경고한다.
+  // true를 돌려주면 호출부가 폰의 프로젝트를 지우고 클라우드 내용으로 교체한다.
+  async function confirmReplaceLocalWithCloud(localProject, cloudProjectId){
+    let cloud;
+    try{ cloud = await fetchCloudProjectCounts(cloudProjectId); }
+    catch(e){ alert('클라우드 내용을 확인하지 못해 불러오기를 중단했습니다.\n(이 기기의 자료는 그대로입니다)\n' + ((e && e.message) || e)); return false; }
+
+    const localSites = sites.filter(s => s.projectId === localProject.id);
+    let lp = 0, lph = 0, onlyPts = 0, onlyPhotos = 0;
+    localSites.forEach(s => (s.markers || []).forEach(m => {
+      lp++;
+      if(!cloud.pointIds.has(m.id)) onlyPts++;
+      (m.photos || []).forEach(p => { lph++; if(!p.cloudRef) onlyPhotos++; });
+    }));
+    const compare = '"' + localProject.name + '"\n\n이 기기: 지점 ' + lp + '개 · 사진 ' + lph + '장\n클라우드: 지점 ' + cloud.points + '개 · 사진 ' + cloud.photos + '장';
+
+    if(onlyPts === 0 && onlyPhotos === 0){
+      return confirm(compare + '\n\n이 기기의 같은 프로젝트를 클라우드 내용으로 교체합니다.\n(교체 직전의 기기 상태는 "복구 스냅샷"에 보관됩니다)\n\n교체할까요?');
+    }
+
+    const warn = '⚠ ' + compare + '\n\n이 기기에만 있는 내용이 있습니다 (클라우드에 아직 없음):\n · 지점 ' + onlyPts + '개\n · 사진 ' + onlyPhotos + '장\n\n지금 교체하면 이 내용은 프로젝트에서 사라집니다.';
+    if(confirm(warn + '\n\n[확인] 먼저 이 기기 내용을 클라우드에 백업한 뒤 교체 (추천)\n[취소] 백업하지 않고 다음 단계로')){
+      let res;
+      try{ res = await backupProjectFull(localProject); }catch(e){ res = { ok:false, reason: (e && e.message) || String(e) }; }
+      if(!res || !res.ok || !res.verified || !res.verified.ok){
+        alert('백업이 완전히 확인되지 않아 교체를 중단했습니다.\n' + (res && res.reason ? res.reason + '\n' : '') + '(이 기기의 자료는 그대로입니다. "지금 클라우드에 백업"을 다시 누른 뒤 시도해 주세요)');
+        return false;
+      }
+    } else {
+      if(!confirm('정말 백업 없이 교체할까요?\n이 기기에만 있는 지점 ' + onlyPts + '개 · 사진 ' + onlyPhotos + '장이 프로젝트에서 사라집니다.\n(복구 스냅샷에는 지점 정보가 보관되지만 사진 연결은 보장되지 않습니다)')) return false;
+    }
+    return true;
+  }
+
+  function removeLocalProjectForReplace(project){
+    // 교체 직전 상태를 복구 스냅샷으로 보관한다(더보기 → 복구 스냅샷에서 복원 가능)
+    try{ lastSnapshotAt = 0; maybeTakeSnapshot(); }catch(e){}
+    sites = sites.filter(s => s.projectId !== project.id);
+    projects = projects.filter(p => p.id !== project.id);
+    if(currentProjectId === project.id){
+      currentProjectId = null; currentSiteId = null;
+      baseImageSrc = null; markers = []; nextNum = 1; trash = []; activityLog = []; trackLog = [];
+      drawings = []; currentDrawingId = null; existingDamages = [];
+    }
+  }
+
   async function pullProjectFromCloud(cloudProjectId){
     if(!supabaseClient || !supabaseSession) return;
     const { data: projRow, error: projErr } = await supabaseClient
@@ -6727,6 +6799,16 @@
 
     commitLiveToCurrentSite();
     const isTeamProject = !!projRow.organization_id;
+    // ★ "클라우드에서 불러오기" = 클라우드를 최종본으로 쓴다는 뜻이다. 같은 프로젝트가 이 기기에 이미 있으면
+    //   사본을 만들지 않고 그 프로젝트를 클라우드 내용으로 "교체"한다(예전엔 사본이 계속 쌓이고 같은
+    //   지점 번호가 겹쳐 원본의 지점이 옮겨가는 문제가 있었다). 대신 이 기기에만 있는 내용이 사라지지 않도록
+    //   비교 → 경고 → (원하면) 먼저 백업 → 복구 스냅샷 보관 순서로 확인한다.
+    const localSame = projects.find(p => p.id === cloudProjectId);
+    if(localSame){
+      const okReplace = await confirmReplaceLocalWithCloud(localSame, cloudProjectId);
+      if(!okReplace) return;
+      removeLocalProjectForReplace(localSame);
+    }
     // 내가 만든 개인 프로젝트를 이 기기에 "복원"하는 경우(같은 id가 이 기기에 아직 없음)는
     // 원래 id를 그대로 쓴다 — 예전처럼 새 id로 복제하면 사본이 클라우드에 또 올라가
     // 같은 프로젝트가 여러 개 쌓였다. 이미 이 기기에 같은 프로젝트가 있으면 안전하게 사본으로 만든다.
@@ -7296,6 +7378,12 @@
       cloudSyncBody.appendChild(syncedNote);
       cloudSyncBody.appendChild(pushBtn);
     }
+
+    const mgrBtn = document.createElement('button');
+    mgrBtn.className = 'ghost'; mgrBtn.style.cssText = 'width:100%; margin-top:10px;';
+    mgrBtn.textContent = '🗂 클라우드 프로젝트 관리 (삭제·복원·저장공간)';
+    mgrBtn.addEventListener('click', ()=>{ openCloudManager(); });
+    cloudSyncBody.appendChild(mgrBtn);
 
     const h3b = document.createElement('h3'); h3b.style.cssText = 'margin:18px 0 6px; font-size:14px;';
     h3b.textContent = '클라우드에 저장된 프로젝트';
@@ -12328,26 +12416,195 @@
     return { attempted: paths.length, deleted };
   }
 
+  // 클라우드 프로젝트를 "삭제 보관함"으로 옮긴다(30일 뒤 자동으로 완전 삭제, 그 전엔 복원 가능).
+  // 권한은 서버(Supabase 함수)가 확인한다: 개인 프로젝트는 만든 본인, 팀 프로젝트는 조직 Owner/Admin만.
   async function deleteCloudProjectData(projectId){
     if(!supabaseClient || !supabaseSession) return { ok:false, reason:'로그인 상태가 아닙니다.' };
     if(!navigator.onLine) return { ok:false, reason:'오프라인 상태입니다.' };
     try{
-      const delRes = await Promise.all([
-        supabaseClient.from('ps_inspection_points').delete().eq('project_id', projectId),
-        supabaseClient.from('ps_existing_damages').delete().eq('project_id', projectId),
-        supabaseClient.from('ps_facilities').delete().eq('project_id', projectId)
-      ]);
-      const childErr = delRes.find(r => r && r.error);
-      if(childErr) return { ok:false, reason: childErr.error.message };
-      const { error } = await supabaseClient.from('ps_projects').delete().eq('id', projectId);
+      const { error } = await supabaseClient.rpc('ps_soft_delete_project', { p_project_id: projectId });
       if(error) return { ok:false, reason: error.message };
-      let photoCleanup = { attempted: 0, deleted: 0 };
-      try{ photoCleanup = await deleteCloudProjectPhotos(projectId); }catch(e){}
-      return { ok:true, photoCleanup };
+      return { ok:true, photoCleanup: { attempted: 0, deleted: 0 } };
     }catch(e){
       return { ok:false, reason: (e && e.message) || String(e) };
     }
   }
+
+  // ================================================================
+  // 클라우드 프로젝트 관리 — 프로젝트별 지점·사진 수, 삭제(보관함으로 이동)/복원,
+  // 클라우드 저장공간 현황, 어디서도 쓰지 않는 사진 정리
+  // ================================================================
+  const cloudMgrModal = document.getElementById('cloudMgrModal');
+  const cloudMgrBody = document.getElementById('cloudMgrBody');
+  document.getElementById('closeCloudMgr').addEventListener('click', ()=>{ cloudMgrModal.style.display = 'none'; });
+  cloudMgrModal.addEventListener('click', (e)=>{ if(e.target === cloudMgrModal) cloudMgrModal.style.display = 'none'; });
+
+  function canManageCloudProject(p){
+    const me = myUserId();
+    if(!me) return false;
+    if(!p.organization_id) return p.user_id === me;
+    const role = myRoleByOrg[p.organization_id];
+    return role === 'Owner' || role === 'Admin';
+  }
+
+  async function fetchAllRows(table, cols){
+    const out = [];
+    for(let off = 0; off < 200000; off += 1000){
+      const { data, error } = await supabaseClient.from(table).select(cols).range(off, off + 999);
+      if(error) throw error;
+      (data || []).forEach(r => out.push(r));
+      if(!data || data.length < 1000) break;
+    }
+    return out;
+  }
+
+  // 내 폴더에서 어느 프로젝트(삭제 보관함 포함)에서도 쓰지 않고, 3일 넘은 사진 파일 찾기
+  async function findUnusedCloudPhotos(){
+    const uid = myUserId();
+    const { data: refsArr, error: refErr } = await supabaseClient.rpc('ps_referenced_photo_paths');
+    if(refErr) throw refErr;
+    const refs = new Set(refsArr || []);
+    const files = [];
+    for(let off = 0; off < 50000; off += 1000){
+      const { data, error } = await supabaseClient.storage.from('ps-photos').list(uid, { limit: 1000, offset: off });
+      if(error) throw error;
+      (data || []).forEach(f => files.push(f));
+      if(!data || data.length < 1000) break;
+    }
+    const cutoff = Date.now() - 3 * 86400000; // 방금 올라와 아직 지점에 연결 안 된 사진은 건드리지 않는다
+    const unused = files.filter(f => {
+      if(refs.has(uid + '/' + f.name)) return false;
+      const t = f.created_at ? new Date(f.created_at).getTime() : 0;
+      return t && t < cutoff;
+    });
+    const bytes = unused.reduce((a, f) => a + ((f.metadata && f.metadata.size) || 0), 0);
+    return { uid, unused, bytes, totalFiles: files.length };
+  }
+
+  async function renderCloudManager(){
+    cloudMgrBody.innerHTML = '<div class="hint">클라우드에서 불러오는 중…</div>';
+    if(!supabaseClient || !supabaseSession){ cloudMgrBody.innerHTML = '<div class="hint">로그인 후 사용할 수 있습니다.</div>'; return; }
+    if(!navigator.onLine){ cloudMgrBody.innerHTML = '<div class="hint">온라인 상태에서만 사용할 수 있습니다.</div>'; return; }
+    try{
+      try{ await supabaseClient.rpc('ps_purge_expired_projects'); }catch(e){} // 보관 30일이 지난 것 정리
+      const [projs, facs, pts] = await Promise.all([
+        fetchAllRows('ps_projects', 'id,name,organization_id,user_id,updated_at,deleted_at'),
+        fetchAllRows('ps_facilities', 'id,project_id'),
+        fetchAllRows('ps_inspection_points', 'id,project_id,ph:data->photos')
+      ]);
+      let usage = null;
+      try{ const r = await supabaseClient.rpc('ps_storage_usage'); usage = r.data; }catch(e){}
+
+      const facCnt = {}, ptCnt = {}, phCnt = {};
+      facs.forEach(f => { facCnt[f.project_id] = (facCnt[f.project_id] || 0) + 1; });
+      pts.forEach(r => {
+        ptCnt[r.project_id] = (ptCnt[r.project_id] || 0) + 1;
+        phCnt[r.project_id] = (phCnt[r.project_id] || 0) + (Array.isArray(r.ph) ? r.ph.length : 0);
+      });
+
+      cloudMgrBody.innerHTML = '';
+      const mk = (tag, css, html)=>{ const el = document.createElement(tag); if(css) el.style.cssText = css; if(html != null) el.innerHTML = html; return el; };
+
+      // --- 저장공간 현황 ---
+      const usageBox = mk('div', 'border:1px solid var(--line); border-radius:8px; padding:10px; margin:10px 0; background:var(--panel-2);');
+      if(usage){
+        usageBox.innerHTML = '<div style="font-weight:700; margin-bottom:4px;">클라우드 저장공간</div>' +
+          '<div style="font-size:12px; line-height:1.6;">데이터베이스(지점·시설물·도면): <b>' + usage.db_mb + ' MB</b><br>' +
+          '사진 저장소: <b>' + usage.storage_mb + ' MB</b> (' + usage.storage_files + '장)<br>' +
+          '└ 프로젝트에서 쓰는 사진: ' + usage.used_mb + ' MB (' + usage.used_files + '장)<br>' +
+          '└ 어디서도 안 쓰는 사진: ' + Math.max(0, Math.round((usage.storage_mb - usage.used_mb) * 10) / 10) + ' MB (' + Math.max(0, usage.storage_files - usage.used_files) + '장, 모든 사용자 합계)</div>';
+      } else {
+        usageBox.innerHTML = '<div class="hint">저장공간 현황을 불러오지 못했습니다.</div>';
+      }
+      const cleanBtn = mk('button', 'margin-top:8px; width:100%;', '🧹 안 쓰는 사진 찾아서 정리 (내 폴더)');
+      cleanBtn.className = 'ghost';
+      cleanBtn.addEventListener('click', async ()=>{
+        cleanBtn.disabled = true; cleanBtn.textContent = '찾는 중…';
+        try{
+          const r = await findUnusedCloudPhotos();
+          if(r.unused.length === 0){
+            alert('정리할 사진이 없습니다.@@(내 폴더 ' + r.totalFiles + '장은 모두 프로젝트에서 쓰고 있거나 최근 3일 안에 올라온 것입니다)'.replace(/@@/g, '\n'));
+          } else {
+            const mb = (r.bytes / 1048576).toFixed(1);
+            if(confirm(('내 폴더에서 어느 프로젝트(삭제 보관함 포함)에서도 쓰지 않고 3일이 넘은 사진 ' + r.unused.length + '장(약 ' + mb + ' MB)을 찾았습니다.@@@@지우면 되돌릴 수 없습니다. 지울까요?').replace(/@@/g, '\n'))){
+              let deleted = 0;
+              const paths = r.unused.map(f => r.uid + '/' + f.name);
+              for(let i = 0; i < paths.length; i += 100){
+                const { data, error } = await supabaseClient.storage.from('ps-photos').remove(paths.slice(i, i + 100));
+                if(!error) deleted += (data ? data.length : 0);
+              }
+              try{ logActivity('클라우드 안 쓰는 사진 정리', deleted + '장 삭제 (약 ' + mb + ' MB)'); }catch(e){}
+              alert(deleted + '장을 정리했습니다.');
+            }
+          }
+        }catch(e){ alert('정리 중 오류가 발생했습니다: ' + ((e && e.message) || e)); }
+        renderCloudManager();
+      });
+      usageBox.appendChild(cleanBtn);
+      cloudMgrBody.appendChild(usageBox);
+
+      const live = projs.filter(p => !p.deleted_at).sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
+      const trashed = projs.filter(p => p.deleted_at).sort((a, b) => new Date(b.deleted_at) - new Date(a.deleted_at));
+
+      const card = (p, isTrash)=>{
+        const c = mk('div', 'border:1px solid var(--line); border-radius:8px; padding:10px; margin:8px 0; background:var(--panel);');
+        const kind = p.organization_id ? '팀' : '개인';
+        const counts = '시설물 ' + (facCnt[p.id] || 0) + ' · 지점 ' + (ptCnt[p.id] || 0) + ' · 사진 ' + (phCnt[p.id] || 0);
+        let sub = '최근 수정 ' + (p.updated_at ? new Date(p.updated_at).toLocaleString('ko-KR') : '-');
+        if(isTrash){
+          const daysLeft = Math.max(0, 30 - Math.floor((Date.now() - new Date(p.deleted_at).getTime()) / 86400000));
+          sub = '삭제 보관 중 · ' + daysLeft + '일 뒤 완전 삭제';
+        }
+        c.innerHTML = '<div style="font-weight:700; word-break:break-all;">' + escapeHtml(p.name || '(이름 없음)') +
+          ' <span style="font-size:11px; font-weight:400; color:var(--muted);">[' + kind + ']</span></div>' +
+          '<div style="font-size:12px; margin-top:4px;">' + counts + '</div>' +
+          '<div style="font-size:11px; color:var(--muted); margin-top:2px;">' + sub + '</div>';
+        if(canManageCloudProject(p)){
+          const row = mk('div', 'margin-top:8px; display:flex; gap:8px;');
+          const btn = mk('button', 'flex:1;', isTrash ? '↩︎ 복원' : '🗑 삭제 보관함으로');
+          btn.className = isTrash ? 'ghost' : 'danger ghost';
+          btn.addEventListener('click', async ()=>{
+            if(isTrash){
+              if(!confirm('"' + p.name + '" 프로젝트를 복원할까요?')) return;
+              btn.disabled = true;
+              const { error } = await supabaseClient.rpc('ps_restore_project', { p_project_id: p.id });
+              if(error) alert('복원 실패: ' + error.message); else alert('복원했습니다.');
+              renderCloudManager();
+              return;
+            }
+            // 1단계: 내용 확인
+            const msg = ('"' + p.name + '" [' + kind + ']@@' + counts + '@@@@이 프로젝트를 삭제 보관함으로 옮깁니다.@@30일 뒤 위 시설물·지점이 완전히 삭제됩니다 (그 전에는 복원 가능).' +
+              (p.organization_id ? '@@팀 프로젝트라 다른 조직원도 그동안 받을 수 없습니다.' : '') + '@@@@계속할까요?').replace(/@@/g, '\n');
+            if(!confirm(msg)) return;
+            // 2단계: 이름을 똑같이 입력해야 진행(실수 방지)
+            const typed = prompt('확인을 위해 프로젝트 이름을 똑같이 입력해 주세요:\n' + p.name);
+            if(typed === null) return;
+            if(typed.trim() !== String(p.name).trim()){ alert('이름이 달라서 취소했습니다.'); return; }
+            btn.disabled = true;
+            const { error } = await supabaseClient.rpc('ps_soft_delete_project', { p_project_id: p.id });
+            if(error) alert('삭제 실패: ' + error.message); else alert('삭제 보관함으로 옮겼습니다. (30일 안에 복원 가능)');
+            renderCloudManager();
+          });
+          row.appendChild(btn);
+          c.appendChild(row);
+        } else {
+          c.appendChild(mk('div', 'font-size:11px; color:var(--muted); margin-top:6px;', p.organization_id ? '삭제 권한 없음 (조직 Owner/Admin만 가능)' : '삭제 권한 없음 (만든 사람만 가능)'));
+        }
+        return c;
+      };
+
+      cloudMgrBody.appendChild(mk('h3', 'margin:14px 0 4px; font-size:14px;', '프로젝트 (' + live.length + ')'));
+      if(live.length === 0) cloudMgrBody.appendChild(mk('div', 'font-size:12px; color:var(--muted);', '클라우드에 프로젝트가 없습니다.'));
+      live.forEach(p => cloudMgrBody.appendChild(card(p, false)));
+
+      cloudMgrBody.appendChild(mk('h3', 'margin:18px 0 4px; font-size:14px;', '🗄 삭제 보관함 (' + trashed.length + ')'));
+      if(trashed.length === 0) cloudMgrBody.appendChild(mk('div', 'font-size:12px; color:var(--muted);', '비어 있습니다.'));
+      trashed.forEach(p => cloudMgrBody.appendChild(card(p, true)));
+    }catch(e){
+      cloudMgrBody.innerHTML = '<div class="hint">불러오지 못했습니다: ' + escapeHtml((e && e.message) || String(e)) + '</div>';
+    }
+  }
+  function openCloudManager(){ cloudMgrModal.style.display = 'flex'; renderCloudManager(); }
 
   function renderProjectList(){
     if(projects.length === 0){
@@ -12503,24 +12760,24 @@
       if(canDeleteCloudCopy(project)){
         const cloudDelBtn = document.createElement('button');
         cloudDelBtn.className = 'card-btn danger';
-        cloudDelBtn.textContent = '☁️ 클라우드 완전삭제';
+        cloudDelBtn.textContent = '☁️ 클라우드 삭제(보관함)';
         cloudDelBtn.title = project.organizationId
-          ? '조직 리더(Owner/Admin)만 가능 — 클라우드 원본까지 영구 삭제합니다'
-          : '클라우드에 올라간 이 프로젝트를 영구 삭제합니다';
+          ? '조직 리더(Owner/Admin)만 가능 — 클라우드 삭제 보관함으로 옮기고 30일 뒤 완전 삭제됩니다'
+          : '클라우드의 이 프로젝트를 삭제 보관함으로 옮깁니다(30일 뒤 완전 삭제, 그 전엔 복원 가능)';
         cloudDelBtn.addEventListener('click', async (e)=>{
           e.stopPropagation();
           if(!navigator.onLine){ alert('온라인 상태에서만 클라우드 삭제가 가능합니다.'); return; }
-          const warn = '"' + project.name + '" 프로젝트를 클라우드에서 영구 삭제합니다.\n\n' +
-            '시설물·조사점·기존손상 기록을 포함한 클라우드 원본이 완전히 사라지며 되돌릴 수 없습니다' +
-            (project.organizationId ? '. 다른 조직원도 더 이상 이 프로젝트를 받을 수 없게 됩니다.' : '.') +
-            '\n(안전을 위해 클라우드의 사진 파일은 지우지 않습니다. 다른 프로젝트 사본이 같은 사진을 쓸 수 있기 때문입니다.)\n\n' +
-            '이 기기의 시설물 자료는 그대로 남고(휴지통에서 복원 가능), 클라우드 연결만 끊어집니다.\n\n정말 삭제할까요?';
+          const warn = '"' + project.name + '" 프로젝트를 클라우드 "삭제 보관함"으로 옮깁니다.\n\n' +
+            '30일 동안은 클라우드 → 클라우드 프로젝트 관리에서 복원할 수 있고, 30일이 지나면 시설물·조사점·기존손상 기록이 완전히 삭제됩니다' +
+            (project.organizationId ? '. 그동안 다른 조직원도 이 프로젝트를 받을 수 없습니다.' : '.') +
+            '\n(사진 파일은 다른 프로젝트가 쓰고 있을 수 있어 여기서 지우지 않습니다)\n\n' +
+            '이 기기의 시설물 자료는 그대로 남고(휴지통에서 복원 가능), 클라우드 연결만 끊어집니다.\n\n삭제 보관함으로 옮길까요?';
           if(!confirm(warn)) return;
           cloudDelBtn.disabled = true; cloudDelBtn.textContent = '삭제 중…';
           const result = await deleteCloudProjectData(project.id);
           if(!result.ok){
             alert('클라우드 삭제에 실패했습니다: ' + (result.reason || '알 수 없는 오류'));
-            cloudDelBtn.disabled = false; cloudDelBtn.textContent = '☁️ 클라우드 완전삭제';
+            cloudDelBtn.disabled = false; cloudDelBtn.textContent = '☁️ 클라우드 삭제(보관함)';
             return;
           }
           if(result.photoCleanup && result.photoCleanup.attempted > 0 && result.photoCleanup.deleted < result.photoCleanup.attempted){
