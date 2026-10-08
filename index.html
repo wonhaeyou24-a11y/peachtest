@@ -3052,7 +3052,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v88';
+  const PS_BUILD = 'v89';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -3336,6 +3336,7 @@
   let currentSiteId = null;
   const STORAGE_KEY = 'point-shot-sites-v1';
   const SNAPSHOT_PREFIX = 'point-shot-snapshot-';
+  const LAST_NONEMPTY_KEY = 'point-shot-last-nonempty'; // 시설물이 0개로 덮어써지기 직전의 마지막 정상 기록
   const MAX_SNAPSHOTS = 3;
   const SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000; // 5분
 
@@ -6336,6 +6337,156 @@
   // blobToDataUrl은 위쪽(약 4500줄)에 null 가드가 있는 버전으로 이미 정의돼 있다.
   // (동일 이유로 가드 없는 중복 정의 제거)
 
+  // ================================================================
+  // 완전 백업 + 검증 ("☁️ 지금 클라우드에 백업")
+  // 예전 자동 동기화는 "이미 큐에 넣은 내용"의 서명 기록 때문에, 한 번 누락된 지점이
+  // 다시는 올라가지 않을 수 있었다(2026-10-08 동암중: 로컬 36개 중 3개만 클라우드에 있었음).
+  // 이 버튼은 그 기록을 무시하고 프로젝트 전체(지점·손상·도면·사진)를 다시 올린 뒤,
+  // 클라우드에 실제로 있는지 하나씩 대조해서 결과를 알려준다 — 올라갔다고 "믿는" 게 아니라 "확인"한다.
+  // ================================================================
+  async function listMyCloudPhotoNames(userId){
+    try{
+      const names = new Set();
+      for(let off = 0; off < 50000; off += 1000){
+        const { data, error } = await supabaseClient.storage.from('ps-photos').list(userId, { limit: 1000, offset: off });
+        if(error) return null;
+        (data || []).forEach(o => { if(o && o.name) names.add(userId + '/' + o.name); });
+        if(!data || data.length < 1000) break;
+      }
+      return names;
+    }catch(e){ return null; }
+  }
+
+  async function forceRequeueProject(project){
+    const psites = sites.filter(s => s.projectId === project.id);
+    lastQueuedEntitySignatures.delete('project:' + project.id);
+    psites.forEach(s=>{
+      lastQueuedEntitySignatures.delete('facility:' + s.id);
+      (s.markers || []).forEach(m => lastQueuedEntitySignatures.delete('inspection_point:' + m.id));
+      (s.existingDamages || []).forEach(ed => lastQueuedEntitySignatures.delete('existing_damage:' + ed.id));
+    });
+    // 예전에 실패/영구보류로 멈춘 이 프로젝트 항목을 다시 시도할 수 있게 되돌린다
+    await runEntityQueueOp(async ()=>{
+      const q = await loadEntitySyncQueue();
+      let changedQ = false;
+      q.forEach(it=>{
+        if(it.projectId === project.id && (it.status === 'failed' || it.status === 'skipped_unfixable' || it.status === 'syncing')){
+          it.status = 'pending'; it.retryCount = 0; it.nextRetryAt = 0; changedQ = true;
+        }
+      });
+      if(changedQ) await saveEntitySyncQueue(q);
+    });
+    if(iOwnProjectRow(project)){
+      await enqueueEntitySync({
+        entityType: 'project', entityId: project.id, projectId: project.id,
+        revision: (typeof project.revision === 'number') ? project.revision : 1,
+        payload: { id: project.id }
+      });
+    }
+    for(const s of psites){ queueEntitySyncForFacility(s); }
+  }
+
+  async function flushProjectSyncQueue(projectId){
+    for(let round = 0; round < 15; round++){
+      const t0 = Date.now();
+      while(syncProcessing && Date.now() - t0 < 60000) await new Promise(r => setTimeout(r, 300));
+      const q = await loadEntitySyncQueue();
+      const pend = q.filter(it => it.projectId === projectId && (it.status === 'pending' || it.status === 'failed' || it.status === 'syncing'));
+      if(pend.length === 0) return true;
+      await runEntityQueueOp(async ()=>{
+        const q2 = await loadEntitySyncQueue();
+        q2.forEach(it=>{
+          if(it.projectId === projectId && (it.status === 'failed' || it.status === 'syncing')){ it.status = 'pending'; it.nextRetryAt = 0; }
+        });
+        await saveEntitySyncQueue(q2);
+      });
+      await processSyncQueue();
+    }
+    return false;
+  }
+
+  async function verifyProjectBackup(project){
+    const userId = supabaseSession.user.id;
+    const psites = sites.filter(s => s.projectId === project.id);
+    const isMine = (o)=> !(o && o.createdBy && o.createdBy !== userId);
+    const fetchIds = async (table)=>{
+      const set = new Set();
+      for(let off = 0; off < 100000; off += 1000){
+        const { data, error } = await supabaseClient.from(table).select('id').eq('project_id', project.id).range(off, off + 999);
+        if(error) throw error;
+        (data || []).forEach(r => set.add(r.id));
+        if(!data || data.length < 1000) break;
+      }
+      return set;
+    };
+    const cloudPts = await fetchIds('ps_inspection_points');
+    const cloudEds = await fetchIds('ps_existing_damages');
+    const cloudPhotoNames = await listMyCloudPhotoNames(userId);
+    // 도면: 시설물 행 안의 도면 이미지가 실제로 있는지(이미지 길이 0이면 빈 도면)
+    const cloudDrawCount = new Map();
+    try{
+      const { data } = await supabaseClient.from('ps_facilities').select('id, drawings:data->drawings').eq('project_id', project.id);
+      (data || []).forEach(r => cloudDrawCount.set(r.id, (Array.isArray(r.drawings) ? r.drawings : []).filter(d => d && d.imageSrc).length));
+    }catch(e){}
+
+    const rows = [];
+    let allOk = true;
+    for(const s of psites){
+      const mine = (s.markers || []).filter(isMine);
+      const ptOk = mine.filter(m => cloudPts.has(m.id)).length;
+      const edAll = (s.existingDamages || []).filter(isMine);
+      const edOk = edAll.filter(e => cloudEds.has(e.id)).length;
+      let phTotal = 0, phOk = 0;
+      mine.forEach(m => (m.photos || []).forEach(p => {
+        phTotal++;
+        if(cloudPhotoNames === null){ if(p.cloudRef) phOk++; }
+        else if(p.cloudRef && cloudPhotoNames.has(p.cloudRef)) phOk++;
+      }));
+      const drLocal = (s.drawings || []).filter(d => d && (d.imageSrc || d.imageRef)).length;
+      const drCloud = iOwnFacility(s) ? (cloudDrawCount.has(s.id) ? cloudDrawCount.get(s.id) : 0) : drLocal;
+      const ok = ptOk === mine.length && edOk === edAll.length && phOk === phTotal && drCloud >= drLocal;
+      if(!ok) allOk = false;
+      rows.push({ name: s.name, points: [ptOk, mine.length], damages: [edOk, edAll.length], photos: [phOk, phTotal], drawings: [drCloud, drLocal], ok });
+    }
+    return { ok: allOk, rows };
+  }
+
+  async function backupProjectFull(project, onProgress){
+    const say = (m)=>{ try{ if(onProgress) onProgress(m); }catch(e){} };
+    say('지점·손상 정보를 올리는 중…');
+    await forceRequeueProject(project);
+    await flushProjectSyncQueue(project.id);
+    say('사진·도면을 올리는 중… (사진이 많으면 몇 분 걸릴 수 있습니다)');
+    const push = await pushProjectToCloud(project, { silent: true });
+    if(!push.ok) return { ok: false, reason: push.reason };
+    say('마무리 동기화 중…');
+    await flushProjectSyncQueue(project.id);
+    say('클라우드에 실제로 올라갔는지 하나씩 확인하는 중…');
+    let verified;
+    try{ verified = await verifyProjectBackup(project); }
+    catch(e){ return { ok: false, reason: '올린 뒤 확인 단계에서 오류: ' + ((e && e.message) || e) }; }
+    if(verified.ok){
+      project.cloudVerifiedAt = new Date().toISOString();
+      try{ await saveState(); }catch(e){}
+    } else {
+      diagLog('sync', '클라우드 백업 검증: 일부 미확인', { rows: verified.rows.filter(r => !r.ok) });
+    }
+    return { ok: true, verified };
+  }
+
+  function formatBackupReport(res){
+    const v = res.verified;
+    const lines = v.rows.map(r =>
+      (r.ok ? '✅ ' : '⚠ ') + r.name + ' — 지점 ' + r.points[0] + '/' + r.points[1] +
+      ' · 사진 ' + r.photos[0] + '/' + r.photos[1] +
+      ' · 도면 ' + r.drawings[0] + '/' + r.drawings[1] +
+      (r.damages[1] ? ' · 기존손상 ' + r.damages[0] + '/' + r.damages[1] : ''));
+    return (v.ok
+      ? '✅ 클라우드 백업 완료 — 올라간 내용을 하나씩 확인했습니다.'
+      : '⚠ 클라우드 백업을 마쳤지만 아래 ⚠ 항목은 아직 확인되지 않았습니다.\n인터넷 상태를 확인하고 "지금 클라우드에 백업"을 한 번 더 눌러주세요. (기기의 원본은 그대로 안전합니다)')
+      + '\n\n(올라간 수 / 기기에 있는 수)\n' + lines.join('\n');
+  }
+
   // 시설물(+마커+사진메타)을 클라우드에 올린다. 사진 원본은 Storage에, 나머지는 테이블에.
   // 실패해도 예외를 던지지 않고 {ok:false, reason} 을 돌려준다 — 호출부가 조사 흐름을 막지 않도록.
   async function pushProjectToCloud(project, opts){
@@ -6348,12 +6499,18 @@
     const userId = supabaseSession.user.id;
 
     try{
+      // 내 폴더에 실제로 올라가 있는 사진 파일 이름들 — cloudRef 기록은 있는데 파일이
+      // 없는 경우(예전 정리/실패)도 다시 올릴 수 있게 한다. 조회 실패 시 null(예전 동작).
+      const cloudNames = await listMyCloudPhotoNames(userId);
       for(const s of psites){
-        await hydratePhotoBlobs(s.markers || []); // 로컬 별도저장소에 있던 사진도 먼저 채워온다
-
         for(const m of (s.markers || [])){
+          // 팀원이 만든 지점의 사진은 내 폴더가 아니라 올릴 수 없다 — 건너뜀
+          if(m.createdBy && m.createdBy !== userId) continue;
+          // 올릴 사진이 있는 지점만 원본을 불러온다(전부 불러오면 메모리 급증)
+          const needs = (m.photos || []).some(p => !p.cloudRef || (cloudNames && !cloudNames.has(p.cloudRef)));
+          if(needs) await hydratePhotoBlobs([m]);
           for(const p of (m.photos || [])){
-            if(p.src && !p.cloudRef){
+            if(p.src && (!p.cloudRef || (cloudNames && !cloudNames.has(p.cloudRef)))){
               const photoId = p.id || genId();
               const path = userId + '/' + photoId;
               const blob = dataUrlToBlob(p.src);
@@ -6374,6 +6531,11 @@
               else{ console.warn('사진 업로드 실패(다음 동기화 때 재시도)', upErr); }
             }
           }
+          // 보고 있지 않은 시설물의 사진 원본은 올린 직후 메모리에서 내린다(전부 쌓이면
+          // 수백 MB가 되어 iOS가 앱을 강제 종료한다). 기기 저장소에는 그대로 있다.
+          if(s.id !== currentSiteId){
+            (m.photos || []).forEach(p=>{ if(p.blobExtracted && p.src) delete p.src; });
+          }
         }
       }
 
@@ -6388,22 +6550,27 @@
         await processSyncQueue();
       }catch(e){ console.warn('사진 cloudRef 지점 동기화 실패(다음 자동 동기화 때 재시도)', e); }
 
-      const { error: projErr } = await supabaseClient.from('ps_projects').upsert({
-        id: project.id,
-        user_id: userId,
-        name: project.name,
-        data: project,
-        updated_at: new Date().toISOString(),
-        schema_version: String(project.schemaVersion || CURRENT_SCHEMA_VERSION),
-        organization_id: project.organizationId || null
-      }, { onConflict: 'id' });
-      if(projErr) throw projErr;
+      // 프로젝트 행·시설물 행은 "내 것"만 올린다(팀원이 남의 행을 올리려다 RLS로 거부돼
+      // 백업 전체가 중단되던 것 방지). 내 지점·사진은 위/큐에서 이미 올라갔다.
+      if(iOwnProjectRow(project)){
+        const { error: projErr } = await supabaseClient.from('ps_projects').upsert({
+          id: project.id,
+          user_id: userId,
+          name: project.name,
+          data: project,
+          updated_at: new Date().toISOString(),
+          schema_version: String(project.schemaVersion || CURRENT_SCHEMA_VERSION),
+          organization_id: project.organizationId || null
+        }, { onConflict: 'id' });
+        if(projErr) throw projErr;
+      }
 
       for(const s of psites){
-        const lightSite = JSON.parse(JSON.stringify(s));
-        (lightSite.markers || []).forEach(m=>{
-          (m.photos || []).forEach(p=>{ if(p.cloudRef) delete p.src; delete p.original; });
-        });
+        if(!iOwnFacility(s)) continue;
+        const lightSite = JSON.parse(JSON.stringify(s, (k, v)=> (k === 'src' || k === 'original') ? undefined : v));
+        delete lightSite.baseImageRef;
+        (lightSite.drawings || []).forEach(d => { if(d) delete d.imageRef; });
+        // (사진 원본 src는 Storage에 있으므로 시설물 행에는 넣지 않는다 — 단, 도면 imageSrc는 유지)
         const { error: facErr } = await supabaseClient.from('ps_facilities').upsert({
           id: s.id,
           project_id: project.id,
@@ -6509,23 +6676,37 @@
     }
   }
 
-  async function downloadPendingCloudPhotos(sitesArr){
+  // 받은 사진은 곧바로 기기 저장소(photoBlobs)에 쓰고 메모리에는 올려두지 않는다 — 사진이
+  // 수백 장인 프로젝트를 한꺼번에 메모리에 올리면 iOS가 앱을 강제 종료한다(화면은 열 때 채워짐).
+  // 반환: { total, done } — 몇 장 중 몇 장을 받았는지(사용자에게 그대로 알려줌)
+  async function downloadPendingCloudPhotos(sitesArr, opts){
+    let total = 0, done = 0;
     for(const s of sitesArr){
       for(const m of (s.markers || [])){
         for(const p of (m.photos || [])){
-          if(p.pendingCloudDownload){
-            try{
-              const { data, error } = await supabaseClient.storage.from('ps-photos').download(p.pendingCloudDownload);
-              if(!error && data){
-                p.src = await blobToDataUrl(data);
+          if(!p.pendingCloudDownload) continue;
+          total++;
+          try{
+            const { data, error } = await supabaseClient.storage.from('ps-photos').download(p.pendingCloudDownload);
+            if(!error && data){
+              const photoId = p.id || p.photoRef || genId();
+              const ok = await idbPutPhotoBlob(photoId, data, data.type || 'image/jpeg');
+              if(ok){
+                p.id = photoId; p.photoRef = photoId;
+                p.blobSize = data.size; p.mimeType = data.type || 'image/jpeg';
+                p.blobExtracted = true;
+                p.cloudRef = p.pendingCloudDownload; // 클라우드에 이미 있는 사진 — 다시 올리지 않게 표시
                 delete p.pendingCloudDownload;
-                delete p.blobExtracted; // 이 기기에는 처음 들어온 내용 — 다음 저장 때 로컬 blob 스토어에도 반드시 써야 함
+                // 보고서 만들기처럼 바로 사진 내용이 필요한 호출만 메모리에도 올려둔다
+                if(opts && opts.keepInMemory) p.src = await blobToDataUrl(data); else delete p.src;
+                done++;
               }
-            }catch(e){ console.warn('사진 다운로드 실패', e); }
-          }
+            }
+          }catch(e){ console.warn('사진 다운로드 실패', e); }
         }
       }
     }
+    return { total, done };
   }
 
   // 클라우드 프로젝트를 이 기기에 불러온다.
@@ -6546,7 +6727,13 @@
 
     commitLiveToCurrentSite();
     const isTeamProject = !!projRow.organization_id;
-    const projId = isTeamProject ? cloudProjectId : genId();
+    // 내가 만든 개인 프로젝트를 이 기기에 "복원"하는 경우(같은 id가 이 기기에 아직 없음)는
+    // 원래 id를 그대로 쓴다 — 예전처럼 새 id로 복제하면 사본이 클라우드에 또 올라가
+    // 같은 프로젝트가 여러 개 쌓였다. 이미 이 기기에 같은 프로젝트가 있으면 안전하게 사본으로 만든다.
+    const _meForRestore = (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null;
+    const keepOriginalIds = isTeamProject ||
+      (!!_meForRestore && projRow.user_id === _meForRestore && !projects.find(p => p.id === cloudProjectId));
+    const projId = keepOriginalIds ? cloudProjectId : genId();
 
     // 조직 프로젝트인데 이미 이 기기에 같은 id로 있으면(재-불러오기) 중복 생성하지 않는다.
     if(isTeamProject && projects.find(p => p.id === projId)){
@@ -6561,7 +6748,7 @@
     const _me = (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null;
     const newProject = Object.assign({}, projRow.data, {
       id: projId,
-      name: (projRow.name || (projRow.data && projRow.data.name) || '프로젝트') + (isTeamProject ? '' : ' (클라우드에서 불러옴)'),
+      name: (projRow.name || (projRow.data && projRow.data.name) || '프로젝트') + (keepOriginalIds ? '' : ' (클라우드에서 불러옴)'),
       organizationId: projRow.organization_id || null,
       ownerId: isTeamProject ? (projRow.user_id || null) : _me,  // 조직 프로젝트 행은 소유자만 수정 가능
       createdBy: (projRow.data && projRow.data.createdBy) || projRow.user_id || null,
@@ -6573,7 +6760,7 @@
     const siteByCloudId = new Map(); // 클라우드 시설물 id -> 이 기기에 만든 시설물(개인 프로젝트는 id가 새로 바뀌므로 필요)
     const newSites = (facRows || []).map(row=>{
       const s = Object.assign({}, row.data, {
-        id: isTeamProject ? row.id : genId(),   // 조직 프로젝트면 시설물도 원본 id 유지
+        id: keepOriginalIds ? row.id : genId(),   // 조직 프로젝트(또는 내 프로젝트 복원)면 시설물도 원본 id 유지
         projectId: newProject.id,
         organizationId: projRow.organization_id || row.organization_id || null
       });
@@ -6655,7 +6842,7 @@
     switchToProject(newProject.id);
 
     cloudSyncBody.innerHTML = '<div class="hint">사진을 내려받는 중입니다…</div>';
-    await downloadPendingCloudPhotos(newSites);
+    const photoResult = await downloadPendingCloudPhotos(newSites);
     await saveState();
     // [B] 시설물 blob에는 이제 메타+도면만 들어있으므로, 팀 프로젝트는 지점·기존손상을
     //     ps_inspection_points / ps_existing_damages 에서 따로 당겨와야 조사자료가 다 보인다.
@@ -6687,7 +6874,8 @@
     } else if(newSites.length > 0 && restoredCounts.points === 0){
       doneMsg += '\n\n⚠ 클라우드에 이 프로젝트의 지점 자료가 없습니다. 원래 조사하던 기기에서 먼저 동기화(올리기)를 해야 합니다.';
     }
-    doneMsg += '\n※ 사진 원본은 "지금 클라우드에 백업"으로 올린 것만 받아집니다.';
+    doneMsg += '\n사진 ' + photoResult.done + '장 받음' + (photoResult.total > photoResult.done ? ' (' + (photoResult.total - photoResult.done) + '장은 받지 못했습니다 — 다시 시도해 주세요)' : '');
+    if(photoResult.total === 0) doneMsg += '\n※ 사진 원본은 "지금 클라우드에 백업"으로 올려둔 것만 받아집니다.';
     alert(doneMsg);
   }
 
@@ -7076,17 +7264,24 @@
       h3.textContent = '현재 프로젝트: ' + curProject.name;
       const syncedNote = document.createElement('div');
       syncedNote.className = 'hint';
-      syncedNote.textContent = curProject.cloudSyncedAt
-        ? ('마지막 클라우드 백업: ' + new Date(curProject.cloudSyncedAt).toLocaleString('ko-KR'))
-        : '아직 클라우드에 백업한 적 없습니다.';
+      syncedNote.textContent = curProject.cloudVerifiedAt
+        ? ('마지막 클라우드 백업(올라간 내용 확인 완료): ' + new Date(curProject.cloudVerifiedAt).toLocaleString('ko-KR'))
+        : curProject.cloudSyncedAt
+          ? ('마지막 클라우드 백업: ' + new Date(curProject.cloudSyncedAt).toLocaleString('ko-KR') + ' (확인 전 — 한 번 더 눌러 확인해 주세요)')
+          : '아직 클라우드에 백업한 적 없습니다.';
       const pushBtn = document.createElement('button');
       pushBtn.className = 'primary'; pushBtn.style.cssText = 'width:100%; margin-top:8px;';
       pushBtn.textContent = '☁️ 지금 클라우드에 백업';
       pushBtn.addEventListener('click', async ()=>{
         pushBtn.disabled = true; pushBtn.textContent = '백업 중…';
-        const result = await pushProjectToCloud(curProject);
+        let result;
+        try{
+          result = await backupProjectFull(curProject, (msg)=>{ pushBtn.textContent = msg; });
+        }catch(e){
+          result = { ok: false, reason: (e && e.message) || String(e) };
+        }
         pushBtn.disabled = false;
-        if(result.ok){ alert('클라우드 백업이 완료되었습니다.'); renderCloudSyncBody(); }
+        if(result.ok){ alert(formatBackupReport(result)); renderCloudSyncBody(); }
         else{ alert('클라우드 백업에 실패했습니다.\n' + result.reason + '\n(로컬 데이터는 안전합니다)'); pushBtn.textContent = '☁️ 지금 클라우드에 백업'; }
       });
       cloudSyncBody.appendChild(h3);
@@ -9353,6 +9548,18 @@
     // 4. 메타데이터를 IndexedDB kv 스토어에 기록
     let metadataOk = false;
     try{
+      // 안전장치: 시설물이 0개인 상태로 기존 기록을 덮어쓰게 되면(예: 앱이 기록을 못 읽고
+      // 빈 상태로 시작한 경우 — 2026-10-08 로그에서 시설물 10→0개로 시작한 사례), 덮어쓰기 전에
+      // 직전의 "시설물이 있던" 기록을 따로 한 벌 남겨둔다. (더보기 → 복구 스냅샷에서 복원 가능)
+      if(lightweightSites.length === 0){
+        try{
+          const prev = await storageGet(STORAGE_KEY);
+          if(prev && Array.isArray(prev.sites) && prev.sites.length > 0){
+            await storageSet(LAST_NONEMPTY_KEY, { ...prev, savedAt: new Date().toISOString() });
+            diagLog('save', '시설물 0개 상태 저장 직전 — 이전 기록을 별도 보관', { prevSites: prev.sites.length });
+          }
+        }catch(e){ console.warn('이전 기록 보관 실패', e); }
+      }
       metadataOk = await storageSet(STORAGE_KEY, snapshot);
     } catch(e){
       console.error('saveState 메타데이터 저장 실패:', e);
@@ -13952,6 +14159,12 @@
   // 사용자가 개수·용량을 직접 보고 승인한 뒤에만 지운다.
   btnCleanOrphanPhotos.addEventListener('click', async ()=>{
     moreModal.style.display = 'none';
+    // 안전장치: 시설물이 하나도 없는 상태면 모든 사진이 "주인 없음"으로 보이므로 실행을 막는다
+    // (기록을 못 읽고 빈 상태로 시작한 경우 사진 원본이 전부 지워질 수 있다).
+    if(!(sites || []).length){
+      alert('지금은 시설물이 하나도 없는 상태라 이 정리를 할 수 없습니다.\n(사진 원본이 모두 "연결 안 된 사진"으로 보여 전부 지워질 위험이 있습니다.)\n먼저 더보기 → 복구 스냅샷이나 클라우드에서 자료를 복원해 주세요.');
+      return;
+    }
     let result;
     try{
       result = await findOrphanPhotoBlobs(sites);
@@ -13987,6 +14200,7 @@
     let keys = [];
     try{ keys = (await idbAllKeys()).filter(k => typeof k === 'string' && k.indexOf(SNAPSHOT_PREFIX) === 0); }catch(e){}
     keys.sort().reverse();
+    try{ if(await idbGetRaw(LAST_NONEMPTY_KEY)) keys.unshift(LAST_NONEMPTY_KEY); }catch(e){}
     if(keys.length === 0){
       snapshotBody.innerHTML = '<div class="log-empty">아직 자동 저장된 스냅샷이 없습니다 (5분 이상 작업하면 자동으로 생성됩니다).</div>';
       return;
@@ -14002,7 +14216,9 @@
       const info = document.createElement('span');
       const siteCount = (snap.sites || []).length;
       const markerCount = (snap.sites || []).reduce((sum,s)=> sum + (s.markers||[]).length, 0);
-      info.textContent = new Date(Number(ts)).toLocaleString('ko-KR') + ' — 시설물 ' + siteCount + '개, 지점 ' + markerCount + '개';
+      info.textContent = (key === LAST_NONEMPTY_KEY
+        ? '🛟 비워지기 직전 자동 보관본 (' + new Date(snap.savedAt || Date.now()).toLocaleString('ko-KR') + ')'
+        : new Date(Number(ts)).toLocaleString('ko-KR')) + ' — 시설물 ' + siteCount + '개, 지점 ' + markerCount + '개';
       const restoreBtn = document.createElement('button');
       restoreBtn.className = 'log-btn';
       restoreBtn.textContent = '이 시점으로 복원';
@@ -18314,7 +18530,7 @@
       // 사진이 아직 메모리에 안 채워져 있으면(다른 지점을 보는 중이었거나 등) 미리 채운다.
       await hydratePhotoBlobs(site.markers || []);
       if(supabaseClient && supabaseSession && navigator.onLine){
-        try{ await downloadPendingCloudPhotos([site]); }catch(e){}
+        try{ await downloadPendingCloudPhotos([site], { keepInMemory: true }); }catch(e){}
       }
 
       // 구간별로 묶는다. 지점/사진/손상이 그 사이 삭제됐으면 조용히 건너뛴다
@@ -18405,7 +18621,7 @@
     // 여기서 미리 채운다 — 안 그러면 "다. 지점별" 사진이 통째로 비어서 나간다.
     try{ await hydratePhotoBlobs(siteMarkers); }catch(e){}
     if(supabaseClient && supabaseSession && navigator.onLine){
-      try{ await downloadPendingCloudPhotos([site]); }catch(e){}
+      try{ await downloadPendingCloudPhotos([site], { keepInMemory: true }); }catch(e){}
     }
 
     function imgDims(dataUrl, maxW){
