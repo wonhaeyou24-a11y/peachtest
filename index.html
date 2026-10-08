@@ -3052,7 +3052,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v89';
+  const PS_BUILD = 'v90';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -6769,7 +6769,7 @@
       s.markers.forEach(m=>{
         m.photos = (m.photos || []).map(p=>{
           const pc = Object.assign({}, p);
-          if(pc.cloudRef){ pc.pendingCloudDownload = pc.cloudRef; delete pc.cloudRef; delete pc.photoRef; }
+          if(pc.cloudRef){ pc.pendingCloudDownload = pc.cloudRef; delete pc.cloudRef; delete pc.photoRef; if(!keepOriginalIds) pc.id = genId(); }
           return pc;
         });
       });
@@ -6793,7 +6793,7 @@
         if(ptR.error) throw ptR.error;
         const toPending = (photos)=> (photos || []).map(p=>{
           const pc = Object.assign({}, p);
-          if(pc.cloudRef){ pc.pendingCloudDownload = pc.cloudRef; delete pc.cloudRef; delete pc.photoRef; }
+          if(pc.cloudRef){ pc.pendingCloudDownload = pc.cloudRef; delete pc.cloudRef; delete pc.photoRef; if(!keepOriginalIds) pc.id = genId(); }
           return pc;
         });
         (ptR.data || []).forEach(rp=>{
@@ -6826,6 +6826,14 @@
             const ex = s.existingDamages.findIndex(x => x.id === ed.id);
             if(ex >= 0) s.existingDamages[ex] = ed; else s.existingDamages.push(ed);
             restoredCounts.damages++;
+          });
+        }
+        // 사본(원래 프로젝트가 이 기기에 이미 있어 복제하는 경우)은 지점·기존손상 번호표(id)를 새로 만든다 —
+        // 같은 id를 쓰면 클라우드에서 원본의 지점이 사본 쪽으로 옮겨가 버린다(동암중 사례).
+        if(!keepOriginalIds){
+          newSites.forEach(s=>{
+            (s.markers || []).forEach(m => { m.id = genId(); });
+            (s.existingDamages || []).forEach(ed => { if(ed) ed.id = genId(); });
           });
         }
         newSites.forEach(s=>{
@@ -10568,7 +10576,10 @@
         // 수 있으므로 둘 중 큰 값을 기준으로 삼는다(project 브랜치와 동일한 처리 —
         // 이게 없으면 pull로 최신 revision을 받아와도 큐에 남은 옛 스냅샷 때문에 계속 충돌).
         const ipBaseRevision = Math.max(expectedRevision, (point && typeof point.revision === 'number') ? point.revision : 1);
-        const { data: existing, error: checkErr } = await fetchExisting('ps_inspection_points', 'revision, data, user_id');
+        const { data: existing, error: checkErr } = await fetchExisting('ps_inspection_points', 'revision, data, user_id, project_id, facility_id');
+        // 같은 id의 행이 "다른 프로젝트/시설물"에 있으면(불러오기로 생긴 사본 등) 내용이 같아도 건너뛰면 안 된다 —
+        // 건너뛰면 이 프로젝트에는 그 지점이 영영 안 올라간다(2026-10-08 동암중: 로컬 39개 중 36개만 확인됨).
+        const ipMoved = !!(existing && ((existing.project_id && existing.project_id !== projId) || (existing.facility_id && existing.facility_id !== facId)));
         // 팀원이 만든 지점(클라우드 행의 주인이 내가 아님)은 내가 올리지 않는다.
         // RLS상 남의 행은 수정 권한이 없어 어차피 거부되고, 이 기기가 그걸 계속
         // 재시도하며 대기열을 부풀렸다. 내가 만든 로컬 표시(createdBy)가 없고
@@ -10579,12 +10590,12 @@
           return { ok: true, skipped: true, reason: 'not-owner' };
         }
         // 클라우드에 이미 있고 내용이 로컬과 같으면 올릴 게 없다 — 넘어간다.
-        if(!checkErr && existing && point && op !== 'delete' && sameSyncedContent(point, existing.data || existing)){
+        if(!checkErr && existing && !ipMoved && point && op !== 'delete' && sameSyncedContent(point, existing.data || existing)){
           if(typeof existing.revision === 'number') point.revision = Math.max(point.revision || 1, existing.revision);
           return { ok: true, skipped: true };
         }
         if(!checkErr && existing && existing.revision && existing.revision > ipBaseRevision){
-          if(point && sameSyncedContent(point, existing.data || existing)){
+          if(!ipMoved && point && sameSyncedContent(point, existing.data || existing)){
             // 리비전만 뒤처졌을 뿐 조사 내용은 동일 — 충돌 아님. 클라우드 리비전 수용.
             point.revision = existing.revision;
             diagLog('sync', 'auto-reconcile: inspection_point ' + entityId, { adopted_revision: existing.revision });
@@ -10694,19 +10705,20 @@
         const orgId = (pObj && pObj.organizationId) || null;
 
         const edBaseRevision = Math.max(expectedRevision, (exDmg && typeof exDmg.revision === 'number') ? exDmg.revision : 1);
-        const { data: existing, error: checkErr } = await fetchExisting('ps_existing_damages', 'revision, data, user_id');
+        const { data: existing, error: checkErr } = await fetchExisting('ps_existing_damages', 'revision, data, user_id, project_id, facility_id');
+        const edMoved = !!(existing && ((existing.project_id && existing.project_id !== projId) || (existing.facility_id && existing.facility_id !== facId)));
         if(!checkErr && existing && op !== 'delete' && existing.user_id && existing.user_id !== userId
            && !(exDmg && exDmg.createdBy === userId)){
           if(exDmg && typeof existing.revision === 'number') exDmg.revision = Math.max(exDmg.revision || 1, existing.revision);
           return { ok: true, skipped: true, reason: 'not-owner' };
         }
-        if(!checkErr && existing && exDmg && Object.keys(exDmg).length && op !== 'delete' && sameSyncedContent(exDmg, existing.data || existing)){
+        if(!checkErr && existing && !edMoved && exDmg && Object.keys(exDmg).length && op !== 'delete' && sameSyncedContent(exDmg, existing.data || existing)){
           if(typeof existing.revision === 'number') exDmg.revision = Math.max(exDmg.revision || 1, existing.revision);
           return { ok: true, skipped: true };
         }
         let edBase = edBaseRevision;
         if(!checkErr && existing && existing.revision && existing.revision > edBase){
-          if(exDmg && Object.keys(exDmg).length && sameSyncedContent(exDmg, existing.data || existing)){
+          if(!edMoved && exDmg && Object.keys(exDmg).length && sameSyncedContent(exDmg, existing.data || existing)){
             exDmg.revision = existing.revision;
             return { ok: true, reconciled: true };
           }

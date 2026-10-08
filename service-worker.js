@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-shot-v89-full-backup-verify'; // 클라우드 완전백업+검증, 복원 개선, 빈상태 덮어쓰기 안전장치
+const CACHE_NAME = 'point-shot-v90-moved-point-sync'; // 다른 프로젝트에 같은 id 지점이 있어도 올라가게 + 사본 복제시 번호표 새로 발급
 // 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
 // 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
 // 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.
