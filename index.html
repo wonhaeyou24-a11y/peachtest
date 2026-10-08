@@ -3052,7 +3052,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v85';
+  const PS_BUILD = 'v86';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -13045,11 +13045,35 @@
   const COMPLETION_SNAPSHOT_PREFIX = 'point-shot-completion-';
   async function takeCompletionSnapshot(site){
     try{
+      // 사진 원본(base64)·도면 이미지는 이미 별도 저장소에 있으므로 뺀 경량본만 보관한다.
+      // (예전엔 시설물 전체를 사진 원본째 JSON 복사해 시설물당 수백 MB를 쓰고, 그 복사
+      // 순간 메모리가 급증해 앱이 강제 종료될 수 있었다. 이 기록은 어디서도 읽지 않는다.)
       await storageSet(COMPLETION_SNAPSHOT_PREFIX + site.id, {
-        site: JSON.parse(JSON.stringify(site)),
+        site: JSON.parse(JSON.stringify(stripDrawingImages(stripHeavyPhotoFields(site)))),
         savedAt: new Date().toISOString()
       });
     }catch(e){ console.warn('시설물 안전 스냅샷 저장 실패', e); }
+  }
+
+  // 예전 버전이 남긴 거대한 "조사완료 안전 스냅샷"을 경량본으로 한 번만 교체한다.
+  async function shrinkLegacyCompletionSnapshots(){
+    const FLAG = 'ps-completion-shrunk-v85';
+    try{ if(localStorage.getItem(FLAG)) return; localStorage.setItem(FLAG, '1'); }catch(e){} // 시도는 단 한 번(도중에 앱이 죽어도 무한 반복 방지)
+    let shrunk = 0;
+    try{
+      const keys = (await idbAllKeys()).filter(k => typeof k === 'string' && k.indexOf(COMPLETION_SNAPSHOT_PREFIX) === 0);
+      for(const key of keys){
+        const rec = await idbGetRaw(key);
+        if(!rec || !rec.site) continue;
+        await storageSet(key, {
+          site: stripDrawingImages(stripHeavyPhotoFields(rec.site)),
+          savedAt: rec.savedAt
+        });
+        shrunk++;
+      }
+      try{ localStorage.setItem(FLAG, '1'); }catch(e){}
+      if(shrunk) diagLog('lifecycle', '예전 조사완료 스냅샷 경량화', { count: shrunk });
+    }catch(e){ console.warn('조사완료 스냅샷 경량화 실패(다음 실행 때 재시도)', e); }
   }
 
   let completionTarget = { type: 'facility' };
@@ -18632,6 +18656,7 @@
       await loadState();
       todaysMarkerCount();
       diagLogMemorySnapshot('앱 시작 직후');
+      setTimeout(()=>{ shrinkLegacyCompletionSnapshots(); }, 15000); // 앱이 안정된 뒤 한 번만(대기 안 함)
       pruneStaleConflictRecords(); // 삭제된 프로젝트/시설물의 옛 충돌 배지 정리(비동기, 대기 안 함)
       await restoreSyncedSignatures(); // 동기화 서명 캐시 복원 → 리로드 후 전체 재큐잉(skipped:N) 방지
 
