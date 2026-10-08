@@ -3052,7 +3052,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v86';
+  const PS_BUILD = 'v87';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -6570,12 +6570,14 @@
       _pushBlocked: isTeamProject && projRow.user_id && _me ? (projRow.user_id !== _me) : false,
       savedAt: new Date().toISOString()
     });
+    const siteByCloudId = new Map(); // 클라우드 시설물 id -> 이 기기에 만든 시설물(개인 프로젝트는 id가 새로 바뀌므로 필요)
     const newSites = (facRows || []).map(row=>{
       const s = Object.assign({}, row.data, {
         id: isTeamProject ? row.id : genId(),   // 조직 프로젝트면 시설물도 원본 id 유지
         projectId: newProject.id,
         organizationId: projRow.organization_id || row.organization_id || null
       });
+      siteByCloudId.set(row.id, s);
       s.markers = (s.markers || []).map(m => Object.assign({}, m));
       s.markers.forEach(m=>{
         m.photos = (m.photos || []).map(p=>{
@@ -6587,6 +6589,67 @@
       s.markers.forEach(normalizePhotos);
       return s;
     });
+
+    // ★ 개인(비조직) 프로젝트 불러오기 누락 수정: 시설물 행(ps_facilities)에는 메타+도면만
+    //   있고 지점·기존손상은 ps_inspection_points / ps_existing_damages 에 따로 저장되는데,
+    //   예전엔 이 따로 저장된 지점들을 팀 프로젝트에서만 가져왔다. 그래서 개인 프로젝트를
+    //   클라우드에서 불러오면 시설물 "껍데기"만 생기고 지점·손상·사진이 전부 비어 있었다.
+    //   개인 프로젝트는 시설물 id를 새로 만들므로(위), 지점 행의 facility_id를 새 id로 매핑한다.
+    const restoredCounts = { points: 0, damages: 0 };
+    let restoreError = null;
+    if(!isTeamProject){
+      try{
+        const [ptR, edR] = await Promise.all([
+          supabaseClient.from('ps_inspection_points').select('*').eq('project_id', cloudProjectId),
+          supabaseClient.from('ps_existing_damages').select('*').eq('project_id', cloudProjectId)
+        ]);
+        if(ptR.error) throw ptR.error;
+        const toPending = (photos)=> (photos || []).map(p=>{
+          const pc = Object.assign({}, p);
+          if(pc.cloudRef){ pc.pendingCloudDownload = pc.cloudRef; delete pc.cloudRef; delete pc.photoRef; }
+          return pc;
+        });
+        (ptR.data || []).forEach(rp=>{
+          const s = siteByCloudId.get(rp.facility_id);
+          if(!s) return;
+          const md = (rp.data && typeof rp.data === 'object') ? { ...rp.data } : {};
+          if(!md.id) md.id = rp.id;
+          if(md.xPct == null && rp.x != null) md.xPct = rp.x;
+          if(md.yPct == null && rp.y != null) md.yPct = rp.y;
+          if(md.num == null && rp.num != null) md.num = rp.num;
+          if(!md.drawingId && rp.drawing_id) md.drawingId = rp.drawing_id;
+          md.photos = toPending(md.photos);
+          if(typeof rp.revision === 'number') md.revision = rp.revision;
+          md.createdBy = md.createdBy || rp.user_id || null;
+          normalizePhotos(md);
+          if(!s.markers) s.markers = [];
+          const ex = s.markers.findIndex(m => m.id === md.id);
+          if(ex >= 0) s.markers[ex] = md; else s.markers.push(md);
+          restoredCounts.points++;
+        });
+        if(edR && !edR.error){
+          (edR.data || []).forEach(re=>{
+            const s = siteByCloudId.get(re.facility_id);
+            if(!s) return;
+            const ed = (re.data && typeof re.data === 'object') ? { ...re.data } : { id: re.id };
+            if(!ed.id) ed.id = re.id;
+            if(ed.photos) ed.photos = toPending(ed.photos);
+            if(typeof re.revision === 'number') ed.revision = re.revision;
+            if(!s.existingDamages) s.existingDamages = [];
+            const ex = s.existingDamages.findIndex(x => x.id === ed.id);
+            if(ex >= 0) s.existingDamages[ex] = ed; else s.existingDamages.push(ed);
+            restoredCounts.damages++;
+          });
+        }
+        newSites.forEach(s=>{
+          const nums = (s.markers || []).map(m => m.num || 0);
+          if(nums.length) s.nextNum = Math.max(s.nextNum || 1, Math.max(...nums) + 1);
+        });
+      }catch(e){
+        console.warn('개인 프로젝트 지점 불러오기 실패', e);
+        restoreError = (e && e.message) || String(e);
+      }
+    }
     projects.push(newProject);
     sites.push(...newSites);
     switchToProject(newProject.id);
@@ -6599,14 +6662,33 @@
     if(isTeamProject){
       try{
         cloudSyncBody.innerHTML = '<div class="hint">팀 조사자료를 가져오는 중입니다…</div>';
-        await pullCloudChanges(newProject.id);
+        const pr = await pullCloudChanges(newProject.id);
+        if(pr && pr.ok === false) restoreError = pr.reason || '알 수 없는 오류';
+        else if(pr && pr.breakdown){ restoredCounts.points = pr.breakdown.points || 0; restoredCounts.damages = pr.breakdown.damages || 0; }
         await saveState();
         const cur = sites.find(s => s.id === currentSiteId);
         if(cur){ await loadSite(cur); }
-      }catch(e){ console.warn('불러오기 후 팀자료 pull 실패(수동으로 "팀원 자료 가져오기" 가능)', e); }
+      }catch(e){
+        console.warn('불러오기 후 팀자료 pull 실패(수동으로 "팀원 자료 가져오기" 가능)', e);
+        restoreError = (e && e.message) || String(e);
+      }
+    } else {
+      // 개인 프로젝트: 위에서 채운 지점들을 저장하고 현재 시설물 화면에도 반영한다.
+      try{
+        await saveState();
+        const cur = sites.find(s => s.id === currentSiteId);
+        if(cur){ await loadSite(cur); }
+      }catch(e){ console.warn('불러오기 후 반영 실패', e); }
     }
     renderCloudSyncBody();
-    alert('클라우드에서 "' + newProject.name + '" 프로젝트를 불러왔습니다.');
+    let doneMsg = '클라우드에서 "' + newProject.name + '" 프로젝트를 불러왔습니다.\n시설물 ' + newSites.length + '개 · 지점 ' + restoredCounts.points + '개 · 기존손상 ' + restoredCounts.damages + '개';
+    if(restoreError){
+      doneMsg += '\n\n⚠ 지점/손상을 가져오는 중 문제가 있었습니다: ' + restoreError + '\n(클라우드 자료는 그대로이니 다시 시도하실 수 있습니다)';
+    } else if(newSites.length > 0 && restoredCounts.points === 0){
+      doneMsg += '\n\n⚠ 클라우드에 이 프로젝트의 지점 자료가 없습니다. 원래 조사하던 기기에서 먼저 동기화(올리기)를 해야 합니다.';
+    }
+    doneMsg += '\n※ 사진 원본은 "지금 클라우드에 백업"으로 올린 것만 받아집니다.';
+    alert(doneMsg);
   }
 
   // ---------- UI: 클라우드 & 조직 & 초대 관리 패널 ----------
