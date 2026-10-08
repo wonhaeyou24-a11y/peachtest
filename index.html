@@ -3065,7 +3065,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v93';
+  const PS_BUILD = 'v94';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -13423,11 +13423,90 @@
   // ---------- 백업 내보내기 / 불러오기 (파일, 다른 기기로 이동 시에도 사용 가능) ----------
   function pad2(n){ return String(n).padStart(2,'0'); }
 
+  // ---------- 내보내기 진행률 창 ----------
+  // 보고서·Excel·ZIP·백업은 몇 초~몇 분 걸리는데, 더보기 창이 닫히고 버튼 글자만 바뀌어서
+  // "진행 중인지" 알 수 없었다. 화면 가운데에 진행 창을 띄워 시작·진행·완료를 보여준다.
+  // 계속 움직이는 막대 + 경과 시간으로 "멈춘 게 아니라 일하는 중"임을 알리고, 진행률을 알 수 있는
+  // 작업(ZIP 압축, 시설물별 보고서)은 퍼센트로 보여준다.
+  const psProgress = (function(){
+    let el = null, titleEl, detailEl, barEl, pctEl, timeEl, state = 'idle', hideTimer = null, tick = null, t0 = 0;
+    function build(){
+      if(el) return;
+      el = document.createElement('div');
+      el.id = 'psProgressOverlay';
+      el.setAttribute('role', 'status'); el.setAttribute('aria-live', 'polite');
+      el.style.cssText = 'position:fixed; inset:0; z-index:100000; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,0.55); padding:16px; box-sizing:border-box;';
+      el.innerHTML =
+        '<style>@keyframes psProgSlide{0%{left:-40%}100%{left:100%}}</style>' +
+        '<div style="width:100%; max-width:340px; background:var(--panel,#fff); color:var(--text,#222); border:1px solid var(--line,#ccc); border-radius:12px; padding:18px 16px; box-shadow:0 8px 30px rgba(0,0,0,0.35);">' +
+          '<div id="psProgTitle" style="font-weight:700; font-size:15px; margin-bottom:6px;"></div>' +
+          '<div id="psProgDetail" style="font-size:12px; color:var(--muted,#666); min-height:16px; margin-bottom:10px; word-break:break-all;"></div>' +
+          '<div style="position:relative; height:10px; background:var(--panel-2,#eee); border-radius:6px; overflow:hidden;">' +
+            '<div id="psProgBar" style="position:absolute; top:0; bottom:0; left:0; width:40%; background:var(--accent,#F2A93B); border-radius:6px;"></div>' +
+          '</div>' +
+          '<div style="display:flex; justify-content:space-between; font-size:11px; color:var(--muted,#666); margin-top:6px;"><span id="psProgPct"></span><span id="psProgTime"></span></div>' +
+          '<div style="font-size:11px; color:var(--muted,#666); margin-top:8px;">화면을 끄거나 다른 앱으로 이동하지 말고 기다려 주세요.</div>' +
+        '</div>';
+      document.body.appendChild(el);
+      titleEl = el.querySelector('#psProgTitle'); detailEl = el.querySelector('#psProgDetail');
+      barEl = el.querySelector('#psProgBar'); pctEl = el.querySelector('#psProgPct'); timeEl = el.querySelector('#psProgTime');
+    }
+    function setIndeterminate(on){
+      if(on){ barEl.style.width = '40%'; barEl.style.left = '-40%'; barEl.style.animation = 'psProgSlide 1.1s linear infinite'; pctEl.textContent = '처리 중…'; }
+      else { barEl.style.animation = 'none'; barEl.style.left = '0'; }
+    }
+    function hide(){ if(el) el.style.display = 'none'; if(tick){ clearInterval(tick); tick = null; } state = 'idle'; }
+    function nextPaint(){ return new Promise(r => requestAnimationFrame(()=> requestAnimationFrame(r))); }
+    return {
+      // 시작하고, 화면이 실제로 그려질 때까지 기다린다(그 뒤에 무거운 작업을 시작해야 창이 보인다)
+      async start(title, detail){
+        build(); clearTimeout(hideTimer);
+        state = 'running'; t0 = Date.now();
+        titleEl.textContent = title; detailEl.textContent = detail || '';
+        timeEl.textContent = '0초'; setIndeterminate(true);
+        el.style.display = 'flex';
+        if(tick) clearInterval(tick);
+        tick = setInterval(()=>{ if(timeEl) timeEl.textContent = Math.floor((Date.now() - t0) / 1000) + '초'; }, 500);
+        await nextPaint();
+      },
+      // pct가 숫자면 퍼센트 막대로 바뀌고, null이면 설명 글만 바꾼다
+      set(pct, detail){
+        if(state !== 'running') return;
+        if(detail != null) detailEl.textContent = detail;
+        if(typeof pct === 'number' && isFinite(pct)){
+          const p = Math.max(0, Math.min(100, Math.round(pct)));
+          setIndeterminate(false); barEl.style.width = p + '%'; pctEl.textContent = p + '%';
+        }
+      },
+      finish(msg){
+        if(state !== 'running') return;
+        state = 'done'; titleEl.textContent = '✅ 완료'; detailEl.textContent = msg || '';
+        setIndeterminate(false); barEl.style.width = '100%'; pctEl.textContent = '100%';
+        if(tick){ clearInterval(tick); tick = null; }
+        hideTimer = setTimeout(hide, 1300);
+      },
+      fail(msg){
+        if(state === 'idle') return;
+        state = 'failed'; titleEl.textContent = '⚠ 실패'; detailEl.textContent = msg || '';
+        setIndeterminate(false); barEl.style.width = '100%'; barEl.style.background = '#e74c3c'; pctEl.textContent = '';
+        if(tick){ clearInterval(tick); tick = null; }
+        hideTimer = setTimeout(()=>{ hide(); barEl.style.background = 'var(--accent,#F2A93B)'; }, 1800);
+      },
+      // 어떤 경우든 창이 영원히 남지 않게 하는 마지막 안전장치(finally에서 호출)
+      end(){ if(state === 'running'){ hide(); } },
+      nextPaint
+    };
+  })();
+
   btnSaveWork.addEventListener('click', async ()=>{
     moreModal.style.display = 'none';
     if(!baseImageSrc){ alert('백업할 현재 시설물 작업이 없습니다.'); return; }
+    await psProgress.start('백업 파일 만드는 중…', (currentSiteName() || '시설물') + ' · 사진 원본을 모으는 중');
+    try{
     commitLiveToCurrentSite();
     await hydratePhotoBlobs(markers); // 이미 별도 저장소로 분리된 사진이 있다면 내보내기 전에 다시 채운다
+    psProgress.set(null, '파일로 묶는 중');
+    await psProgress.nextPaint();
     const payload = {
       type: 'point-shot-work',
       version: 2,
@@ -13447,6 +13526,14 @@
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+    psProgress.finish('파일이 저장(다운로드)됩니다.');
+    }catch(e){
+      console.error(e);
+      psProgress.fail('백업 파일을 만들지 못했습니다.');
+      alert('백업 파일을 만드는 중 오류가 발생했습니다.');
+    }finally{
+      psProgress.end();
+    }
   });
 
   btnLoadWork.addEventListener('click', ()=>{ moreModal.style.display = 'none'; workFileInput.click(); });
@@ -14288,6 +14375,8 @@
     if(psites.length === 0){ alert('이 프로젝트에 시설물이 없습니다.'); return; }
     if(!(await ensureXlsxLoaded())){ alert('Excel 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인해주세요.'); return; }
 
+    await psProgress.start('프로젝트 손상현황 Excel 만드는 중…', project.name + ' · 시설물 ' + psites.length + '개 집계');
+    try{
     const invHeader = ['시설물', ...DAMAGE_INVENTORY_COLUMNS];
     const allRows = [];
     const perFacilitySheets = [];
@@ -14324,7 +14413,17 @@
       { name:'손상현황통합표(전체)', rows: allRows, headerLabels: invHeader },
       ...perFacilitySheets
     ];
+    psProgress.set(null, 'Excel 파일로 저장하는 중');
+    await psProgress.nextPaint();
     downloadMultiSheetWorkbook(sheets, project.name + '_프로젝트손상현황.xlsx');
+    psProgress.finish('파일이 저장(다운로드)됩니다.');
+    }catch(e){
+      console.error(e);
+      psProgress.fail('Excel을 만들지 못했습니다.');
+      alert('Excel을 만드는 중 오류가 발생했습니다.');
+    }finally{
+      psProgress.end();
+    }
   });
 
   btnImportExcel.addEventListener('click', ()=>{ excelImportInput.value = ''; excelImportInput.click(); });
@@ -18387,6 +18486,8 @@
     btnZip.disabled = true;
     const originalLabel = btnZip.textContent;
     btnZip.textContent = '압축 중…';
+    const zipPhotoTotal = markers.reduce((a, m) => a + (m.photos || []).length, 0);
+    await psProgress.start('사진 ZIP 만드는 중…', '지점 ' + markers.length + '개 · 사진 ' + zipPhotoTotal + '장');
     try{
       const zip = new JSZip();
       const marked = baseImageSrc ? await buildMarkedImage() : null;
@@ -18434,7 +18535,8 @@
       });
       zip.file('기록목록.txt', summary);
 
-      const blob = await zip.generateAsync({type:'blob'});
+      psProgress.set(0, '압축하는 중');
+      const blob = await zip.generateAsync({type:'blob'}, (meta)=>{ psProgress.set(meta.percent, '압축하는 중'); });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -18443,10 +18545,13 @@
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
+      psProgress.finish('파일이 저장(다운로드)됩니다.');
     }catch(e){
+      psProgress.fail('ZIP을 만들지 못했습니다.');
       alert('내보내기 중 오류가 발생했습니다.');
       console.error(e);
     }finally{
+      psProgress.end();
       btnZip.disabled = false;
       btnZip.textContent = originalLabel;
     }
@@ -18479,6 +18584,8 @@
     const originalLabel = btnWord.textContent;
     btnWord.textContent = '문서 생성 중…';
     commitLiveToCurrentSite();
+    let wordDone = 0; const wordTotal = Math.max(1, markers.length);
+    await psProgress.start('Word 보고서 만드는 중…', (currentSiteName() || '시설물') + ' · 지점 ' + markers.length + '개');
     try{
       const { Document, Packer, Paragraph, TextRun, ImageRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType } = docx;
 
@@ -18717,16 +18824,18 @@
           children: [ new TextRun({ text: '■ 도면 지점 (' + imageMarkers.length + '개)', bold:true, size:24 }) ],
           spacing: { before:200, after:150 }
         }));
-        for(const m of imageMarkers){ await pushMarkerBlock(m); }
+        for(const m of imageMarkers){ await pushMarkerBlock(m); wordDone++; psProgress.set(wordDone / wordTotal * 90, '지점 ' + wordDone + ' / ' + markers.length + ' 처리'); }
       }
       if(mapMarkers.length > 0){
         children.push(new Paragraph({
           children: [ new TextRun({ text: '■ 지도 지점 (' + mapMarkers.length + '개)', bold:true, size:24 }) ],
           spacing: { before:300, after:150 }
         }));
-        for(const m of mapMarkers){ await pushMarkerBlock(m); }
+        for(const m of mapMarkers){ await pushMarkerBlock(m); wordDone++; psProgress.set(wordDone / wordTotal * 90, '지점 ' + wordDone + ' / ' + markers.length + ' 처리'); }
       }
 
+      psProgress.set(92, 'Word 파일로 만드는 중');
+      await psProgress.nextPaint();
       const wordDoc = new Document({ sections: [{ children }] });
       const blob = await Packer.toBlob(wordDoc);
       const url = URL.createObjectURL(blob);
@@ -18737,10 +18846,13 @@
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
+      psProgress.finish('파일이 저장(다운로드)됩니다.');
     }catch(e){
       console.error(e);
+      psProgress.fail('문서를 만들지 못했습니다.');
       alert('문서 생성 중 오류가 발생했습니다.');
     }finally{
+      psProgress.end();
       btnWord.disabled = false;
       btnWord.textContent = originalLabel;
     }
@@ -19059,6 +19171,7 @@
     const origLabel = btnAppearanceReport.textContent;
     btnAppearanceReport.textContent = '문서 생성 중…';
     commitLiveToCurrentSite();
+    await psProgress.start('외관조사 보고서 만드는 중…', (site.name || currentSiteName() || '시설물') + ' · 사진·도면을 문서에 넣는 중 (사진이 많으면 몇 분 걸립니다)');
     try{
       const { Document, Packer, Paragraph, TextRun, AlignmentType, Header } = docx;
       const project = projects.find(p => p.id === currentProjectId);
@@ -19067,12 +19180,17 @@
       const children = await buildAppearanceReportSections(docx, site, projectName);
       const headerPara = new Header({ children:[ new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text: [projectName, siteName].filter(Boolean).join('  |  '), size:15, color:'666666' }) ] }) ] });
       const wordDoc = new Document({ sections:[{ headers:{ default: headerPara }, children }] });
+      psProgress.set(90, 'Word 파일로 만드는 중');
+      await psProgress.nextPaint();
       const blob = await Packer.toBlob(wordDoc);
       downloadDocxBlob(blob, siteName + '_외관조사보고서.docx');
+      psProgress.finish('파일이 저장(다운로드)됩니다.');
     }catch(e){
       console.error(e);
+      psProgress.fail('보고서를 만들지 못했습니다.');
       alert('문서 생성 중 오류가 발생했습니다.');
     }finally{
+      psProgress.end();
       btnAppearanceReport.disabled = false;
       btnAppearanceReport.textContent = origLabel;
     }
@@ -19093,6 +19211,7 @@
 
     btnAppearanceReportProject.disabled = true;
     const origLabel = btnAppearanceReportProject.textContent;
+    await psProgress.start('프로젝트 전체 보고서 만드는 중…', project.name + ' · 시설물 ' + psites.length + '개');
     try{
       const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Header, PageBreak } = docx;
       const children = [];
@@ -19105,6 +19224,8 @@
 
       for(let i=0; i<psites.length; i++){
         btnAppearanceReportProject.textContent = '문서 생성 중… (' + (i+1) + '/' + psites.length + ')';
+        psProgress.set(i / psites.length * 90, '시설물 ' + (i+1) + ' / ' + psites.length + ' · ' + (psites[i].name || '시설물'));
+        await psProgress.nextPaint();
         const s = psites[i];
         children.push(new Paragraph({ children:[ new PageBreak() ] }));
         const sectionChildren = await buildAppearanceReportSections(docx, s, project.name);
@@ -19113,12 +19234,17 @@
 
       const headerPara = new Header({ children:[ new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text: project.name, size:15, color:'666666' }) ] }) ] });
       const wordDoc = new Document({ sections:[{ headers:{ default: headerPara }, children }] });
+      psProgress.set(92, 'Word 파일로 만드는 중');
+      await psProgress.nextPaint();
       const blob = await Packer.toBlob(wordDoc);
       downloadDocxBlob(blob, project.name + '_외관조사보고서_전체.docx');
+      psProgress.finish('파일이 저장(다운로드)됩니다.');
     }catch(e){
       console.error(e);
+      psProgress.fail('보고서를 만들지 못했습니다.');
       alert('문서 생성 중 오류가 발생했습니다.');
     }finally{
+      psProgress.end();
       btnAppearanceReportProject.disabled = false;
       btnAppearanceReportProject.textContent = origLabel;
     }
