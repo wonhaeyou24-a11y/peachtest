@@ -1227,11 +1227,64 @@
     cursor: zoom-out;
     padding: 24px;
   }
+  #photoLightbox{ touch-action:none; overscroll-behavior:contain; }
   #photoLightbox img{
     max-width: 100%; max-height: 100%;
     object-fit: contain;
     box-shadow: 0 4px 30px rgba(0,0,0,0.5);
+    /* 핀치·드래그·더블탭 확대를 위해 브라우저 기본 제스처(스크롤/확대)를 끈다 */
+    touch-action: none;
+    transform-origin: center center;
+    will-change: transform;
+    cursor: grab;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
   }
+  #photoLightbox .lightbox-zoombar{
+    position:absolute; left:50%; bottom:calc(18px + env(safe-area-inset-bottom, 0px)); transform:translateX(-50%);
+    display:flex; gap:8px; z-index:2;
+  }
+  #photoLightbox .lightbox-zoombar button{
+    background: rgba(255,255,255,0.16); color:#fff; border:none;
+    min-width:48px; height:42px; padding:0 14px; border-radius:21px; font-size:16px; cursor:pointer;
+  }
+  #photoLightbox .lightbox-counter{
+    position:absolute; top:22px; left:50%; transform:translateX(-50%);
+    color:#fff; font-size:13px; background:rgba(255,255,255,0.14); padding:4px 12px; border-radius:14px; z-index:2;
+  }
+  #photoLightbox .lightbox-nav{
+    position:absolute; top:50%; transform:translateY(-50%);
+    background: rgba(255,255,255,0.14); color:#fff; border:none;
+    width:44px; height:64px; font-size:30px; border-radius:10px; z-index:2; cursor:pointer;
+  }
+  #photoLightbox .lightbox-nav.prev{ left:8px; }
+  #photoLightbox .lightbox-nav.next{ right:8px; }
+  /* 지점 상세: 사진이 여러 장일 때 위쪽 사진 선택 줄(한 번에 한 장만 편집) */
+  .photo-tabs{
+    display:flex; gap:8px; overflow-x:auto; padding:2px 2px 10px; margin-bottom:6px;
+    -webkit-overflow-scrolling:touch;
+  }
+  .photo-tabs .photo-tab{
+    position:relative; flex:0 0 auto; width:62px; height:62px; padding:0;
+    border:2px solid var(--line); border-radius:8px; background:var(--panel-2); overflow:hidden; cursor:pointer;
+  }
+  .photo-tabs .photo-tab.active{ border-color:var(--amber); box-shadow:0 0 0 2px var(--amber-dim, rgba(242,169,59,0.3)); }
+  .photo-tabs .photo-tab img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .photo-tabs .photo-tab .tab-num{
+    position:absolute; left:3px; top:3px; min-width:18px; height:18px; border-radius:9px;
+    background:rgba(0,0,0,0.7); color:#fff; font-size:11px; font-weight:700; line-height:18px; text-align:center; padding:0 4px;
+  }
+  .photo-tabs .photo-tab .tab-dmg{
+    position:absolute; right:3px; bottom:3px; min-width:16px; height:16px; border-radius:8px;
+    background:var(--amber); color:#1a1206; font-size:10px; font-weight:700; line-height:16px; text-align:center; padding:0 3px;
+  }
+  .photo-tabs .photo-tab.add{ display:flex; align-items:center; justify-content:center; font-size:26px; color:var(--amber-text, #F2A93B); border-style:dashed; }
+  .log-item-mobile .lim-del{
+    flex-shrink:0; width:30px; height:30px; border-radius:50%; padding:0; font-size:14px;
+    background:transparent; border:1px solid var(--danger); color:var(--danger);
+  }
+  .mh-facility.clickable{ cursor:pointer; }
+  .mh-facility.clickable::after{ content:' ▾'; }
+  .mh-project.clickable{ cursor:pointer; }
   #photoLightbox .lightbox-close{
     position:absolute; top:16px; right:20px;
     background: rgba(255,255,255,0.12); color:#fff; border:none;
@@ -1623,9 +1676,13 @@
   }
   .photo-card-top img{
     width:100%;
-    max-height: 52vh;
-    object-fit:cover;
+    /* 사진이 화면의 절반 이상을 차지해 아래 손상 입력칸을 가렸다 — 고정되는 사진은 작게(가로로
+       긴 비율 유지), 자세히 볼 때는 사진을 눌러 확대 화면(핀치 확대/이동)으로 본다. */
+    max-height: 30vh;
+    object-fit:contain;
+    background:#000;
     display:block;
+    cursor:zoom-in;
   }
   .photo-card-actions{
     position:absolute;
@@ -2383,7 +2440,15 @@
 <!-- 기록목록 카드 사진 전체화면 뷰어 -->
 <div id="photoLightbox">
   <button type="button" class="lightbox-close" id="closeLightbox" aria-label="닫기">✕</button>
-  <img id="photoLightboxImg" src="" alt="">
+  <div class="lightbox-counter" id="lightboxCounter" style="display:none;"></div>
+  <button type="button" class="lightbox-nav prev" id="lightboxPrev" aria-label="이전 사진" style="display:none;">‹</button>
+  <button type="button" class="lightbox-nav next" id="lightboxNext" aria-label="다음 사진" style="display:none;">›</button>
+  <div class="lightbox-zoombar" id="lightboxZoombar">
+    <button type="button" id="lightboxZoomOut" aria-label="축소">－</button>
+    <button type="button" id="lightboxZoomReset" aria-label="원래 크기">원래대로</button>
+    <button type="button" id="lightboxZoomIn" aria-label="확대">＋</button>
+  </div>
+  <img id="photoLightboxImg" src="" alt="" draggable="false">
 </div>
 
 <!-- Capture Modal -->
@@ -2404,6 +2469,7 @@
       <button class="ghost" id="btnRestartCamera" style="display:none;">🔄 카메라 다시 시작</button>
       <button class="primary" id="btnNativeCamera" style="display:none;">📷 카메라 앱으로 촬영</button>
       <button class="ghost" id="btnFileFallback">사진첩에서 선택</button>
+      <button class="danger role-gated" id="btnDeleteInCapture" title="잘못 찍은 지점을 바로 삭제 (휴지통에서 복원 가능)">🗑 지점 삭제</button>
       <button class="primary" id="btnShoot">촬영</button>
       <button class="primary" id="btnDoneCapture" style="background:#2E7D4F; border-color:#2E7D4F;">촬영 완료</button>
     </div>
@@ -2418,6 +2484,7 @@
       <button class="close-x" id="closePreview" aria-label="닫기">✕</button>
     </div>
     <div class="modal-body">
+      <div class="photo-tabs" id="previewTabs" style="display:none;"></div>
       <div class="preview-grid" id="previewGrid"></div>
     </div>
     <div class="modal-foot">
@@ -2983,9 +3050,15 @@
       <button class="close-x" id="closeTrash" aria-label="닫기">✕</button>
     </div>
     <div class="modal-body">
-      <h3 style="margin:4px 0 6px; font-size:14px;">이 시설물의 지점 · 사진</h3>
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin:4px 0 6px;">
+        <h3 style="margin:0; font-size:14px;">이 시설물의 지점 · 사진</h3>
+        <button class="log-btn" id="btnEmptyTrash" style="color:var(--danger); white-space:nowrap;">🗑 전체 비우기</button>
+      </div>
       <div id="trashBody"></div>
-      <h3 style="margin:18px 0 6px; font-size:14px;">삭제된 시설물 (모든 프로젝트)</h3>
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin:18px 0 6px;">
+        <h3 style="margin:0; font-size:14px;">삭제된 시설물 (모든 프로젝트)</h3>
+        <button class="log-btn" id="btnEmptySiteTrash" style="color:var(--danger); white-space:nowrap;">🗑 전체 비우기</button>
+      </div>
       <div id="siteTrashBody"></div>
     </div>
   </div>
@@ -3065,7 +3138,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v94';
+  const PS_BUILD = 'v95';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -3307,6 +3380,7 @@
   const closePreview = document.getElementById('closePreview');
   const btnAddMorePhotos = document.getElementById('btnAddMorePhotos');
   const btnDeleteMarker = document.getElementById('btnDeleteMarker');
+  const btnDeleteInCapture = document.getElementById('btnDeleteInCapture');
   const btnMoveMarker = document.getElementById('btnMoveMarker');
   const moveBanner = document.getElementById('moveBanner');
   const moveBannerText = document.getElementById('moveBannerText');
@@ -14040,6 +14114,74 @@
     alert('"' + s.name + '" 시설물이 복원되었습니다' + (targetProjectExists ? '.' : ' (원래 프로젝트가 없어져 현재 프로젝트로 복원됨).'));
   }
 
+  // ---------- 휴지통 전체 비우기 ----------
+  // 항목을 하나씩 "완전삭제" 누르던 것을 한 번에. 되돌릴 수 없으므로 개수를 보여주는 확인 창을 거친다.
+  document.getElementById('btnEmptyTrash').addEventListener('click', async ()=>{
+    const items = trash.slice();
+    if(items.length === 0){ alert('휴지통이 비어 있습니다.'); return; }
+    const markerItems = items.filter(i => i.type === 'marker');
+    const photoCnt = items.reduce((a, i) => a + (i.type === 'marker' ? (i.data.photos || []).length : 1), 0);
+    if(!confirm('이 시설물의 휴지통을 모두 비웁니다.\n\n지점 ' + markerItems.length + '개 · 사진 ' + photoCnt + '장이 완전히 삭제되며 되돌릴 수 없습니다.\n\n정말 비울까요?')) return;
+    await psProgress.start('휴지통 비우는 중…', '항목 ' + items.length + '개');
+    try{
+      await diagLogMemorySnapshot('휴지통 전체 비우기 전');
+      for(let i = 0; i < items.length; i++){
+        const item = items[i];
+        if(item.type === 'marker'){
+          await deleteOrphanedPhotoBlobs([item.data]);
+          try{ await idbDeleteInspectionPoint(item.data.id, true); }catch(e){}
+        } else if(item.type === 'photo'){
+          await deleteOrphanedPhotoBlobs([item.data]);
+        }
+        psProgress.set((i + 1) / items.length * 95, (i + 1) + ' / ' + items.length);
+      }
+      trash = trash.filter(x => !items.includes(x));
+      logActivity('휴지통 비우기', '지점 ' + markerItems.length + '개 · 사진 ' + photoCnt + '장 완전삭제');
+      renderTrash();
+      await saveState();
+      psProgress.finish('휴지통을 비웠습니다.');
+    }catch(e){
+      console.error(e);
+      psProgress.fail('휴지통을 비우는 중 오류가 발생했습니다.');
+      alert('휴지통을 비우는 중 오류가 발생했습니다. 일부 항목만 삭제됐을 수 있습니다.');
+      renderTrash();
+    }finally{
+      psProgress.end();
+    }
+  });
+
+  document.getElementById('btnEmptySiteTrash').addEventListener('click', async ()=>{
+    const items = deletedSites.slice();
+    if(items.length === 0){ alert('삭제된 시설물이 없습니다.'); return; }
+    let pts = 0, phs = 0;
+    items.forEach(it => { const s = it.site || {}; pts += (s.markers || []).length; phs += (s.markers || []).reduce((a, m) => a + (m.photos || []).length, 0); });
+    if(!confirm('삭제된 시설물 ' + items.length + '개를 모두 완전히 삭제합니다.\n\n(조사점 ' + pts + '개 · 사진 ' + phs + '장이 모두 사라지며 되돌릴 수 없습니다)\n\n정말 비울까요?')) return;
+    await psProgress.start('삭제된 시설물 비우는 중…', '시설물 ' + items.length + '개');
+    try{
+      await diagLogMemorySnapshot('삭제된 시설물 전체 비우기 전');
+      for(let i = 0; i < items.length; i++){
+        const s = items[i].site || {};
+        await deleteOrphanedPhotoBlobs(s.markers || []);
+        for(const m of (s.markers || [])){
+          try{ await idbDeleteInspectionPoint(m.id, true); }catch(e){}
+        }
+        psProgress.set((i + 1) / items.length * 95, '시설물 ' + (i + 1) + ' / ' + items.length);
+      }
+      deletedSites = deletedSites.filter(x => !items.includes(x));
+      logActivity('삭제된 시설물 비우기', '시설물 ' + items.length + '개 완전삭제');
+      renderSiteTrash();
+      await saveState();
+      psProgress.finish('비웠습니다.');
+    }catch(e){
+      console.error(e);
+      psProgress.fail('비우는 중 오류가 발생했습니다.');
+      alert('비우는 중 오류가 발생했습니다. 일부 항목만 삭제됐을 수 있습니다.');
+      renderSiteTrash();
+    }finally{
+      psProgress.end();
+    }
+  });
+
   btnTrash.addEventListener('click', ()=>{ moreModal.style.display='none'; renderTrash(); renderSiteTrash(); trashModal.style.display='flex'; });
   closeTrash.addEventListener('click', ()=>{ trashModal.style.display='none'; });
   trashModal.addEventListener('click', (e)=>{ if(e.target===trashModal) trashModal.style.display='none'; });
@@ -16288,6 +16430,18 @@
     item.appendChild(typeEl);
     item.appendChild(timeEl);
     item.appendChild(chevEl);
+
+    // 잘못 찍은 지점을 상세화면에 들어가지 않고 바로 지운다(확인 창 + 휴지통에서 복원 가능)
+    const delEl = document.createElement('button');
+    delEl.type = 'button';
+    delEl.className = 'lim-del role-gated';
+    delEl.textContent = '🗑';
+    delEl.title = '이 지점 삭제 (휴지통에서 복원 가능)';
+    delEl.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      deleteMarker(m.id);
+    });
+    item.appendChild(delEl);
     log.appendChild(item);
   }
 
@@ -16398,20 +16552,139 @@
   // 없이 사진만 크게 본다(previewModal의 손상입력 폼과는 완전히 별개).
   const photoLightbox = document.getElementById('photoLightbox');
   const photoLightboxImg = document.getElementById('photoLightboxImg');
-  function openPhotoLightbox(src){
-    if(!src || !photoLightbox || !photoLightboxImg) return;
-    photoLightboxImg.src = src;
+  // 사진 전체화면 뷰어: 핀치(두 손가락) 확대·축소, 한 손가락 이동, 더블탭 확대/복귀,
+  // 마우스 휠 확대, ＋/－/원래대로 버튼. 사진 여러 장이면 좌우 버튼·좌우 스와이프로 넘긴다.
+  let lbList = [], lbIdx = 0;
+  let lbScale = 1, lbTx = 0, lbTy = 0;
+  const lbPtrs = new Map();
+  let lbPinchStartDist = 0, lbPinchStartScale = 1;
+  let lbLastTapTime = 0, lbLastTapX = 0, lbLastTapY = 0;
+  let lbMoved = false, lbSwipeStartX = null;
+  const LB_MAX = 8;
+  function lbApply(){
+    photoLightboxImg.style.transform = 'translate(' + lbTx + 'px,' + lbTy + 'px) scale(' + lbScale + ')';
+    photoLightboxImg.style.cursor = lbScale > 1 ? 'grab' : 'zoom-in';
+  }
+  function lbReset(){ lbScale = 1; lbTx = 0; lbTy = 0; lbApply(); }
+  function lbZoomAt(newScale, px, py){
+    newScale = Math.max(1, Math.min(LB_MAX, newScale));
+    const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+    const ratio = newScale / lbScale;
+    lbTx = (px - cx) - ((px - cx) - lbTx) * ratio;
+    lbTy = (py - cy) - ((py - cy) - lbTy) * ratio;
+    lbScale = newScale;
+    if(lbScale <= 1.001){ lbScale = 1; lbTx = 0; lbTy = 0; }
+    lbApply();
+  }
+  function lbShow(i){
+    lbIdx = (i + lbList.length) % lbList.length;
+    photoLightboxImg.src = lbList[lbIdx];
+    lbReset();
+    const multi = lbList.length > 1;
+    const counter = document.getElementById('lightboxCounter');
+    counter.style.display = multi ? 'block' : 'none';
+    counter.textContent = (lbIdx + 1) + ' / ' + lbList.length;
+    document.getElementById('lightboxPrev').style.display = multi ? 'block' : 'none';
+    document.getElementById('lightboxNext').style.display = multi ? 'block' : 'none';
+  }
+  // src: 사진 하나(문자열) 또는 여러 장(배열). startIndex: 배열일 때 처음 보여줄 사진
+  function openPhotoLightbox(src, startIndex){
+    if(!photoLightbox || !photoLightboxImg) return;
+    const list = (Array.isArray(src) ? src : [src]).filter(Boolean);
+    if(list.length === 0) return;
+    lbList = list;
+    lbShow(typeof startIndex === 'number' ? startIndex : 0);
     photoLightbox.style.display = 'flex';
   }
   function closePhotoLightbox(){
     if(!photoLightbox) return;
     photoLightbox.style.display = 'none';
     photoLightboxImg.src = '';
+    lbList = []; lbPtrs.clear(); lbReset();
   }
   if(photoLightbox){
-    photoLightbox.addEventListener('click', closePhotoLightbox);
+    // 바깥 어두운 곳을 탭하면 닫힘(확대·이동하려고 끌다가 닫히지 않도록 이미지 위 조작은 제외)
+    photoLightbox.addEventListener('click', (e)=>{ if(e.target === photoLightbox) closePhotoLightbox(); });
     document.getElementById('closeLightbox').addEventListener('click', (e)=>{ e.stopPropagation(); closePhotoLightbox(); });
-    photoLightboxImg.addEventListener('click', (e)=> e.stopPropagation());
+    document.getElementById('lightboxZoomIn').addEventListener('click', (e)=>{ e.stopPropagation(); lbZoomAt(lbScale * 1.6, window.innerWidth / 2, window.innerHeight / 2); });
+    document.getElementById('lightboxZoomOut').addEventListener('click', (e)=>{ e.stopPropagation(); lbZoomAt(lbScale / 1.6, window.innerWidth / 2, window.innerHeight / 2); });
+    document.getElementById('lightboxZoomReset').addEventListener('click', (e)=>{ e.stopPropagation(); lbReset(); });
+    document.getElementById('lightboxPrev').addEventListener('click', (e)=>{ e.stopPropagation(); lbShow(lbIdx - 1); });
+    document.getElementById('lightboxNext').addEventListener('click', (e)=>{ e.stopPropagation(); lbShow(lbIdx + 1); });
+    document.getElementById('lightboxZoombar').addEventListener('click', (e)=> e.stopPropagation());
+
+    photoLightbox.addEventListener('wheel', (e)=>{
+      if(photoLightbox.style.display === 'none') return;
+      e.preventDefault();
+      lbZoomAt(lbScale * Math.exp(-e.deltaY * 0.0018), e.clientX, e.clientY);
+    }, { passive:false });
+
+    photoLightboxImg.addEventListener('pointerdown', (e)=>{
+      e.preventDefault();
+      try{ photoLightboxImg.setPointerCapture(e.pointerId); }catch(err){}
+      lbPtrs.set(e.pointerId, { x:e.clientX, y:e.clientY });
+      lbMoved = false;
+      if(lbPtrs.size === 2){
+        const [a, b] = Array.from(lbPtrs.values());
+        lbPinchStartDist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+        lbPinchStartScale = lbScale;
+      }
+      lbSwipeStartX = (lbPtrs.size === 1) ? e.clientX : null;
+    });
+    photoLightboxImg.addEventListener('pointermove', (e)=>{
+      const prev = lbPtrs.get(e.pointerId);
+      if(!prev) return;
+      const cur = { x:e.clientX, y:e.clientY };
+      if(lbPtrs.size === 2){
+        lbPtrs.set(e.pointerId, cur);
+        const [a, b] = Array.from(lbPtrs.values());
+        const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+        lbZoomAt(lbPinchStartScale * (dist / lbPinchStartDist), (a.x + b.x) / 2, (a.y + b.y) / 2);
+        lbMoved = true;
+        return;
+      }
+      const dx = cur.x - prev.x, dy = cur.y - prev.y;
+      if(Math.abs(dx) + Math.abs(dy) > 1) lbMoved = true;
+      lbPtrs.set(e.pointerId, cur);
+      if(lbScale > 1){ lbTx += dx; lbTy += dy; lbApply(); }
+    });
+    function lbPointerEnd(e){
+      const had = lbPtrs.has(e.pointerId);
+      const wasSingle = lbPtrs.size === 1;
+      lbPtrs.delete(e.pointerId);
+      if(!had) return;
+      if(lbPtrs.size === 1){ // 핀치가 끝나고 한 손가락만 남음 — 그 손가락 기준으로 이어서 이동
+        const rest = Array.from(lbPtrs.values())[0];
+        lbPtrs.set(Array.from(lbPtrs.keys())[0], rest);
+      }
+      if(!wasSingle) return;
+      const dxTotal = (lbSwipeStartX != null) ? (e.clientX - lbSwipeStartX) : 0;
+      // 확대하지 않은 상태에서 좌우로 크게 밀면 이전/다음 사진
+      if(lbScale === 1 && lbList.length > 1 && Math.abs(dxTotal) > 70){
+        lbShow(lbIdx + (dxTotal < 0 ? 1 : -1));
+        return;
+      }
+      // 더블탭: 확대 ↔ 원래 크기
+      if(!lbMoved){
+        const now = Date.now();
+        if(now - lbLastTapTime < 320 && Math.hypot(e.clientX - lbLastTapX, e.clientY - lbLastTapY) < 40){
+          if(lbScale > 1) lbReset(); else lbZoomAt(2.6, e.clientX, e.clientY);
+          lbLastTapTime = 0;
+        } else {
+          lbLastTapTime = now; lbLastTapX = e.clientX; lbLastTapY = e.clientY;
+        }
+      }
+    }
+    photoLightboxImg.addEventListener('pointerup', lbPointerEnd);
+    photoLightboxImg.addEventListener('pointercancel', (e)=>{ lbPtrs.delete(e.pointerId); });
+    document.addEventListener('keydown', (e)=>{
+      if(photoLightbox.style.display === 'none') return;
+      if(e.key === 'Escape') closePhotoLightbox();
+      else if(e.key === 'ArrowLeft' && lbList.length > 1) lbShow(lbIdx - 1);
+      else if(e.key === 'ArrowRight' && lbList.length > 1) lbShow(lbIdx + 1);
+      else if(e.key === '+' || e.key === '=') lbZoomAt(lbScale * 1.4, window.innerWidth / 2, window.innerHeight / 2);
+      else if(e.key === '-') lbZoomAt(lbScale / 1.4, window.innerWidth / 2, window.innerHeight / 2);
+    });
   }
 
   function renderLogItemDesktop(m){
@@ -16806,6 +17079,12 @@
       const img = document.createElement('img');
       img.src = p.src;
       img.alt = '촬영 ' + (idx+1);
+      img.style.cursor = 'zoom-in';
+      img.addEventListener('click', ()=>{
+        const srcs = photos.map(x => x.src).filter(Boolean);
+        const here = photos.slice(0, idx).filter(x => x.src).length;
+        if(p.src) openPhotoLightbox(srcs, here);
+      });
 
       const addDamageBtn = document.createElement('button');
       addDamageBtn.type = 'button';
@@ -16815,7 +17094,7 @@
       addDamageBtn.title = '이 사진에 손상 추가';
       addDamageBtn.addEventListener('click', ()=>{
         closeCaptureModal();
-        openPreview(markerId);
+        openPreview(markerId, idx);
         // 여기서 바로 손상 선택 폼까지 열어준다 — 예전엔 지점 상세화면으로 넘어간
         // 뒤 "+ 손상 추가"를 한 번 더 눌러야 실제 구분/구간/부위/손상명 선택 UI가
         // 나타나서, 같은 버튼을 두 번 눌러야 하는 불편이 있었다.
@@ -17097,6 +17376,7 @@
 
     // 2. 사진 객체 추가
     m.photos.push(photoObj);
+    previewSelMarker = markerId; previewSelIdx = m.photos.length - 1; // 방금 찍은 사진이 바로 편집 대상
     logActivity('사진 추가', '지점 ' + m.num + ' · 사진 ' + m.photos.length + '장째');
 
     // 도면 지점에 지도 좌표가 아직 없고, 이 사진에 GPS가 있으면 최초 위치로 자동 연계 (도면↔지도 연계)
@@ -17175,8 +17455,12 @@
   const expandedDamageExtras = new Set();
 
   // ---------- preview / delete ----------
-  function openPreview(markerId){
+  // 지점 상세에서 지금 보고 있는(편집 중인) 사진 번호 — 사진이 여러 장이어도 한 번에 한 장만 보여준다
+  let previewSelMarker = null, previewSelIdx = 0;
+  function openPreview(markerId, photoIdx){
     activeMarkerId = markerId;
+    if(typeof photoIdx === 'number'){ previewSelMarker = markerId; previewSelIdx = photoIdx; }
+    else if(previewSelMarker !== markerId){ previewSelMarker = markerId; previewSelIdx = 0; }
     renderPreviewGrid(markerId);
 
     // [이중 안전 복구] 만약 메모리에 src가 없는 사진이 있다면 photoBlobs로부터 즉시 비동기 로드
@@ -17211,15 +17495,55 @@
     if(!m) return;
     previewTitle.textContent = '지점 ' + m.num + ' · 사진 ' + (m.photos ? m.photos.length : 0) + '장 · 위치신뢰도 ' + computeLocationTrust(m) + (m.address ? ' · ' + m.address : '');
     previewGrid.innerHTML = '';
+    // 선택된 사진 번호 보정 + 사진 선택 줄(2장 이상일 때)
+    if(previewSelMarker !== markerId){ previewSelMarker = markerId; previewSelIdx = 0; }
+    const photoCount = (m.photos || []).length;
+    if(previewSelIdx >= photoCount) previewSelIdx = Math.max(0, photoCount - 1);
+    const tabsEl = document.getElementById('previewTabs');
+    if(tabsEl){
+      tabsEl.innerHTML = '';
+      if(photoCount >= 2){
+        tabsEl.style.display = 'flex';
+        (m.photos || []).forEach((tp, ti)=>{
+          const tab = document.createElement('button');
+          tab.type = 'button';
+          tab.className = 'photo-tab' + (ti === previewSelIdx ? ' active' : '');
+          tab.title = (ti + 1) + '번 사진';
+          const timg = document.createElement('img');
+          timg.src = tp.src || '';
+          timg.alt = '';
+          tab.appendChild(timg);
+          const num = document.createElement('span'); num.className = 'tab-num'; num.textContent = String(ti + 1);
+          tab.appendChild(num);
+          const dc = (tp.damages || []).length;
+          if(dc){ const dg = document.createElement('span'); dg.className = 'tab-dmg'; dg.textContent = String(dc); tab.appendChild(dg); }
+          tab.addEventListener('click', ()=>{ previewSelIdx = ti; renderPreviewGrid(markerId); });
+          tabsEl.appendChild(tab);
+        });
+        const addTab = document.createElement('button');
+        addTab.type = 'button'; addTab.className = 'photo-tab add'; addTab.textContent = '＋'; addTab.title = '사진 추가 촬영';
+        addTab.addEventListener('click', ()=>{ btnAddMorePhotos.click(); });
+        tabsEl.appendChild(addTab);
+      } else {
+        tabsEl.style.display = 'none';
+      }
+    }
     (m.photos || []).forEach((p, idx)=>{
       const card = document.createElement('div');
       card.className = 'photo-card';
+      if(idx !== previewSelIdx) card.style.display = 'none'; // 한 번에 한 장만 — 사진끼리 겹쳐 입력칸이 가려지지 않게
 
       const top = document.createElement('div');
       top.className = 'photo-card-top';
       const img = document.createElement('img');
       img.src = p.src || '';
       img.alt = '지점 ' + m.num + ' 사진 ' + (idx+1);
+      // 사진을 누르면 전체화면 + 확대/축소(핀치·더블탭)
+      img.addEventListener('click', ()=>{
+        const srcs = (m.photos || []).map(x => x.src).filter(Boolean);
+        const here = (m.photos || []).slice(0, idx).filter(x => x.src).length;
+        if(p.src) openPhotoLightbox(srcs, here);
+      });
 
       // p.src가 아직 메모리에 없는 경우 즉시 해당 사진 개별 로드
       if(!p.src && (p.photoRef || p.id)){
@@ -17949,6 +18273,15 @@
 
   btnDeleteMarker.addEventListener('click', ()=>{
     if(activeMarkerId) deleteMarker(activeMarkerId);
+  });
+
+  // 촬영 화면에서 바로 지점 삭제 — 잘못 누른 지점을 상세화면까지 들어가지 않고 지운다.
+  // 확인 창을 거치고, 지워도 휴지통에서 복원할 수 있다(deleteMarker와 동일).
+  btnDeleteInCapture.addEventListener('click', async ()=>{
+    const id = activeMarkerId;
+    if(!id) return;
+    await deleteMarker(id);
+    if(!markers.some(x => x.id === id)) closeCaptureModal(); // 실제로 삭제됐을 때만 촬영창을 닫는다
   });
 
   btnMoveMarker.addEventListener('click', ()=>{
@@ -19343,6 +19676,21 @@
       el.classList.toggle('failed', /실패/.test(t));
     });
     mirrorText(projectLabel, mhProject);
+
+    // 상단 중앙의 시설물명/프로젝트명을 누르면 바로 목록 창이 열려 빠르게 바꿀 수 있다
+    // (새 기능을 만든 게 아니라 기존 "시설물 목록"·"프로젝트 전환" 버튼으로 그대로 위임).
+    if(mhFacility){
+      mhFacility.classList.add('clickable');
+      mhFacility.setAttribute('role', 'button');
+      mhFacility.title = '눌러서 시설물 목록 열기 · 빠른 전환';
+      mhFacility.addEventListener('click', ()=>{ moreModal.style.display = 'none'; btnSiteList.click(); });
+    }
+    if(mhProject){
+      mhProject.classList.add('clickable');
+      mhProject.setAttribute('role', 'button');
+      mhProject.title = '눌러서 프로젝트 전환';
+      mhProject.addEventListener('click', ()=>{ moreModal.style.display = 'none'; btnProjectSwitch.click(); });
+    }
   })();
 
   async function initPeachShotApp(){
