@@ -3052,7 +3052,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v91';
+  const PS_BUILD = 'v92';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -12299,6 +12299,10 @@
   // 실패해도(개별 파일 오류 등) 최선을 다한 정리일 뿐 프로젝트/행 삭제 자체를
   // 막지 않는다 — 그래서 결과를 리턴만 하고 예외를 던지지 않는다.
   async function deleteCloudProjectPhotos(projectId){
+    // 안전 우선(2026-10-08): 사진 파일 경로(사용자id/사진id)는 "불러오기"로 만들어진 사본
+    // 프로젝트들이 서로 공유한다. 한 프로젝트를 지우면서 사진 파일까지 지우면 다른 사본의
+    // 사진이 사라진다. 사진 파일은 지우지 않는다(저장공간을 조금 더 쓸 뿐, 자료 유실은 없다).
+    if(true) return { attempted: 0, deleted: 0 };
     const myUid = myUserId();
     if(!myUid) return { attempted: 0, deleted: 0 };
     const projSites = sites.filter(s => s.projectId === projectId);
@@ -12509,7 +12513,7 @@
           const warn = '"' + project.name + '" 프로젝트를 클라우드에서 영구 삭제합니다.\n\n' +
             '시설물·조사점·기존손상 기록을 포함한 클라우드 원본이 완전히 사라지며 되돌릴 수 없습니다' +
             (project.organizationId ? '. 다른 조직원도 더 이상 이 프로젝트를 받을 수 없게 됩니다.' : '.') +
-            '\n(내가 올린 사진 원본도 함께 지워집니다. 다른 팀원이 올린 사진은 그 사람 권한으로만 지울 수 있어 남을 수 있습니다.)\n\n' +
+            '\n(안전을 위해 클라우드의 사진 파일은 지우지 않습니다. 다른 프로젝트 사본이 같은 사진을 쓸 수 있기 때문입니다.)\n\n' +
             '이 기기의 시설물 자료는 그대로 남고(휴지통에서 복원 가능), 클라우드 연결만 끊어집니다.\n\n정말 삭제할까요?';
           if(!confirm(warn)) return;
           cloudDelBtn.disabled = true; cloudDelBtn.textContent = '삭제 중…';
