@@ -1282,6 +1282,47 @@
     flex-shrink:0; width:30px; height:30px; border-radius:50%; padding:0; font-size:14px;
     background:transparent; border:1px solid var(--danger); color:var(--danger);
   }
+  /* 지점 상세 하단 고정 빠른 줄(스크롤해도 항상 보임) */
+  .preview-quickbar{
+    display:flex; align-items:center; gap:8px; flex-shrink:0;
+    padding:8px 12px; border-top:1px solid var(--line); background:var(--panel);
+  }
+  .preview-quickbar button{ min-height:44px; padding:0 14px; font-size:14px; white-space:nowrap; }
+  .preview-quickbar #pqAddDamage{ flex:1; font-weight:700; }
+  .preview-quickbar .pq-pos{ font-size:13px; color:var(--muted); min-width:44px; text-align:center; }
+  .preview-quickbar button:disabled{ opacity:0.35; }
+  /* 음성 입력(받아쓰기) 마이크 — 입력칸 오른쪽 아래에 붙는다 */
+  .voice-wrap{ position:relative; display:block; width:100%; }
+  .voice-wrap > textarea{ padding-right:46px !important; }
+  .voice-mic{
+    position:absolute; right:6px; bottom:6px; width:36px; height:36px; border-radius:50%;
+    padding:0; font-size:17px; line-height:1; background:var(--panel); border:1px solid var(--line); color:var(--text);
+  }
+  .voice-mic.listening{ background:#e74c3c; border-color:#e74c3c; color:#fff; animation:voicePulse 1s ease-in-out infinite; }
+  @keyframes voicePulse{ 0%,100%{ box-shadow:0 0 0 0 rgba(231,76,60,0.5);} 50%{ box-shadow:0 0 0 7px rgba(231,76,60,0);} }
+  /* ─ 가로 모드(휴대폰/태블릿을 눕혔을 때): 왼쪽 사진 고정 + 오른쪽 입력칸 2단 화면 ─
+     세로 화면 구조는 그대로 두고, 가로일 때만 지점 상세(previewModal)에 적용한다.
+     (PC 사무실모드의 인스펙터 칸 안에서는 .modal이 previewModal 밖으로 옮겨져 적용되지 않는다.) */
+  @media (orientation: landscape) and (min-width: 600px) and (max-width: 1100px) and (max-height: 900px){
+    #previewModal .modal{ max-width:98vw; width:98vw; max-height:98vh; height:98vh; }
+    #previewModal .modal-head{ padding:6px 14px; }
+    #previewModal .modal-body{ padding:8px 12px; }
+    #previewModal .photo-tabs{ padding-bottom:6px; margin-bottom:4px; }
+    #previewModal .photo-tabs .photo-tab{ width:46px; height:46px; }
+    #previewModal .photo-card{
+      display:grid; grid-template-columns: minmax(0, 44%) minmax(0, 1fr);
+      grid-template-rows:auto 1fr; column-gap:12px; align-items:start;
+    }
+    #previewModal .photo-card-top{ grid-column:1; grid-row:1 / span 2; align-self:start; border-radius:8px; }
+    #previewModal .photo-card-top img{ max-height: calc(98vh - 168px); border-radius:8px; }
+    #previewModal .damage-box{ grid-column:2; grid-row:1; border-top:none; padding-top:0; }
+    #previewModal .photo-card > textarea.photo-note,
+    #previewModal .photo-card > .voice-wrap{ grid-column:2; grid-row:2; }
+    #previewModal .preview-quickbar{ padding:4px 12px; }
+    #previewModal .preview-quickbar button{ min-height:38px; }
+    #previewModal .modal-foot{ padding:6px 12px; gap:6px; }
+    #previewModal .modal-foot button{ min-height:38px; padding:0 12px; }
+  }
   .mh-facility.clickable{ cursor:pointer; }
   .mh-facility.clickable::after{ content:' ▾'; }
   .mh-project.clickable{ cursor:pointer; }
@@ -2487,6 +2528,13 @@
       <div class="photo-tabs" id="previewTabs" style="display:none;"></div>
       <div class="preview-grid" id="previewGrid"></div>
     </div>
+    <!-- 하단 고정 빠른 줄: 스크롤하지 않고 사진 넘기기 / 손상 추가 / 사진 추가 -->
+    <div class="preview-quickbar" id="previewQuickBar">
+      <button type="button" class="ghost" id="pqPrev" aria-label="이전 사진">◀ 이전</button>
+      <span class="pq-pos" id="pqPos">1 / 1</span>
+      <button type="button" class="ghost" id="pqNext" aria-label="다음 사진">다음 ▶</button>
+      <button type="button" class="primary role-gated" id="pqAddDamage">＋ 손상 추가</button>
+    </div>
     <div class="modal-foot">
       <button class="ghost" id="btnMoveMarker">위치 이동</button>
       <button class="ghost" id="btnAddMorePhotos">사진 추가 촬영</button>
@@ -3138,7 +3186,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v95';
+  const PS_BUILD = 'v96';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -18186,7 +18234,7 @@
           cInput.value = d.investigatorComment || '';
           cInput.style.cssText = 'background:var(--panel-2);border:1px solid var(--line);border-radius:4px;color:var(--text);font-family:inherit;font-size:13px;padding:7px 9px;resize:vertical;width:100%;box-sizing:border-box;';
           cInput.addEventListener('change', ()=>{ d.investigatorComment = cInput.value; saveState(); });
-          commentWrap.appendChild(cLab); commentWrap.appendChild(cInput);
+          commentWrap.appendChild(cLab); commentWrap.appendChild(wrapVoice(cInput));
           extraDetailsEl.appendChild(commentWrap);
 
           rec.appendChild(extraDetailsEl);
@@ -18235,9 +18283,106 @@
 
       card.appendChild(top);
       card.appendChild(damageBox);
-      card.appendChild(note);
+      card.appendChild(wrapVoice(note));
       previewGrid.appendChild(card);
     });
+    updatePreviewQuickBar(m);
+  }
+
+  // ---------- 지점 상세 하단 고정 빠른 줄 ----------
+  function updatePreviewQuickBar(m){
+    const n = (m && m.photos) ? m.photos.length : 0;
+    const prev = document.getElementById('pqPrev'), next = document.getElementById('pqNext');
+    const pos = document.getElementById('pqPos'), add = document.getElementById('pqAddDamage');
+    if(!prev || !next || !pos || !add) return;
+    pos.textContent = n ? ((previewSelIdx + 1) + ' / ' + n) : '사진 없음';
+    prev.disabled = !(n > 1);
+    next.disabled = !(n > 1);
+    add.disabled = n === 0;
+  }
+  function pqGo(delta){
+    const m = markers.find(x => x.id === activeMarkerId);
+    if(!m || !m.photos || m.photos.length < 2) return;
+    previewSelIdx = (previewSelIdx + delta + m.photos.length) % m.photos.length;
+    renderPreviewGrid(m.id);
+    const body = previewGrid.closest('.modal-body');
+    if(body) body.scrollTop = 0; // 새 사진은 항상 맨 위(사진)부터 보이게
+  }
+  document.getElementById('pqPrev').addEventListener('click', ()=> pqGo(-1));
+  document.getElementById('pqNext').addEventListener('click', ()=> pqGo(1));
+  document.getElementById('pqAddDamage').addEventListener('click', ()=>{
+    const card = previewGrid.children[previewSelIdx];
+    if(!card) return;
+    const addBtn = Array.from(card.querySelectorAll('.damage-box > button')).find(b => b.textContent.trim() === '+ 손상 추가');
+    if(!addBtn) return;
+    addBtn.click();
+    // 방금 추가된 손상 입력칸이 보이도록 스크롤(고정된 사진·하단 줄에 가리지 않게)
+    setTimeout(()=>{
+      const recs = card.querySelectorAll('.damage-record');
+      const last = recs[recs.length - 1];
+      if(last && last.scrollIntoView) last.scrollIntoView({ block:'nearest', behavior:'smooth' });
+    }, 60);
+  });
+
+  // ---------- 음성 입력(받아쓰기) ----------
+  // 브라우저가 음성 인식을 지원할 때만 입력칸에 🎤 버튼이 붙는다(지원 안 하면 아무것도 안 바뀜).
+  // 아이폰은 키보드의 🎤(받아쓰기)로도 같은 입력이 가능하다.
+  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let activeVoice = null;
+  let voiceErrorShown = false;
+  function wrapVoice(ta){
+    if(!SpeechRec || !ta) return ta;
+    const wrap = document.createElement('div');
+    wrap.className = 'voice-wrap';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'voice-mic';
+    btn.textContent = '🎤';
+    btn.title = '음성으로 입력 (누르고 말하세요 · 다시 누르면 끝)';
+    let rec = null;
+    function stop(){
+      if(rec){ try{ rec.stop(); }catch(e){} }
+      btn.classList.remove('listening');
+      if(activeVoice === stopRef) activeVoice = null;
+    }
+    const stopRef = stop;
+    btn.addEventListener('click', ()=>{
+      if(btn.classList.contains('listening')){ stop(); return; }
+      if(activeVoice) activeVoice(); // 다른 칸에서 듣는 중이면 먼저 끈다
+      try{
+        rec = new SpeechRec();
+        rec.lang = 'ko-KR';
+        rec.interimResults = false;
+        rec.continuous = true;
+        rec.onresult = (ev)=>{
+          let add = '';
+          for(let i = ev.resultIndex; i < ev.results.length; i++){
+            if(ev.results[i].isFinal) add += ev.results[i][0].transcript;
+          }
+          add = add.trim();
+          if(!add) return;
+          ta.value = (ta.value && !/\s$/.test(ta.value) ? ta.value + ' ' : ta.value) + add;
+          ta.dispatchEvent(new Event('change', { bubbles:true })); // 기존 저장 로직이 그대로 동작
+        };
+        rec.onerror = (ev)=>{
+          btn.classList.remove('listening');
+          if(ev && (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') && !voiceErrorShown){
+            voiceErrorShown = true;
+            alert('음성 입력을 쓸 수 없습니다. 마이크·음성 인식 권한을 허용하거나, 키보드의 🎤(받아쓰기)를 사용해 주세요.');
+          }
+        };
+        rec.onend = ()=>{ btn.classList.remove('listening'); if(activeVoice === stopRef) activeVoice = null; };
+        rec.start();
+        btn.classList.add('listening');
+        activeVoice = stopRef;
+      }catch(e){
+        btn.classList.remove('listening');
+        console.warn('음성 입력 시작 실패', e);
+      }
+    });
+    wrap.appendChild(ta);
+    wrap.appendChild(btn);
+    return wrap;
   }
 
   function downloadDataUrl(dataUrl, filename){
