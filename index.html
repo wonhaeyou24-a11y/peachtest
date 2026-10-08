@@ -3052,7 +3052,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v87';
+  const PS_BUILD = 'v88';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -9621,6 +9621,7 @@
       delete copy.markers; delete copy.existingDamages; delete copy.drawings; delete copy.trash; delete copy.revision;
       delete copy._drawingsMigrated; delete copy.ownerId; delete copy._pushBlocked; delete copy.createdBy; // 로컬 학습 플래그 — 내용 아님
       delete copy.activityLog; delete copy.trackLog; delete copy.currentDrawingId; delete copy.baseImageSrc; delete copy.mode;
+      delete copy.baseImageRef; // 기기 안 저장 위치 참조일 뿐 내용이 아님 — 이게 지문에 들어가면 시설물이 불필요하게 재업로드된다
       ['savedAt','updatedAt','updated_at','cloudSyncedAt','syncedAt','lastSavedAt'].forEach(k=>delete copy[k]); // 매 저장마다 바뀌는 값 제외
       // ★ 도면(drawings)은 이제 별도 테이블(ps_drawings)이 아니라 시설물 blob
       //   (ps_facilities.data.drawings)로만 동기화된다. 그래서 "도면이 추가/교체/이미지
@@ -10246,6 +10247,11 @@
         if(op !== 'delete' && !iOwnFacility(site)){
           return { ok: true, skipped: true, reason: 'not-facility-owner' };
         }
+        // 안전장치: 도면 이미지가 아직 기기 저장소에서 복구되지 않은 상태(imageRef만 있고
+        // imageSrc가 빈 경우)면 올리지 않는다 — 올리면 클라우드의 정상 도면 이미지를 빈 값으로 덮는다.
+        if(op !== 'delete' && (site.drawings || []).some(d => d && d.imageRef && !d.imageSrc)){
+          return { ok: true, skipped: true, reason: 'drawing-not-hydrated' };
+        }
         const projId = site.projectId || item.projectId || currentProjectId;
         const pObj = projects.find(p => p.id === projId);
         const orgId = site.organizationId || (pObj && pObj.organizationId) || null;
@@ -10256,7 +10262,7 @@
         const facMetaOnly = (o)=>{
           const c = { ...(o || {}) };
           ['markers','existingDamages','drawings','trash','currentDrawingId','currentSiteId',
-           'baseImageSrc','baseImage','deletedSites','sectionCollapsed','uiState','_view',
+           'baseImageSrc','baseImageRef','baseImage','deletedSites','sectionCollapsed','uiState','_view',
            '_drawingsMigrated','ownerId','_pushBlocked'].forEach(k=>delete c[k]);
           // ★ 도면은 이제 시설물 blob으로만 동기화되므로, 도면이 추가/교체/이미지변경되면
           //   "본문이 달라졌다"고 판단해 blob을 다시 올려야 한다. 전체 base64 대신
@@ -10300,6 +10306,8 @@
         const lightSite = JSON.parse(JSON.stringify(site));
         delete lightSite.markers;
         delete lightSite.existingDamages;
+        delete lightSite.baseImageRef; // 이 기기 안에서만 의미 있는 참조 — 클라우드에는 올리지 않는다
+        (lightSite.drawings || []).forEach(d => { if(d) delete d.imageRef; });
         delete lightSite.trash;
         delete lightSite.activityLog;
         delete lightSite.trackLog;
