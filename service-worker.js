@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-shot-v96-quickbar-voice-landscape'; // 지점상세 하단 고정 줄·음성입력·가로모드 2단 화면
+const CACHE_NAME = 'point-shot-v97-progress-complete-backup'; // 조사완료·클라우드 백업 진행률 창 + 중복 클릭 방지
 // 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
 // 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
 // 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.

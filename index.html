@@ -3186,7 +3186,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v96';
+  const PS_BUILD = 'v97';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -6587,16 +6587,19 @@
   }
 
   async function backupProjectFull(project, onProgress){
-    const say = (m)=>{ try{ if(onProgress) onProgress(m); }catch(e){} };
-    say('지점·손상 정보를 올리는 중…');
+    const say = (m, pct)=>{ try{ if(onProgress) onProgress(m, pct); }catch(e){} };
+    say('1/4 지점·손상 정보를 올리는 중…', 5);
     await forceRequeueProject(project);
     await flushProjectSyncQueue(project.id);
-    say('사진·도면을 올리는 중… (사진이 많으면 몇 분 걸릴 수 있습니다)');
-    const push = await pushProjectToCloud(project, { silent: true });
+    say('2/4 사진·도면을 올리는 중… (사진이 많으면 몇 분 걸립니다)', 30);
+    const push = await pushProjectToCloud(project, { silent: true, onPhotoProgress: (done, total)=>{
+      const frac = total ? done / total : 1;
+      say('2/4 사진 올리는 중 ' + done + ' / ' + total + '장', 30 + frac * 50);
+    } });
     if(!push.ok) return { ok: false, reason: push.reason };
-    say('마무리 동기화 중…');
+    say('3/4 마무리 동기화 중…', 82);
     await flushProjectSyncQueue(project.id);
-    say('클라우드에 실제로 올라갔는지 하나씩 확인하는 중…');
+    say('4/4 클라우드에 실제로 올라갔는지 하나씩 확인하는 중…', 92);
     let verified;
     try{ verified = await verifyProjectBackup(project); }
     catch(e){ return { ok: false, reason: '올린 뒤 확인 단계에서 오류: ' + ((e && e.message) || e) }; }
@@ -6637,6 +6640,14 @@
       // 내 폴더에 실제로 올라가 있는 사진 파일 이름들 — cloudRef 기록은 있는데 파일이
       // 없는 경우(예전 정리/실패)도 다시 올릴 수 있게 한다. 조회 실패 시 null(예전 동작).
       const cloudNames = await listMyCloudPhotoNames(userId);
+      // 올려야 할 사진 개수(진행률 표시용)
+      let photoTotal = 0, photoDone = 0;
+      psites.forEach(s => (s.markers || []).forEach(m => {
+        if(m.createdBy && m.createdBy !== userId) return;
+        (m.photos || []).forEach(p => { if(!p.cloudRef || (cloudNames && !cloudNames.has(p.cloudRef))) photoTotal++; });
+      }));
+      const reportPhoto = ()=>{ if(opts.onPhotoProgress) { try{ opts.onPhotoProgress(photoDone, photoTotal); }catch(e){} } };
+      reportPhoto();
       for(const s of psites){
         for(const m of (s.markers || [])){
           // 팀원이 만든 지점의 사진은 내 폴더가 아니라 올릴 수 없다 — 건너뜀
@@ -6664,6 +6675,7 @@
                 }catch(idxErr){ console.warn('사진 인덱스 기록 실패(무시하고 계속)', idxErr); }
               }
               else{ console.warn('사진 업로드 실패(다음 동기화 때 재시도)', upErr); }
+              photoDone++; reportPhoto();
             }
           }
           // 보고 있지 않은 시설물의 사진 원본은 올린 직후 메모리에서 내린다(전부 쌓이면
@@ -6746,13 +6758,17 @@
   // 올림), 인터넷이 계속 연결된 채로 조사만 계속하면 사진이 영영 클라우드에
   // 안 올라가 팀원이 못 받아가는 문제가 있었다 — 이 함수를 주기적으로/조사완료
   // 시점에 불러서 그 틈을 메운다.
-  async function uploadPendingPhotosForProject(project){
+  async function uploadPendingPhotosForProject(project, onProgress){
     if(!supabaseClient || !supabaseSession) return { ok:false, reason:'로그인이 필요합니다.' };
     if(!navigator.onLine) return { ok:false, reason:'오프라인 상태입니다.' };
     if(!project) return { ok:false, reason:'프로젝트 없음' };
     const psites = sites.filter(s => s.projectId === project.id);
     const userId = supabaseSession.user.id;
     let uploadedCount = 0;
+    let pendTotal = 0, pendDone = 0;
+    psites.forEach(s => (s.markers || []).forEach(m => (m.photos || []).forEach(ph => { if(!ph.cloudRef) pendTotal++; })));
+    const rep = ()=>{ if(onProgress){ try{ onProgress(pendDone, pendTotal); }catch(e){} } };
+    rep();
     try{
       for(const s of psites){
         await hydratePhotoBlobs(s.markers || []);
@@ -6778,6 +6794,7 @@
               } else {
                 console.warn('사진 자동 업로드 실패(다음에 재시도)', upErr);
               }
+              pendDone++; rep();
             }
           }
         }
@@ -6887,7 +6904,10 @@
     const warn = '⚠ ' + compare + '\n\n이 기기에만 있는 내용이 있습니다 (클라우드에 아직 없음):\n · 지점 ' + onlyPts + '개\n · 사진 ' + onlyPhotos + '장\n\n지금 교체하면 이 내용은 프로젝트에서 사라집니다.';
     if(confirm(warn + '\n\n[확인] 먼저 이 기기 내용을 클라우드에 백업한 뒤 교체 (추천)\n[취소] 백업하지 않고 다음 단계로')){
       let res;
-      try{ res = await backupProjectFull(localProject); }catch(e){ res = { ok:false, reason: (e && e.message) || String(e) }; }
+      await psProgress.start('교체 전에 클라우드에 백업하는 중…', localProject.name);
+      try{ res = await backupProjectFull(localProject, (msg, pct)=>{ psProgress.set(pct, msg); }); }catch(e){ res = { ok:false, reason: (e && e.message) || String(e) }; }
+      if(res && res.ok && res.verified && res.verified.ok) psProgress.finish('백업을 확인했습니다. 이어서 교체합니다.'); else psProgress.fail('백업이 완전히 확인되지 않았습니다.');
+      psProgress.end();
       if(!res || !res.ok || !res.verified || !res.verified.ok){
         alert('백업이 완전히 확인되지 않아 교체를 중단했습니다.\n' + (res && res.reason ? res.reason + '\n' : '') + '(이 기기의 자료는 그대로입니다. "지금 클라우드에 백업"을 다시 누른 뒤 시도해 주세요)');
         return false;
@@ -7485,14 +7505,20 @@
       pushBtn.className = 'primary'; pushBtn.style.cssText = 'width:100%; margin-top:8px;';
       pushBtn.textContent = '☁️ 지금 클라우드에 백업';
       pushBtn.addEventListener('click', async ()=>{
+        if(pushBtn.disabled) return; // 진행 중에 또 눌러도 한 번만 실행
         pushBtn.disabled = true; pushBtn.textContent = '백업 중…';
+        await psProgress.start('클라우드 백업 중…', curProject.name + ' · 지점·사진·도면을 올리고 확인합니다');
         let result;
         try{
-          result = await backupProjectFull(curProject, (msg)=>{ pushBtn.textContent = msg; });
+          result = await backupProjectFull(curProject, (msg, pct)=>{ pushBtn.textContent = '백업 중…'; psProgress.set(pct, msg); });
         }catch(e){
           result = { ok: false, reason: (e && e.message) || String(e) };
         }
         pushBtn.disabled = false;
+        if(result.ok && result.verified && result.verified.ok) psProgress.finish('모두 올라간 것을 확인했습니다.');
+        else if(result.ok) psProgress.fail('일부가 확인되지 않았습니다. 결과를 확인해 주세요.');
+        else psProgress.fail('백업에 실패했습니다.');
+        psProgress.end();
         if(result.ok){ alert(formatBackupReport(result)); renderCloudSyncBody(); }
         else{ alert('클라우드 백업에 실패했습니다.\n' + result.reason + '\n(로컬 데이터는 안전합니다)'); pushBtn.textContent = '☁️ 지금 클라우드에 백업'; }
       });
@@ -13952,17 +13978,31 @@
     completionModal.style.display = 'flex';
   }
 
+  let completeBusy = false; // 진행 중에 또 눌러도 한 번만 실행
   async function completeFacility(){
     const site = currentSiteObj();
     if(!site) return;
+    if(completeBusy) return;
+    completeBusy = true;
     completionModal.style.display = 'none';
+    try{
+      await completeFacilityInner(site);
+    }finally{
+      psProgress.end();
+      completeBusy = false;
+    }
+  }
+  async function completeFacilityInner(site){
+    await psProgress.start('조사완료 처리 중…', site.name + ' · 1/4 조사자료를 기기에 저장하는 중');
 
     // 1) 최종 자동저장 → 2) 저장 성공 확인 → 3) 안전 스냅샷 → 4) 완료 상태 변경 → 5) 상태 재저장
     const ok = await saveState();
     if(!ok){
+      psProgress.fail('데이터 저장에 실패했습니다.');
       alert('데이터 저장에 실패했습니다.\n조사완료 처리를 진행하지 않았습니다.\n잠시 후 다시 시도해주세요.');
       return;
     }
+    psProgress.set(25, '2/4 안전 복사본을 만드는 중');
     await takeCompletionSnapshot(site);
     const wasAlreadyCompletedBefore = !!site.completedAt;
     site.status = '조사완료';
@@ -13970,6 +14010,7 @@
     site.completionSignature = siteContentSignature(site);
     logActivity(wasAlreadyCompletedBefore ? '재완료' : '조사완료', '지점 ' + (site.markers||[]).length + '개 · 사진 ' + (site.markers||[]).reduce((s,m)=>s+(m.photos||[]).length,0) + '장');
     renderLog();
+    psProgress.set(45, '3/4 완료 상태를 저장하는 중');
     const ok2 = await saveState();
     updateCompleteMenuLabel();
     refreshStageHeader();
@@ -13979,8 +14020,12 @@
     // 주기 자동 업로드가 다시 시도한다).
     if(navigator.onLine && supabaseClient && supabaseSession){
       const proj = projects.find(p => p.id === site.projectId);
-      if(proj){ try{ await uploadPendingPhotosForProject(proj); }catch(e){} }
+      if(proj){
+        psProgress.set(55, '4/4 사진을 클라우드에 올리는 중 (인터넷이 느리면 오래 걸립니다)');
+        try{ await uploadPendingPhotosForProject(proj, (done, total)=>{ psProgress.set(55 + (total ? done / total : 1) * 40, '4/4 사진 클라우드 업로드 ' + done + ' / ' + total + '장'); }); }catch(e){}
+      }
     }
+    if(ok2){ psProgress.finish('조사완료 처리가 끝났습니다.'); } else { psProgress.fail('완료 상태 저장 중 문제가 발생했습니다.'); }
     if(ok2){
       alert('시설물 조사가 완료되었습니다.\n현재 조사자료가 기기에 안전하게 저장되었습니다.');
     } else {
@@ -14001,13 +14046,28 @@
   }
 
   async function completeProject(project){
+    if(completeBusy) return;
+    completeBusy = true;
     completionModal.style.display = 'none';
+    await psProgress.start('프로젝트 조사완료 처리 중…', project.name + ' · 조사자료를 기기에 저장하는 중');
+    let okFinal = false;
+    try{
+      okFinal = await completeProjectInner(project);
+    }finally{
+      if(okFinal) psProgress.finish('조사완료 처리가 끝났습니다.'); else psProgress.fail('조사완료 처리를 마치지 못했습니다.');
+      psProgress.end();
+      completeBusy = false;
+    }
+    if(okFinal) openBackupPromptDialog(project);
+  }
+  async function completeProjectInner(project){
     commitLiveToCurrentSite();
     const ok = await saveState();
     if(!ok){
       alert('데이터 저장에 실패했습니다.\n프로젝트 조사완료 처리를 진행하지 않았습니다.\n잠시 후 다시 시도해주세요.');
-      return;
+      return false;
     }
+    psProgress.set(50, '완료 상태를 저장하는 중');
     const wasAlreadyCompletedBefore = !!project.completedAt;
     project.status = '조사완료';
     project.completedAt = new Date().toISOString();
@@ -14017,9 +14077,9 @@
     renderProjectHeader();
     if(!ok2){
       alert('완료 상태 저장 중 문제가 발생했습니다. 다시 "프로젝트 조사완료"를 눌러주세요.');
-      return;
+      return false;
     }
-    openBackupPromptDialog(project);
+    return true;
   }
 
   btnCompleteFacility.addEventListener('click', openCompletionGate);
