@@ -3186,7 +3186,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v97';
+  const PS_BUILD = 'v99';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -6521,6 +6521,24 @@
     for(const s of psites){ queueEntitySyncForFacility(s); }
   }
 
+  // 한 시설물만 "이미 올렸다"는 기록을 무시하고 다시 올리도록 큐에 넣는다(조사완료 후 확인용)
+  async function forceRequeueFacility(site){
+    lastQueuedEntitySignatures.delete('facility:' + site.id);
+    (site.markers || []).forEach(m => lastQueuedEntitySignatures.delete('inspection_point:' + m.id));
+    (site.existingDamages || []).forEach(ed => lastQueuedEntitySignatures.delete('existing_damage:' + ed.id));
+    await runEntityQueueOp(async ()=>{
+      const q = await loadEntitySyncQueue();
+      let changedQ = false;
+      q.forEach(it=>{
+        if(it.facilityId === site.id && (it.status === 'failed' || it.status === 'skipped_unfixable' || it.status === 'syncing')){
+          it.status = 'pending'; it.retryCount = 0; it.nextRetryAt = 0; changedQ = true;
+        }
+      });
+      if(changedQ) await saveEntitySyncQueue(q);
+    });
+    queueEntitySyncForFacility(site);
+  }
+
   async function flushProjectSyncQueue(projectId){
     for(let round = 0; round < 15; round++){
       const t0 = Date.now();
@@ -6540,9 +6558,9 @@
     return false;
   }
 
-  async function verifyProjectBackup(project){
+  async function verifyProjectBackup(project, onlySiteId){
     const userId = supabaseSession.user.id;
-    const psites = sites.filter(s => s.projectId === project.id);
+    const psites = sites.filter(s => s.projectId === project.id && (!onlySiteId || s.id === onlySiteId));
     const isMine = (o)=> !(o && o.createdBy && o.createdBy !== userId);
     const fetchIds = async (table)=>{
       const set = new Set();
@@ -13604,7 +13622,16 @@
       else { barEl.style.animation = 'none'; barEl.style.left = '0'; }
     }
     function hide(){ if(el) el.style.display = 'none'; if(tick){ clearInterval(tick); tick = null; } state = 'idle'; }
-    function nextPaint(){ return new Promise(r => requestAnimationFrame(()=> requestAnimationFrame(r))); }
+    // 화면이 그려질 때까지 기다리되, 앱이 백그라운드/숨김 상태라 그리기가 멈춘 경우에도 작업이
+    // 영원히 멈추지 않도록 짧은 시간 뒤에는 그냥 진행한다(안전장치).
+    function nextPaint(){
+      return new Promise(r => {
+        let done = false;
+        const fin = ()=>{ if(!done){ done = true; r(); } };
+        try{ requestAnimationFrame(()=> requestAnimationFrame(fin)); }catch(e){}
+        setTimeout(fin, 200);
+      });
+    }
     return {
       // 시작하고, 화면이 실제로 그려질 때까지 기다린다(그 뒤에 무거운 작업을 시작해야 창이 보인다)
       async start(title, detail){
@@ -13993,7 +14020,7 @@
     }
   }
   async function completeFacilityInner(site){
-    await psProgress.start('조사완료 처리 중…', site.name + ' · 1/4 조사자료를 기기에 저장하는 중');
+    await psProgress.start('조사완료 처리 중…', site.name + ' · 1/5 조사자료를 기기에 저장하는 중');
 
     // 1) 최종 자동저장 → 2) 저장 성공 확인 → 3) 안전 스냅샷 → 4) 완료 상태 변경 → 5) 상태 재저장
     const ok = await saveState();
@@ -14002,7 +14029,7 @@
       alert('데이터 저장에 실패했습니다.\n조사완료 처리를 진행하지 않았습니다.\n잠시 후 다시 시도해주세요.');
       return;
     }
-    psProgress.set(25, '2/4 안전 복사본을 만드는 중');
+    psProgress.set(25, '2/5 안전 복사본을 만드는 중');
     await takeCompletionSnapshot(site);
     const wasAlreadyCompletedBefore = !!site.completedAt;
     site.status = '조사완료';
@@ -14010,7 +14037,8 @@
     site.completionSignature = siteContentSignature(site);
     logActivity(wasAlreadyCompletedBefore ? '재완료' : '조사완료', '지점 ' + (site.markers||[]).length + '개 · 사진 ' + (site.markers||[]).reduce((s,m)=>s+(m.photos||[]).length,0) + '장');
     renderLog();
-    psProgress.set(45, '3/4 완료 상태를 저장하는 중');
+    let cloudCheck = null;
+    psProgress.set(45, '3/5 완료 상태를 저장하는 중');
     const ok2 = await saveState();
     updateCompleteMenuLabel();
     refreshStageHeader();
@@ -14021,13 +14049,36 @@
     if(navigator.onLine && supabaseClient && supabaseSession){
       const proj = projects.find(p => p.id === site.projectId);
       if(proj){
-        psProgress.set(55, '4/4 사진을 클라우드에 올리는 중 (인터넷이 느리면 오래 걸립니다)');
-        try{ await uploadPendingPhotosForProject(proj, (done, total)=>{ psProgress.set(55 + (total ? done / total : 1) * 40, '4/4 사진 클라우드 업로드 ' + done + ' / ' + total + '장'); }); }catch(e){}
+        psProgress.set(55, '4/5 사진을 클라우드에 올리는 중 (인터넷이 느리면 오래 걸립니다)');
+        try{ await uploadPendingPhotosForProject(proj, (done, total)=>{ psProgress.set(55 + (total ? done / total : 1) * 28, '4/5 사진 클라우드 업로드 ' + done + ' / ' + total + '장'); }); }catch(e){}
+        // 이 시설물이 클라우드에 실제로 올라갔는지 개수로 대조한다(조사완료 = 확정 + 클라우드 확인)
+        psProgress.set(85, '5/5 클라우드에 올라갔는지 확인하는 중');
+        try{
+          await forceRequeueFacility(site);
+          await flushProjectSyncQueue(proj.id);
+          cloudCheck = await verifyProjectBackup(proj, site.id);
+        }catch(e){ cloudCheck = { error: (e && e.message) || String(e) }; }
       }
     }
-    if(ok2){ psProgress.finish('조사완료 처리가 끝났습니다.'); } else { psProgress.fail('완료 상태 저장 중 문제가 발생했습니다.'); }
     if(ok2){
-      alert('시설물 조사가 완료되었습니다.\n현재 조사자료가 기기에 안전하게 저장되었습니다.');
+      if(cloudCheck && cloudCheck.ok) psProgress.finish('기기 저장 + 클라우드 확인까지 끝났습니다.');
+      else if(cloudCheck) psProgress.fail('클라우드 확인이 끝나지 않았습니다.');
+      else psProgress.finish('조사완료 처리가 끝났습니다.');
+    } else { psProgress.fail('완료 상태 저장 중 문제가 발생했습니다.'); }
+    if(ok2){
+      let cloudMsg = '';
+      if(cloudCheck && cloudCheck.rows && cloudCheck.rows[0]){
+        const r0 = cloudCheck.rows[0];
+        const detail = '(지점 ' + r0.points[0] + '/' + r0.points[1] + ' · 사진 ' + r0.photos[0] + '/' + r0.photos[1] + ' · 도면 ' + r0.drawings[0] + '/' + r0.drawings[1] + ')';
+        cloudMsg = cloudCheck.ok
+          ? '\n\n☁️ 클라우드에도 모두 올라간 것을 확인했습니다. ' + detail
+          : '\n\n⚠ 클라우드에는 일부가 아직 확인되지 않았습니다. ' + detail + '\n인터넷이 좋은 곳에서 더보기 → 클라우드 → "지금 클라우드에 백업"을 한 번 눌러주세요. (기기의 자료는 안전합니다)';
+      } else if(cloudCheck && cloudCheck.error){
+        cloudMsg = '\n\n⚠ 클라우드 확인 중 문제가 있었습니다: ' + cloudCheck.error + '\n"지금 클라우드에 백업"으로 다시 확인해 주세요. (기기의 자료는 안전합니다)';
+      } else {
+        cloudMsg = '\n\n(로그인·인터넷이 없어 클라우드 확인은 하지 못했습니다. 연결된 뒤 "지금 클라우드에 백업"을 눌러주세요)';
+      }
+      alert('시설물 조사가 완료되었습니다.\n현재 조사자료가 기기에 안전하게 저장되었습니다.' + cloudMsg);
     } else {
       alert('완료 상태 저장 중 문제가 발생했습니다. 다시 "시설물 조사완료"를 눌러주세요.');
     }
