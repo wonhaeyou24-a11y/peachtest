@@ -3186,7 +3186,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v101';
+  const PS_BUILD = 'v102';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -19218,6 +19218,7 @@
     commitLiveToCurrentSite();
     let wordDone = 0; const wordTotal = Math.max(1, markers.length);
     await psProgress.start('Word 보고서 만드는 중…', (currentSiteName() || '시설물') + ' · 지점 ' + markers.length + '개');
+    markExportInflight('워드 보고서');
     try{
       const { Document, Packer, Paragraph, TextRun, ImageRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType } = docx;
 
@@ -19396,12 +19397,11 @@
         const cells = [];
         for(let i=0; i<photos.length; i++){
           const p = photos[i];
-          const bytes = await toBytes(p.src);
-          const dims = await imgDims(p.src, 260);
+          const ph = await docPhoto(p.src, 260);
           const cellChildren = [
             new Paragraph({
               alignment: AlignmentType.CENTER,
-              children: [ new ImageRun({ data: bytes, transformation: dims }) ]
+              children: [ new ImageRun({ data: ph.data, transformation: ph.transformation }) ]
             })
           ];
           (p.damages||[]).forEach((d, dIdx)=>{
@@ -19477,6 +19477,7 @@
       psProgress.fail('문서를 만들지 못했습니다.');
       alert('문서 생성 중 오류가 발생했습니다.');
     }finally{
+      clearExportInflight();
       psProgress.end();
       btnWord.disabled = false;
       btnWord.textContent = originalLabel;
@@ -19577,7 +19578,8 @@
         for(const { p, d } of items){
           const cellKids = [];
           if(p.src){
-            cellKids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: await toBytes(p.src), transformation: await imgDims(p.src, 250) }) ], spacing:{ after:60 } }));
+            const ph = await docPhoto(p.src, 250);
+            cellKids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: ph.data, transformation: ph.transformation }) ], spacing:{ after:60 } }));
           } else {
             cellKids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text:'(사진 없음)', italics:true, size:14, color:'999999' }) ], spacing:{ after:60 } }));
           }
@@ -19733,7 +19735,8 @@
       async function boxCellFor(en, seq){
         const kids = [];
         if(en.photoSrc){
-          kids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: await toBytes(en.photoSrc), transformation: await imgDims(en.photoSrc, 250) }) ], spacing:{ after:60 } }));
+          const ph = await docPhoto(en.photoSrc, 250);
+          kids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new ImageRun({ data: ph.data, transformation: ph.transformation }) ], spacing:{ after:60 } }));
         } else {
           const reason = en.pending ? '(사진 없음 — 클라우드에서 아직 못 받음, 온라인 상태에서 다시 시도해주세요)' : '(사진 없음)';
           kids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text: reason, italics:true, size:14, color:'999999' }) ], spacing:{ after:60 } }));
@@ -19768,6 +19771,71 @@
 
     return children;
   }
+
+  // ★ 보고서(Word)에 넣는 사진은 문서에서 실제로 약 250~260px(6~7cm) 폭으로만 보인다. 그런데 예전엔
+  //   1800px 원본(장당 1~2MB)을 그대로 넣어, 사진이 많은 프로젝트는 문서를 만드는 도중 메모리가 바닥나
+  //   아이폰이 앱을 강제 종료했다(진행창이 말없이 닫히고 파일이 안 나옴). 문서용으로 가로 900px·JPEG로
+  //   줄여 넣는다(인쇄해도 충분한 해상도, 장당 약 100KB) — 문서 크기도 메일로 보낼 수 있을 만큼 줄어든다.
+  let docPhotoCount = 0, onDocPhoto = null; // 보고서 만드는 중 사진 몇 장째인지(진행 표시용)
+  async function docPhoto(src, displayW){
+    const r = await docPhotoInner(src, displayW);
+    docPhotoCount++;
+    if(onDocPhoto){ try{ onDocPhoto(docPhotoCount); }catch(e){} }
+    return r;
+  }
+  async function docPhotoInner(src, displayW){
+    const maxW = 900;
+    try{
+      let img = null, bmp = null, w, h;
+      // 가능하면 디코딩과 동시에 축소(createImageBitmap) — 원본 크기 비트맵을 만들지 않아 빠르고 메모리를 덜 쓴다
+      if(typeof createImageBitmap === 'function'){
+        try{
+          const srcBlob = dataUrlToBlob(src);
+          const full = await createImageBitmap(srcBlob);
+          const fw = full.width, fh = full.height; full.close && full.close();
+          if(fw > maxW){
+            bmp = await createImageBitmap(srcBlob, { resizeWidth: maxW, resizeHeight: Math.round(fh * maxW / fw), resizeQuality: 'medium' });
+          } else {
+            bmp = await createImageBitmap(srcBlob);
+          }
+          w = bmp.width; h = bmp.height;
+        }catch(e0){ bmp = null; }
+      }
+      if(!bmp){
+        img = await new Promise((resolve, reject)=>{
+          const im = new Image();
+          im.onload = ()=> resolve(im);
+          im.onerror = ()=> reject(new Error('image load'));
+          im.src = src;
+        });
+        w = img.naturalWidth || maxW; h = img.naturalHeight || Math.round(maxW * 0.75);
+        if(w > maxW){ h = Math.round(h * maxW / w); w = maxW; }
+      }
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(bmp || img, 0, 0, w, h);
+      const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.82));
+      c.width = c.height = 0;
+      if(bmp && bmp.close) bmp.close();
+      if(img) img.src = '';
+      const buf = await blob.arrayBuffer();
+      const dw = Math.min(displayW, w);
+      return { data: new Uint8Array(buf), transformation: { width: dw, height: Math.round(h * dw / w) } };
+    }catch(e){
+      // 축소에 실패하면 예전 방식(원본 그대로)으로 — 사진이 빠지는 것보다 낫다
+      const raw = dataUrlToBlob(src);
+      const buf = await raw.arrayBuffer();
+      return { data: new Uint8Array(buf), transformation: { width: displayW, height: Math.round(displayW * 0.75) } };
+    }
+  }
+  // 한 시설물 보고서를 만든 뒤, 화면에 열려 있지 않은 시설물의 사진 원본을 메모리에서 내린다
+  function releaseSitePhotoMemory(site){
+    if(!site || site.id === currentSiteId) return;
+    (site.markers || []).forEach(m => (m.photos || []).forEach(p => { if(p.blobExtracted && p.src) delete p.src; }));
+  }
+  // 내보내기 도중 앱이 강제 종료됐는지 알아내기 위한 표시(다음 실행 때 안내)
+  function markExportInflight(label){ try{ localStorage.setItem('ps-export-inflight', JSON.stringify({ label, at: Date.now() })); }catch(e){} }
+  function clearExportInflight(){ try{ localStorage.removeItem('ps-export-inflight'); }catch(e){} }
 
   // ★ docx 라이브러리(8.0.4)의 알려진 버그: 문서 안의 모든 그림이 같은 번호(wp:docPr id="1")로 저장된다.
   //   Word(특히 사진이 많은 문서, 메일로 받은 파일)는 "읽을 수 없는 내용" 오류로 열지 못할 수 있다.
@@ -19812,6 +19880,10 @@
     btnAppearanceReport.textContent = '문서 생성 중…';
     commitLiveToCurrentSite();
     await psProgress.start('외관조사 보고서 만드는 중…', (site.name || currentSiteName() || '시설물') + ' · 사진·도면을 문서에 넣는 중 (사진이 많으면 몇 분 걸립니다)');
+    markExportInflight('외관조사 보고서');
+    docPhotoCount = 0;
+    const siteTotalPhotos = (site.markers || []).reduce((b, m) => b + (m.photos || []).length, 0);
+    onDocPhoto = (n)=>{ psProgress.set(Math.min(89, n / Math.max(1, siteTotalPhotos) * 89), '사진 ' + n + ' / ' + siteTotalPhotos + '장 처리'); };
     try{
       const { Document, Packer, Paragraph, TextRun, AlignmentType, Header } = docx;
       const project = projects.find(p => p.id === currentProjectId);
@@ -19831,6 +19903,8 @@
       psProgress.fail('보고서를 만들지 못했습니다.');
       alert('문서 생성 중 오류가 발생했습니다.');
     }finally{
+      onDocPhoto = null;
+      clearExportInflight();
       psProgress.end();
       btnAppearanceReport.disabled = false;
       btnAppearanceReport.textContent = origLabel;
@@ -19853,6 +19927,7 @@
     btnAppearanceReportProject.disabled = true;
     const origLabel = btnAppearanceReportProject.textContent;
     await psProgress.start('프로젝트 전체 보고서 만드는 중…', project.name + ' · 시설물 ' + psites.length + '개');
+    markExportInflight('프로젝트 전체 보고서');
     try{
       const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Header, PageBreak } = docx;
       const children = [];
@@ -19863,14 +19938,19 @@
         children.push(new Paragraph({ children:[ new TextRun({ text:(i+1) + '. ' + (s.name || '시설물'), size:17 }) ], spacing:{ after:40 } }));
       });
 
+      const totalPhotos = psites.reduce((a, st) => a + (st.markers || []).reduce((b, m) => b + (m.photos || []).length, 0), 0);
+      docPhotoCount = 0;
+      let curSiteIdx = 0;
+      onDocPhoto = (n)=>{ psProgress.set(Math.min(89, n / Math.max(1, totalPhotos) * 89), '사진 ' + n + ' / ' + totalPhotos + '장 처리 · 시설물 ' + (curSiteIdx + 1) + ' / ' + psites.length); };
       for(let i=0; i<psites.length; i++){
+        curSiteIdx = i;
         btnAppearanceReportProject.textContent = '문서 생성 중… (' + (i+1) + '/' + psites.length + ')';
-        psProgress.set(i / psites.length * 90, '시설물 ' + (i+1) + ' / ' + psites.length + ' · ' + (psites[i].name || '시설물'));
         await psProgress.nextPaint();
         const s = psites[i];
         children.push(new Paragraph({ children:[ new PageBreak() ] }));
         const sectionChildren = await buildAppearanceReportSections(docx, s, project.name);
         children.push(...sectionChildren);
+        releaseSitePhotoMemory(s); // 이 시설물 사진 원본은 문서에 담았으니 메모리에서 내린다
       }
 
       const headerPara = new Header({ children:[ new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text: project.name, size:15, color:'666666' }) ] }) ] });
@@ -19886,6 +19966,8 @@
       psProgress.fail('보고서를 만들지 못했습니다.');
       alert('문서 생성 중 오류가 발생했습니다.');
     }finally{
+      onDocPhoto = null;
+      clearExportInflight();
       psProgress.end();
       btnAppearanceReportProject.disabled = false;
       btnAppearanceReportProject.textContent = origLabel;
@@ -20019,6 +20101,14 @@
       todaysMarkerCount();
       diagLogMemorySnapshot('앱 시작 직후');
       setTimeout(()=>{ shrinkLegacyCompletionSnapshots(); }, 15000); // 앱이 안정된 뒤 한 번만(대기 안 함)
+      try{
+        const inflight = JSON.parse(localStorage.getItem('ps-export-inflight') || 'null');
+        if(inflight){
+          localStorage.removeItem('ps-export-inflight');
+          diagLog('export', '내보내기 도중 앱이 종료된 것으로 보임: ' + inflight.label, inflight);
+          setTimeout(()=>{ alert('지난번 "' + inflight.label + '" 만드는 도중 앱이 멈춰 꺼진 것 같습니다 (기기 메모리 부족).' + String.fromCharCode(10) + String.fromCharCode(10) + '조사 자료는 안전합니다. 사진이 많으면 한 번에 만들지 말고 시설물 하나씩 "외관조사 보고서"로 내보내 주세요.'); }, 1500);
+        }
+      }catch(e){}
       pruneStaleConflictRecords(); // 삭제된 프로젝트/시설물의 옛 충돌 배지 정리(비동기, 대기 안 함)
       await restoreSyncedSignatures(); // 동기화 서명 캐시 복원 → 리로드 후 전체 재큐잉(skipped:N) 방지
 
