@@ -3186,7 +3186,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v100';
+  const PS_BUILD = 'v101';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -19468,6 +19468,7 @@
 
       psProgress.set(92, 'Word 파일로 만드는 중');
       await psProgress.nextPaint();
+      fixDocPrIds(children);
       const wordDoc = new Document({ sections: [{ children }] });
       const blob = await Packer.toBlob(wordDoc);
       await psProgress.deliver(blob, siteName + '_점검보고서.docx');
@@ -19600,6 +19601,7 @@
         children.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows: gridRows }));
       }
 
+      fixDocPrIds(children);
       const wordDoc = new Document({ sections:[{ children }] });
       const blob = await Packer.toBlob(wordDoc);
       downloadDocxBlob(blob, (site.name || '시설물') + '_보고서작업목록.docx');
@@ -19767,6 +19769,26 @@
     return children;
   }
 
+  // ★ docx 라이브러리(8.0.4)의 알려진 버그: 문서 안의 모든 그림이 같은 번호(wp:docPr id="1")로 저장된다.
+  //   Word(특히 사진이 많은 문서, 메일로 받은 파일)는 "읽을 수 없는 내용" 오류로 열지 못할 수 있다.
+  //   문서를 만들기 전에 그림마다 서로 다른 번호를 매겨 이 문제를 없앤다(파일을 다시 열어 고치지 않으므로
+  //   메모리를 더 쓰지 않는다).
+  function fixDocPrIds(rootNodes){
+    let n = 0;
+    const seen = new Set();
+    const stack = Array.isArray(rootNodes) ? rootNodes.slice() : [rootNodes];
+    while(stack.length){
+      const x = stack.pop();
+      if(!x || typeof x !== 'object' || seen.has(x)) continue;
+      seen.add(x);
+      if(x.rootKey === 'wp:docPr' && Array.isArray(x.root) && x.root[0] && x.root[0].root && x.root[0].root.id){
+        x.root[0].root.id.value = ++n;
+      }
+      if(Array.isArray(x.root)) for(let i = 0; i < x.root.length; i++) stack.push(x.root[i]);
+    }
+    return n;
+  }
+
   function downloadDocxBlob(blob, filename){
     // 이름과 달리 내용에 상관없이 파일 전달에 쓰인다 — 진행창의 전달 방식(아이폰은 저장 버튼)을 따른다
     return psProgress.deliver(blob, filename);
@@ -19797,6 +19819,7 @@
       const siteName = site.name || currentSiteName() || '시설물';
       const children = await buildAppearanceReportSections(docx, site, projectName);
       const headerPara = new Header({ children:[ new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text: [projectName, siteName].filter(Boolean).join('  |  '), size:15, color:'666666' }) ] }) ] });
+      fixDocPrIds(children);
       const wordDoc = new Document({ sections:[{ headers:{ default: headerPara }, children }] });
       psProgress.set(90, 'Word 파일로 만드는 중');
       await psProgress.nextPaint();
@@ -19851,6 +19874,7 @@
       }
 
       const headerPara = new Header({ children:[ new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text: project.name, size:15, color:'666666' }) ] }) ] });
+      fixDocPrIds(children);
       const wordDoc = new Document({ sections:[{ headers:{ default: headerPara }, children }] });
       psProgress.set(92, 'Word 파일로 만드는 중');
       await psProgress.nextPaint();
