@@ -2772,9 +2772,13 @@
             <span class="more-item-title">프로젝트 전체 손상현황 Excel</span>
             <span class="more-item-desc">이 프로젝트의 모든 시설물 손상현황·증감을 한 파일로 집계</span>
           </button>
+          <button class="more-item" id="btnZipProject">
+            <span class="more-item-title">프로젝트 전체 사진 ZIP (시설물별)</span>
+            <span class="more-item-desc">이 프로젝트의 모든 시설물을 시설물별 폴더로 나눠 원본 사진·조사내용을 한 번에 압축</span>
+          </button>
           <button class="more-item" id="btnZip">
-            <span class="more-item-title">사진 전체 ZIP 다운로드</span>
-            <span class="more-item-desc">지점별 폴더로 정리된 원본 사진 전체</span>
+            <span class="more-item-title">사진 ZIP (현재 시설물만)</span>
+            <span class="more-item-desc">지금 열려 있는 시설물의 지점별 폴더로 정리된 원본 사진</span>
           </button>
 
           <div class="more-section-label">💾 백업 · 복구</div>
@@ -3186,7 +3190,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v102';
+  const PS_BUILD = 'v103';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -13682,11 +13686,15 @@
       //  - 아이폰/아이패드: 오래 걸린 작업 끝에는 브라우저가 "자동 다운로드"를 막는 경우가 있어,
       //    진행창에 [📥 파일 저장 / 공유] 버튼을 띄워 사용자가 직접 한 번 누르게 한다(공유 시트 →
       //    "파일에 저장" 가능). 누르는 순간이 새 터치라 가장 확실하게 저장된다.
-      async deliver(blob, filename){
+      // opts.wait: 사용자가 [닫기/다음]을 누를 때까지 기다린다(여러 파일을 차례로 받을 때)
+      // opts.closeLabel: 닫기 버튼 글자, opts.keepOpen: 닫기를 눌러도 진행창을 닫지 않고 이어서 진행
+      async deliver(blob, filename, opts){
+        opts = opts || {};
         try{ diagLog('export', '파일 전달 시작: ' + filename, { size: blob && blob.size, ios: isIOSLike() }); }catch(e){}
         if(state === 'idle'){ await this.start('파일 준비 중…', filename); }
         if(!isIOSLike()){
           try{ saveBlob(blob, filename); }catch(e){ this.fail('파일 저장을 시작하지 못했습니다.'); return false; }
+          if(opts.keepOpen){ await new Promise(r => setTimeout(r, 1500)); return true; } // 여러 파일: 브라우저가 연속 다운로드를 처리할 시간
           this.finish('파일이 저장(다운로드)됩니다.');
           return true;
         }
@@ -13717,8 +13725,27 @@
           detailEl.textContent = '저장 화면이 열렸습니다. 끝났으면 [닫기]를 누르세요.';
           try{ diagLog('export', '파일 저장/공유 누름: ' + filename, { shared }); }catch(e3){}
         };
-        closeBtn.onclick = ()=>{ hide(); };
-        return true;
+        closeBtn.textContent = opts.closeLabel || '닫기';
+        const self = this;
+        return await new Promise(resolve => {
+          closeBtn.onclick = ()=>{
+            if(opts.keepOpen){
+              hideActions();
+              clearTimeout(hideTimer);
+              state = 'running'; t0 = Date.now();
+              titleEl.textContent = opts.nextTitle || '다음 파일 만드는 중…';
+              detailEl.textContent = '';
+              setIndeterminate(true);
+              timeEl.textContent = '0초';
+              if(tick) clearInterval(tick);
+              tick = setInterval(()=>{ if(timeEl) timeEl.textContent = Math.floor((Date.now() - t0) / 1000) + '초'; }, 500);
+            } else {
+              hide();
+            }
+            resolve(true);
+          };
+          if(!opts.wait && !opts.keepOpen) resolve(true); // 기존 동작: 기다리지 않고 바로 반환(닫기는 사용자가 누를 때)
+        });
       },
       // 어떤 경우든 창이 영원히 남지 않게 하는 마지막 안전장치(finally에서 호출)
       end(){ if(state === 'running'){ hide(); } },
@@ -19120,6 +19147,131 @@
   // 그 버전을 덮어쓰고 있었다 — 정리 과정에서 제거. 동작은 그대로, 안전장치만 복원)
 
   // ---------- ZIP export ----------
+  // ---------- 프로젝트 전체 사진 ZIP (시설물별 폴더) ----------
+  // 모든 시설물을 "프로젝트명/시설물명/지점N/…" 폴더로 정리해 압축한다. 시설물을 하나씩 열어 누르던 것을 한 번에.
+  // 용량이 크면(사진이 수백 장) 한 파일이 너무 커져 기기가 버티지 못하므로, 시설물 단위로 여러 개의 ZIP(파트)로
+  // 나눠 차례로 만든다 — 한 시설물은 절대 쪼개지 않는다. 사진 원본은 저장소의 파일(Blob)을 그대로 담아
+  // 문자열(base64)로 바꾸지 않으므로 메모리를 훨씬 적게 쓴다.
+  function safeZipName(name, fallback){
+    const t = String(name || fallback || '이름없음').replace(/[\\/:*?"<>|]/g, '_').replace(/^[. ]+|[. ]+$/g, '').slice(0, 60);
+    return t || (fallback || '이름없음');
+  }
+  document.getElementById('btnZipProject').addEventListener('click', async ()=>{
+    moreModal.style.display = 'none';
+    const project = projects.find(pj => pj.id === currentProjectId);
+    if(!project){ alert('프로젝트를 먼저 선택해주세요.'); return; }
+    if(typeof JSZip === 'undefined'){ alert('ZIP 기능을 아직 이 기기에 준비하지 못했습니다.\n인터넷이 연결된 곳에서 앱을 한 번 열어주세요.'); return; }
+    commitLiveToCurrentSite();
+    const psites = sites.filter(st => st.projectId === project.id).slice().sort((a, b)=> (a.name || '').localeCompare(b.name || '', 'ko'));
+    if(psites.length === 0){ alert('이 프로젝트에 시설물이 없습니다.'); return; }
+    const photoCountOf = (st)=> (st.markers || []).reduce((a, m) => a + (m.photos || []).length, 0);
+    const totalPhotos = psites.reduce((a, st) => a + photoCountOf(st), 0);
+    if(totalPhotos === 0 && !confirm('이 프로젝트에는 사진이 한 장도 없습니다. 조사내용 목록만 압축할까요?')) return;
+
+    // 파트 나누기: 시설물 단위로 묶되 한 파트의 사진이 너무 많아지지 않게(약 250MB 기준, 사진 장당 1.5MB로 추정)
+    const PART_LIMIT_PHOTOS = 160;
+    const parts = []; let cur = [], curPhotos = 0;
+    psites.forEach(st => {
+      const n = photoCountOf(st);
+      if(cur.length && curPhotos + n > PART_LIMIT_PHOTOS){ parts.push(cur); cur = []; curPhotos = 0; }
+      cur.push(st); curPhotos += n;
+    });
+    if(cur.length) parts.push(cur);
+    if(parts.length > 1 && !confirm('사진이 ' + totalPhotos + '장이라 한 파일로 만들면 너무 커서, 시설물 단위로 ' + parts.length + '개의 ZIP 파일로 나눠서 받습니다.\n각 파일이 만들어질 때마다 [저장/공유]를 눌러 저장하고 [다음]을 누르면 이어집니다.\n진행할까요?')) return;
+
+    const ts = new Date();
+    const stamp = ts.getFullYear() + pad2(ts.getMonth()+1) + pad2(ts.getDate());
+    const projFolderName = safeZipName(project.name, '프로젝트');
+    markExportInflight('프로젝트 전체 사진 ZIP');
+    let doneAll = false, photoDone = 0, missing = 0;
+    await psProgress.start('프로젝트 사진 ZIP 만드는 중…', project.name + ' · 시설물 ' + psites.length + '개 · 사진 ' + totalPhotos + '장' + (parts.length > 1 ? ' · ' + parts.length + '개 파일로 나눔' : ''));
+    try{
+      for(let pi = 0; pi < parts.length; pi++){
+        const zip = new JSZip();
+        const root = zip.folder(projFolderName);
+        const usedNames = new Set();
+        for(const st of parts[pi]){
+          let fname = safeZipName(st.name, '시설물'), k = 2;
+          while(usedNames.has(fname)){ fname = safeZipName(st.name, '시설물') + '_' + (k++); }
+          usedNames.add(fname);
+          const sf = root.folder(fname);
+          const siteMarkers = (st.markers || []).slice().sort((a, b)=> (a.num || 0) - (b.num || 0));
+          // 도면별 마킹 이미지
+          for(const d of (st.drawings || [])){
+            if(!d || !d.imageSrc) continue;
+            try{
+              const marked = await buildMarkedImageFor(d.imageSrc, d.id, siteMarkers);
+              if(marked) sf.file('마킹_' + safeZipName(d.name, '도면') + '.jpg', dataUrlToBlob(marked));
+            }catch(e){}
+          }
+          let summary = st.name + ' · 지점별 기록\n============\n\n';
+          for(const m of siteMarkers){
+            const photos = m.photos || [];
+            if(photos.length === 0){ summary += '지점 ' + m.num + ' : 사진 없음\n'; continue; }
+            summary += '지점 ' + m.num + ' : ' + photos.length + '장 (지점' + m.num + ' 폴더 참고)\n';
+            const mf = sf.folder('지점' + m.num);
+            let noteText = '지점 ' + m.num + ' 조사내용\n====================\n\n';
+            if(m.lat != null && m.lng != null) noteText += 'GPS(지도) : ' + m.lat.toFixed(6) + ', ' + m.lng.toFixed(6) + '\n';
+            else if(m.gps) noteText += 'GPS(기록당시 위치) : ' + m.gps.lat.toFixed(6) + ', ' + m.gps.lng.toFixed(6) + '\n';
+            noteText += '\n';
+            for(let idx = 0; idx < photos.length; idx++){
+              const ph = photos[idx];
+              // 저장소의 파일을 그대로 담는다(없으면 화면의 데이터 사용)
+              let fileBlob = null;
+              try{
+                const rec = await idbGetPhotoBlob(ph.photoRef || ph.id);
+                if(rec && rec.blob) fileBlob = rec.blob;
+              }catch(e){}
+              if(!fileBlob && ph.src) fileBlob = dataUrlToBlob(ph.src);
+              if(fileBlob){ mf.file('지점' + m.num + '_' + (idx+1) + '_원본.jpg', fileBlob); }
+              else { missing++; noteText += '(사진 ' + (idx+1) + ' 원본 파일을 이 기기에서 찾지 못했습니다)\n'; }
+              photoDone++;
+              psProgress.set(Math.min(85, photoDone / Math.max(1, totalPhotos) * 85), '사진 ' + photoDone + ' / ' + totalPhotos + '장 담는 중 · ' + st.name + (parts.length > 1 ? ' (파일 ' + (pi+1) + '/' + parts.length + ')' : ''));
+              noteText += '사진 ' + (idx+1) + '\n';
+              (ph.damages || []).forEach((d, dIdx)=>{
+                noteText += '  [손상 ' + (dIdx+1) + '] ' + (d.damageType || '(종류 미지정)') + (d.damageDetail ? ' - ' + d.damageDetail : '') + '\n';
+                if(d.component) noteText += '    구성요소 : ' + d.component + '\n';
+                if(d.measurement) noteText += '    손상규모 : ' + d.measurement + '\n';
+                if(d.cause) noteText += '    손상원인 : ' + d.cause + '\n';
+                if(d.failureFactor) noteText += '    파괴요인 : ' + d.failureFactor + '\n';
+                if(d.evaluation) noteText += '    평가 : ' + d.evaluation + '\n';
+                if(d.repairMethod) noteText += '    보수공법 : ' + d.repairMethod + '\n';
+                if(d.reinforcementMethod) noteText += '    보강공법 : ' + d.reinforcementMethod + '\n';
+                if(d.urgency) noteText += '    긴급도 : ' + d.urgency + '\n';
+                if(d.investigatorComment) noteText += '    조사자의견 : ' + d.investigatorComment + '\n';
+                if(d.standardReference) noteText += '    근거 : ' + d.standardReference + '\n';
+              });
+              noteText += '  비고 : ' + (ph.note && ph.note.trim() ? ph.note : '(작성된 내용 없음)') + '\n\n';
+              if(photoDone % 10 === 0) await psProgress.nextPaint(); // 화면이 멈춘 것처럼 보이지 않게 가끔 숨 쉬기
+            }
+            mf.file('조사내용.txt', noteText);
+          }
+          sf.file('기록목록.txt', summary);
+        }
+        psProgress.set(88, '압축 파일로 묶는 중' + (parts.length > 1 ? ' (' + (pi+1) + '/' + parts.length + ')' : ''));
+        await psProgress.nextPaint();
+        // 사진은 이미 압축된 JPEG라 다시 압축하지 않는다(STORE) — 훨씬 빠르고 메모리도 덜 쓴다
+        const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE', streamFiles: true }, (meta)=>{
+          psProgress.set(88 + meta.percent * 0.1, '압축 파일로 묶는 중 ' + Math.round(meta.percent) + '%');
+        });
+        const fileName = 'PeachShot_' + projFolderName + '_사진' + (parts.length > 1 ? '_' + (pi+1) + 'of' + parts.length : '') + '_' + stamp + '.zip';
+        const more = pi < parts.length - 1;
+        await psProgress.deliver(blob, fileName, { wait: true, keepOpen: more, closeLabel: more ? '저장했으면 다음 파일 만들기 ▶' : '닫기', nextTitle: '다음 ZIP 만드는 중… (' + (pi + 2) + '/' + parts.length + ')' });
+      }
+      doneAll = true;
+      if(missing > 0){
+        alert('ZIP을 만들었지만 사진 ' + missing + '장은 이 기기에서 원본 파일을 찾지 못해 빠졌습니다.\n(조사내용.txt에 표시되어 있습니다. 클라우드에서 다시 불러오면 채워질 수 있습니다)');
+      }
+    }catch(e){
+      console.error(e);
+      psProgress.fail('ZIP을 만들지 못했습니다.');
+      alert('프로젝트 사진 ZIP을 만드는 중 오류가 발생했습니다.\n사진이 많으면 한 번에 만들기 어려울 수 있습니다. "사진 ZIP (현재 시설물만)"으로 하나씩 받아 주세요.');
+    }finally{
+      clearExportInflight();
+      psProgress.end();
+    }
+  });
+
   btnZip.addEventListener('click', async ()=>{
     moreModal.style.display = 'none';
     if(!baseImageSrc && markers.length === 0){ alert('내보낼 기록이 없습니다.'); return; }
