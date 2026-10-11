@@ -1,4 +1,4 @@
-const CACHE_NAME = 'point-shot-v99-complete-cloud-verify'; // 조사완료 시 이 시설물의 클라우드 업로드 확인 + 진행창이 백그라운드에서 멈추지 않게 보강
+const CACHE_NAME = 'point-shot-v100-export-deliver'; // 내보내기 파일 전달 보강(아이폰은 저장·공유 버튼, 주소 늦게 해제, 로그 기록)
 // 이 문자열을 바꾸는 이유: index.html이 바뀌어도 이 service-worker.js 파일 자체 텍스트가 그대로면
 // 브라우저가 "새 버전"으로 인식하지 못해 새 install/activate가 전혀 실행되지 않는다. 그 경우 기존에
 // 홈화면에 추가돼 있던 PWA는 예전 캐시된 index.html(카메라 수정 이전 버전)을 계속 쓰게 된다.

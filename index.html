@@ -3186,7 +3186,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v99';
+  const PS_BUILD = 'v100';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -8384,15 +8384,8 @@
     };
 
     const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
     const timeStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    a.href = url;
-    a.download = `PeachShot_Data_Backup_${timeStr}.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    psProgress.deliver(blob, `PeachShot_Data_Backup_${timeStr}.json`);
   }
 
   async function importProjectData(jsonData){
@@ -13392,11 +13385,7 @@
     const ts = new Date();
     const fname = 'PeachShot_' + (project.name || '프로젝트').replace(/[\\/:*?"<>|]/g, '_') + '_' +
       ts.getFullYear() + pad2(ts.getMonth()+1) + pad2(ts.getDate()) + '_' + pad2(ts.getHours()) + pad2(ts.getMinutes()) + '.zip';
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = fname;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(()=> URL.revokeObjectURL(url), 5000);
+    await psProgress.deliver(blob, fname);
 
     project.backupStatus = '백업완료';
     project.lastBackupAt = new Date().toISOString();
@@ -13611,7 +13600,11 @@
             '<div id="psProgBar" style="position:absolute; top:0; bottom:0; left:0; width:40%; background:var(--accent,#F2A93B); border-radius:6px;"></div>' +
           '</div>' +
           '<div style="display:flex; justify-content:space-between; font-size:11px; color:var(--muted,#666); margin-top:6px;"><span id="psProgPct"></span><span id="psProgTime"></span></div>' +
-          '<div style="font-size:11px; color:var(--muted,#666); margin-top:8px;">화면을 끄거나 다른 앱으로 이동하지 말고 기다려 주세요.</div>' +
+          '<div style="font-size:11px; color:var(--muted,#666); margin-top:8px;" id="psProgHint">화면을 끄거나 다른 앱으로 이동하지 말고 기다려 주세요.</div>' +
+          '<div id="psProgActions" style="display:none; margin-top:14px; gap:8px; flex-direction:column;">' +
+            '<button type="button" id="psProgSave" class="primary" style="min-height:48px; font-size:15px; font-weight:700;">📥 파일 저장 / 공유</button>' +
+            '<button type="button" id="psProgClose" class="ghost" style="min-height:42px;">닫기</button>' +
+          '</div>' +
         '</div>';
       document.body.appendChild(el);
       titleEl = el.querySelector('#psProgTitle'); detailEl = el.querySelector('#psProgDetail');
@@ -13621,7 +13614,24 @@
       if(on){ barEl.style.width = '40%'; barEl.style.left = '-40%'; barEl.style.animation = 'psProgSlide 1.1s linear infinite'; pctEl.textContent = '처리 중…'; }
       else { barEl.style.animation = 'none'; barEl.style.left = '0'; }
     }
-    function hide(){ if(el) el.style.display = 'none'; if(tick){ clearInterval(tick); tick = null; } state = 'idle'; }
+    function hideActions(){
+      const a = el && el.querySelector('#psProgActions'); if(a) a.style.display = 'none';
+      const h = el && el.querySelector('#psProgHint'); if(h) h.style.display = '';
+    }
+    function hide(){ if(el) el.style.display = 'none'; hideActions(); if(tick){ clearInterval(tick); tick = null; } state = 'idle'; }
+    // Blob을 파일로 저장(다운로드). 블롭 주소는 바로 지우지 않고 한참 뒤에 지운다 —
+    // 바로 지우면 아이폰 사파리에서 다운로드가 시작되기 전에 파일이 사라져 "내보내지지 않음"이 된다.
+    function saveBlob(blob, filename){
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>{ try{ URL.revokeObjectURL(url); }catch(e){} }, 120000);
+    }
+    function isIOSLike(){
+      const ua = navigator.userAgent || '';
+      return /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    }
     // 화면이 그려질 때까지 기다리되, 앱이 백그라운드/숨김 상태라 그리기가 멈춘 경우에도 작업이
     // 영원히 멈추지 않도록 짧은 시간 뒤에는 그냥 진행한다(안전장치).
     function nextPaint(){
@@ -13635,7 +13645,7 @@
     return {
       // 시작하고, 화면이 실제로 그려질 때까지 기다린다(그 뒤에 무거운 작업을 시작해야 창이 보인다)
       async start(title, detail){
-        build(); clearTimeout(hideTimer);
+        build(); clearTimeout(hideTimer); hideActions();
         state = 'running'; t0 = Date.now();
         titleEl.textContent = title; detailEl.textContent = detail || '';
         timeEl.textContent = '0초'; setIndeterminate(true);
@@ -13667,6 +13677,49 @@
         if(tick){ clearInterval(tick); tick = null; }
         hideTimer = setTimeout(()=>{ hide(); barEl.style.background = 'var(--accent,#F2A93B)'; }, 1800);
       },
+      // 만든 파일을 사용자에게 전달한다.
+      //  - 컴퓨터/안드로이드: 바로 다운로드(기존과 동일, 주소는 늦게 지움)
+      //  - 아이폰/아이패드: 오래 걸린 작업 끝에는 브라우저가 "자동 다운로드"를 막는 경우가 있어,
+      //    진행창에 [📥 파일 저장 / 공유] 버튼을 띄워 사용자가 직접 한 번 누르게 한다(공유 시트 →
+      //    "파일에 저장" 가능). 누르는 순간이 새 터치라 가장 확실하게 저장된다.
+      async deliver(blob, filename){
+        try{ diagLog('export', '파일 전달 시작: ' + filename, { size: blob && blob.size, ios: isIOSLike() }); }catch(e){}
+        if(state === 'idle'){ await this.start('파일 준비 중…', filename); }
+        if(!isIOSLike()){
+          try{ saveBlob(blob, filename); }catch(e){ this.fail('파일 저장을 시작하지 못했습니다.'); return false; }
+          this.finish('파일이 저장(다운로드)됩니다.');
+          return true;
+        }
+        const sizeMb = blob && blob.size ? (blob.size >= 1048576 ? (blob.size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(blob.size / 1024)) + ' KB') : '';
+        clearTimeout(hideTimer);
+        state = 'done';
+        titleEl.textContent = '✅ 파일이 준비되었습니다';
+        detailEl.textContent = filename + (sizeMb ? ' (' + sizeMb + ')' : '');
+        setIndeterminate(false); barEl.style.width = '100%'; pctEl.textContent = '100%';
+        if(tick){ clearInterval(tick); tick = null; }
+        const actions = el.querySelector('#psProgActions'); actions.style.display = 'flex';
+        const hint = el.querySelector('#psProgHint'); hint.style.display = 'none';
+        const saveBtn = el.querySelector('#psProgSave'), closeBtn = el.querySelector('#psProgClose');
+        saveBtn.onclick = async ()=>{
+          const type = (blob && blob.type) || 'application/octet-stream';
+          let shared = false;
+          try{
+            const file = new File([blob], filename, { type });
+            if(navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share){
+              await navigator.share({ files: [file], title: filename });
+              shared = true;
+            }
+          }catch(err){
+            if(err && err.name === 'AbortError') return; // 사용자가 공유 창을 닫음 — 다시 누를 수 있게 그대로 둠
+            console.warn('공유 실패, 다운로드로 대체', err);
+          }
+          if(!shared){ try{ saveBlob(blob, filename); }catch(e2){ alert('파일 저장을 시작하지 못했습니다. 다시 시도해 주세요.'); return; } }
+          detailEl.textContent = '저장 화면이 열렸습니다. 끝났으면 [닫기]를 누르세요.';
+          try{ diagLog('export', '파일 저장/공유 누름: ' + filename, { shared }); }catch(e3){}
+        };
+        closeBtn.onclick = ()=>{ hide(); };
+        return true;
+      },
       // 어떤 경우든 창이 영원히 남지 않게 하는 마지막 안전장치(finally에서 호출)
       end(){ if(state === 'running'){ hide(); } },
       nextPaint
@@ -13691,17 +13744,9 @@
       drawings, currentDrawingId
     };
     const blob = new Blob([JSON.stringify(payload)], { type:'application/json' });
-    const url = URL.createObjectURL(blob);
     const now = new Date();
     const stamp = now.getFullYear() + pad2(now.getMonth()+1) + pad2(now.getDate()) + '_' + pad2(now.getHours()) + pad2(now.getMinutes());
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'PeachShot_' + (currentSiteName() || '시설물') + '_' + stamp + '.json';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-    psProgress.finish('파일이 저장(다운로드)됩니다.');
+    await psProgress.deliver(blob, 'PeachShot_' + (currentSiteName() || '시설물') + '_' + stamp + '.json');
     }catch(e){
       console.error(e);
       psProgress.fail('백업 파일을 만들지 못했습니다.');
@@ -14539,7 +14584,13 @@
     const ws = XLSX.utils.json_to_sheet(safeRows, { header: headerLabels });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
-    XLSX.writeFile(wb, filename);
+    return deliverWorkbook(wb, filename);
+  }
+  // XLSX.writeFile 대신 Blob을 만들어 공통 전달 방식(psProgress.deliver)을 쓴다
+  function deliverWorkbook(wb, filename){
+    const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    return psProgress.deliver(blob, filename);
   }
 
   btnDownloadExcelTemplate.addEventListener('click', async ()=>{
@@ -14584,7 +14635,7 @@
       usedSheetNames.add(name);
       XLSX.utils.book_append_sheet(wb, ws, name);
     });
-    XLSX.writeFile(wb, filename);
+    return deliverWorkbook(wb, filename);
   }
 
   btnExportComparisonExcel.addEventListener('click', async ()=>{
@@ -19126,15 +19177,7 @@
 
       psProgress.set(0, '압축하는 중');
       const blob = await zip.generateAsync({type:'blob'}, (meta)=>{ psProgress.set(meta.percent, '압축하는 중'); });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'PeachShot_기록.zip';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      psProgress.finish('파일이 저장(다운로드)됩니다.');
+      await psProgress.deliver(blob, 'PeachShot_기록.zip');
     }catch(e){
       psProgress.fail('ZIP을 만들지 못했습니다.');
       alert('내보내기 중 오류가 발생했습니다.');
@@ -19427,15 +19470,7 @@
       await psProgress.nextPaint();
       const wordDoc = new Document({ sections: [{ children }] });
       const blob = await Packer.toBlob(wordDoc);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = siteName + '_점검보고서.docx';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      psProgress.finish('파일이 저장(다운로드)됩니다.');
+      await psProgress.deliver(blob, siteName + '_점검보고서.docx');
     }catch(e){
       console.error(e);
       psProgress.fail('문서를 만들지 못했습니다.');
@@ -19733,14 +19768,8 @@
   }
 
   function downloadDocxBlob(blob, filename){
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    // 이름과 달리 내용에 상관없이 파일 전달에 쓰인다 — 진행창의 전달 방식(아이폰은 저장 버튼)을 따른다
+    return psProgress.deliver(blob, filename);
   }
 
   async function ensureDocxLoaded(){
