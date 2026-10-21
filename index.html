@@ -3190,7 +3190,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v103';
+  const PS_BUILD = 'v104';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -19466,17 +19466,17 @@
         const invCols = ['구분','구간','구성요소','위치','손상명','기존규모','현재규모','증감','증감여부'];
         const invW = 100 / invCols.length;
         const invHeader = new TableRow({ children: invCols.map(h =>
-          new TableCell({ width:{size:invW, type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:h, bold:true, size:16}) ] }) ] })
+          new TableCell({ width:dxa(1002), margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:h, bold:true, size:16}) ] }) ] })
         )});
         const invDataRows = inventoryRows.map(r => {
           // 항목별(길이/균열폭 등) 비교값이 있으면 그걸 우선 표시 — 첫 숫자만 비교한 값보다 정확하다.
           const 증감 = r['증감상세'] || [r['증감치수'], r['증감률'] ? '(' + r['증감률'] + ')' : ''].filter(Boolean).join(' ');
           const cells = [r['구분'], r['구간'], r['구성요소'], r['위치'], r['손상명'], r['기존규모'], r['현재규모'], 증감, r['증감여부']];
           return new TableRow({ children: cells.map(v =>
-            new TableCell({ width:{size:invW, type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:String(v == null ? '' : v), size:15}) ] }) ] })
+            new TableCell({ width:dxa(1002), margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:String(v == null ? '' : v), size:15}) ] }) ] })
           )});
         });
-        children.push(new Table({ width:{size:100, type:WidthType.PERCENTAGE}, rows:[invHeader, ...invDataRows] }));
+        children.push(new Table({ ...fixedTableOpts(Array(9).fill(1002)), rows:[invHeader, ...invDataRows] }));
         children.push(new Paragraph({ children:[ new TextRun({ text:'※ 증감치수·증감률은 규모 문자열의 대표 수치를 비교한 근사값입니다. 증감여부는 조사자가 지정한 값이 있으면 그 값을 씁니다.', italics:true, size:14, color:'777777' }) ], spacing:{ after:250 } }));
       }
 
@@ -19484,12 +19484,12 @@
       if(visibleExistingForReport.length > 0){
         children.push(new Paragraph({ text:'기존손상 현황', heading: HeadingLevel.HEADING_1, spacing:{ before:400, after:150 } }));
         const headerRow = new TableRow({ children: ['ID','구간','손상명','조사년도','구성요소','손상규모','상태'].map(h =>
-          new TableCell({ width:{size:100/7, type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:h, bold:true, size:16}) ] }) ] })
+          new TableCell({ width:dxa(1289), margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:h, bold:true, size:16}) ] }) ] })
         )});
         const dataRows = visibleExistingForReport.map(ed => new TableRow({ children: [ed.id, ed.section||'', ed.damageName||'', ed.surveyYear||'', ed.component||'', ed.measurement||'', ed.status||'미확인'].map(v =>
-          new TableCell({ width:{size:100/7, type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:String(v), size:16}) ] }) ] })
+          new TableCell({ width:dxa(1289), margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:String(v), size:16}) ] }) ] })
         )}));
-        children.push(new Table({ width:{size:100, type:WidthType.PERCENTAGE}, rows:[headerRow, ...dataRows] }));
+        children.push(new Table({ ...fixedTableOpts(Array(7).fill(1289)), rows:[headerRow, ...dataRows] }));
         children.push(new Paragraph({ text:'', spacing:{ after:200 } }));
 
         // 기존 vs 현재 비교 — 기존손상과 실제로 연결된(existingDamageId) 조사 손상기록만 포함
@@ -19509,12 +19509,12 @@
         if(cmpRows.length > 0){
           children.push(new Paragraph({ text:'기존 vs 현재 비교', heading: HeadingLevel.HEADING_1, spacing:{ before:250, after:150 } }));
           const cmpHeader = new TableRow({ children: ['ID','조사지점','기존규모','현재규모','증감','변화상태'].map(h =>
-            new TableCell({ width:{size:100/6, type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:h, bold:true, size:16}) ] }) ] })
+            new TableCell({ width:dxa(1504), margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:h, bold:true, size:16}) ] }) ] })
           )});
           const cmpDataRows = cmpRows.map(r => new TableRow({ children: r.map(v =>
-            new TableCell({ width:{size:100/6, type:WidthType.PERCENTAGE}, margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:String(v), size:16}) ] }) ] })
+            new TableCell({ width:dxa(1504), margins:{top:60,bottom:60,left:80,right:80}, children:[ new Paragraph({ children:[ new TextRun({text:String(v), size:16}) ] }) ] })
           )}));
-          children.push(new Table({ width:{size:100, type:WidthType.PERCENTAGE}, rows:[cmpHeader, ...cmpDataRows] }));
+          children.push(new Table({ ...fixedTableOpts(Array(6).fill(1504)), rows:[cmpHeader, ...cmpDataRows] }));
           children.push(new Paragraph({ text:'', spacing:{ after:200 } }));
         }
       }
@@ -19522,7 +19522,7 @@
       children.push(new Paragraph({ text:'지점별 사진 및 조사내용', heading: HeadingLevel.HEADING_1, spacing:{ before:400, after:150 } }));
 
       const emptyCell = ()=> new TableCell({
-        width: { size:50, type: WidthType.PERCENTAGE },
+        width: dxa(4513),
         margins: { top:100, bottom:100, left:100, right:100 },
         children: [ new Paragraph({ text:'' }) ]
       });
@@ -19586,7 +19586,7 @@
             ]
           }));
           cells.push(new TableCell({
-            width: { size:50, type: WidthType.PERCENTAGE },
+            width: dxa(4513),
             margins: { top:100, bottom:100, left:100, right:100 },
             children: cellChildren
           }));
@@ -19596,7 +19596,7 @@
           const rowCells = [ cells[i], cells[i+1] || emptyCell() ];
           rows.push(new TableRow({ children: rowCells }));
         }
-        children.push(new Table({ width: { size:100, type: WidthType.PERCENTAGE }, rows }));
+        children.push(new Table({ ...fixedTableOpts([4513, 4513]), rows }));
         children.push(new Paragraph({ text:'', spacing:{ after:200 } }));
       }
 
@@ -19686,9 +19686,9 @@
         const buf = await dataUrlToBlob(dataUrl).arrayBuffer();
         return new Uint8Array(buf);
       }
-      const labelCell = (t)=> new TableCell({ width:{size:14,type:WidthType.PERCENTAGE}, shading:{fill:'F2F2F2'}, margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:t, bold:true, size:15}) ] }) ] });
-      const textCell = (text, span)=> new TableCell({ columnSpan: span||1, width:{size: span?72:58, type:WidthType.PERCENTAGE}, margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ children:[ new TextRun({text:String(text||'-'), size:15}) ] }) ] });
-      const numCell = (n)=> new TableCell({ width:{size:14,type:WidthType.PERCENTAGE}, margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:circledNum(n), bold:true, size:18}) ] }) ] });
+      const labelCell = (t)=> new TableCell({ width:dxa(700), shading:{fill:'F2F2F2'}, margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:t, bold:true, size:15}) ] }) ] });
+      const textCell = (text, span)=> new TableCell({ columnSpan: span||1, width:dxa(span ? 3613 : 2813), margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ children:[ new TextRun({text:String(text||'-'), size:15}) ] }) ] });
+      const numCell = (n)=> new TableCell({ width:dxa(800), margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:circledNum(n), bold:true, size:18}) ] }) ] });
 
       // 사진이 아직 메모리에 안 채워져 있으면(다른 지점을 보는 중이었거나 등) 미리 채운다.
       await hydratePhotoBlobs(site.markers || []);
@@ -19737,22 +19737,22 @@
           }
           const nameText = d.component ? (d.damageType || '(손상명 없음)') + ' (' + d.component + ')' : (d.damageType || '(손상명 없음)');
           const statusText = d.measurement ? nameText + ', ' + d.measurement : nameText;
-          cellKids.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows:[
+          cellKids.push(new Table({ ...fixedTableOpts([700, 2813, 800]), rows:[
             new TableRow({ children:[ labelCell('현황'), textCell(statusText), numCell(seq) ] }),
             new TableRow({ children:[ labelCell('원인'), textCell(d.cause, 2) ] }),
             new TableRow({ children:[ labelCell('대책'), textCell(d.repairMethod || '주의관찰', 2) ] })
           ]}));
-          cells.push(new TableCell({ width:{size:50,type:WidthType.PERCENTAGE}, margins:{top:100,bottom:140,left:100,right:100}, children: cellKids }));
+          cells.push(new TableCell({ width:dxa(4513), margins:{top:100,bottom:140,left:100,right:100}, children: cellKids }));
           seq++;
         }
 
         const gridRows = [];
         for(let i=0; i<cells.length; i+=2){
           const rowCells = [ cells[i] ];
-          rowCells.push(cells[i+1] || new TableCell({ width:{size:50,type:WidthType.PERCENTAGE}, children:[ new Paragraph({ text:'' }) ] }));
+          rowCells.push(cells[i+1] || new TableCell({ width:dxa(4513), children:[ new Paragraph({ text:'' }) ] }));
           gridRows.push(new TableRow({ children: rowCells }));
         }
-        children.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows: gridRows }));
+        children.push(new Table({ ...fixedTableOpts([4513, 4513]), rows: gridRows }));
       }
 
       fixDocPrIds(children);
@@ -19842,9 +19842,9 @@
     // 나누고 페이지를 넘긴다 — "보고서 작업목록" 내보내기와 같은 형식이다.
     children.push(new Paragraph({ text:'지점별 조사결과', heading: HeadingLevel.HEADING_1, spacing:{ before:300, after:120 } }));
 
-    const labelCell = (t)=> new TableCell({ width:{size:14,type:WidthType.PERCENTAGE}, shading:{fill:'F2F2F2'}, margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:t, bold:true, size:15}) ] }) ] });
-    const textCell = (text, span)=> new TableCell({ columnSpan: span||1, width:{size: span?72:58, type:WidthType.PERCENTAGE}, margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ children:[ new TextRun({text:String(text||'-'), size:15}) ] }) ] });
-    const numCell = (n)=> new TableCell({ width:{size:14,type:WidthType.PERCENTAGE}, margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:circledNum(n), bold:true, size:18}) ] }) ] });
+    const labelCell = (t)=> new TableCell({ width:dxa(700), shading:{fill:'F2F2F2'}, margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:t, bold:true, size:15}) ] }) ] });
+    const textCell = (text, span)=> new TableCell({ columnSpan: span||1, width:dxa(span ? 3613 : 2813), margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ children:[ new TextRun({text:String(text||'-'), size:15}) ] }) ] });
+    const numCell = (n)=> new TableCell({ width:dxa(800), margins:{top:40,bottom:40,left:60,right:60}, children:[ new Paragraph({ alignment:AlignmentType.CENTER, children:[ new TextRun({text:circledNum(n), bold:true, size:18}) ] }) ] });
 
     const entries = [];
     const markersSorted = siteMarkers.slice().sort((a,b)=>(a.num||0)-(b.num||0));
@@ -19893,12 +19893,12 @@
           const reason = en.pending ? '(사진 없음 — 클라우드에서 아직 못 받음, 온라인 상태에서 다시 시도해주세요)' : '(사진 없음)';
           kids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text: reason, italics:true, size:14, color:'999999' }) ], spacing:{ after:60 } }));
         }
-        kids.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows:[
+        kids.push(new Table({ ...fixedTableOpts([700, 2813, 800]), rows:[
           new TableRow({ children:[ labelCell('현황'), textCell(en.statusText), numCell(seq) ] }),
           new TableRow({ children:[ labelCell('원인'), textCell(en.cause, 2) ] }),
           new TableRow({ children:[ labelCell('대책'), textCell(en.repairMethod || '주의관찰', 2) ] })
         ]}));
-        return new TableCell({ width:{size:50,type:WidthType.PERCENTAGE}, margins:{top:100,bottom:140,left:100,right:100}, children: kids });
+        return new TableCell({ width:dxa(4513), margins:{top:100,bottom:140,left:100,right:100}, children: kids });
       }
 
       let seq = 1; // 구간이 바뀌어도 원문자 번호는 계속 이어간다(참고 양식과 동일)
@@ -19914,10 +19914,10 @@
         const gridRows = [];
         for(let i=0; i<cells.length; i+=2){
           const rowCells = [ cells[i] ];
-          rowCells.push(cells[i+1] || new TableCell({ width:{size:50,type:WidthType.PERCENTAGE}, children:[ new Paragraph({ text:'' }) ] }));
+          rowCells.push(cells[i+1] || new TableCell({ width:dxa(4513), children:[ new Paragraph({ text:'' }) ] }));
           gridRows.push(new TableRow({ children: rowCells }));
         }
-        children.push(new Table({ width:{size:100,type:WidthType.PERCENTAGE}, rows: gridRows }));
+        children.push(new Table({ ...fixedTableOpts([4513, 4513]), rows: gridRows }));
       }
     }
 
@@ -20007,6 +20007,17 @@
       if(Array.isArray(x.root)) for(let i = 0; i < x.root.length; i++) stack.push(x.root[i]);
     }
     return n;
+  }
+
+  // ★ 표 열 너비를 "정확한 숫자(twip)"로 지정한다.
+  //   예전엔 폭을 "페이지의 몇 %"로만 지정했는데, docx 라이브러리는 이 경우 표 안쪽 열 너비 값(tblGrid)을
+  //   아주 작은 기본값으로 저장한다. Word는 이 값을 무시하고 % 로 자동 계산하지만, 한글은 저장된 값을 그대로
+  //   믿어 열이 짜부러지고 사진이 칸 밖으로 넘쳐 다른 칸을 가렸다. 고정 너비(DXA) + 고정 레이아웃으로 지정하면
+  //   Word·한글 모두 같은 너비로 보인다. 본문 폭은 A4 기본 여백 기준 9026 twip(약 15.9cm).
+  const DOC_CONTENT_W = 9026;
+  function dxa(n){ return { size: n, type: docx.WidthType.DXA }; }
+  function fixedTableOpts(widths){
+    return { width: { size: widths.reduce((a, b) => a + b, 0), type: docx.WidthType.DXA }, columnWidths: widths, layout: docx.TableLayoutType.FIXED };
   }
 
   function downloadDocxBlob(blob, filename){
