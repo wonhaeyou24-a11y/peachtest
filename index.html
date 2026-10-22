@@ -3190,7 +3190,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v104';
+  const PS_BUILD = 'v105';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -14439,7 +14439,7 @@
         [d.section, d.drawingPosition, d.part, d.measurement, d.damageName || '(손상명 없음)'].filter(Boolean).map(escapeHtml).join(' - ') +
         '<span style="font-weight:400; color:#888; font-size:12px;"> · ' + escapeHtml(d.status || '미확인') + '</span></div>' +
         '<div style="font-size:12px; color:#666;">' +
-        [d.id, d.component].filter(Boolean).map(escapeHtml).join(' · ') +
+        [d.id, d.externalId ? '번호 ' + d.externalId : '', d.component].filter(Boolean).map(escapeHtml).join(' · ') +
         '</div>';
       row.addEventListener('click', ()=> openExistingDamageForm(d));
       existingDamageBody.appendChild(row);
@@ -14635,6 +14635,7 @@
     const rows = visible.map(d=>{
       const row = {};
       EXCEL_COLUMNS.forEach(c => { row[c.label] = d[c.key] != null ? d[c.key] : ''; });
+      if(d.externalId) row['ID'] = d.externalId; // 원래 번호가 있으면 그 번호로 내보낸다(다시 가져와도 같은 번호로 인식)
       return row;
     });
     const site = currentSiteObj();
@@ -14831,7 +14832,11 @@
 
       const site = currentSiteObj();
       if(!site){ alert('시설물을 먼저 선택해주세요.'); return; }
-      const existingIds = new Set((site.existingDamages || []).map(d => d.id));
+      // 이미 있는 ID: 피치샷 자체 ID(EX-DMG-…)와, 엑셀에서 가져온 원래 ID(externalId)를 모두 본다.
+      // (외관분석프로그램의 '도면번호-표내번호' 같은 번호를 저장해 둬야 데스크 도면 연결이 번호로 이어지고,
+      //  같은 양식을 다시 올려도 중복이 쌓이지 않는다.)
+      const existingIds = new Set();
+      (site.existingDamages || []).forEach(d => { if(d.id) existingIds.add(d.id); if(d.externalId) existingIds.add(d.externalId); });
       let newCount = 0, skipCount = 0, invalidCount = 0;
       const toInsert = [];
       raw.forEach(row=>{
@@ -14843,7 +14848,10 @@
           skipCount++;
           return;
         }
+        if(rowId) existingIds.add(rowId); // 같은 파일 안에서 ID가 겹쳐도 한 번만
         toInsert.push({
+          // 피치샷 자체 번호(EX-DMG-…)를 되돌려 쓴 파일이면 externalId로 따로 저장하지 않는다
+          externalId: (rowId && !/^EX-DMG-\d+$/i.test(rowId)) ? rowId : '',
           damageName: name,
           section: String(row['구간'] || '').trim(),
           drawingPosition: String(row['위치'] || '').trim(),
@@ -14862,9 +14870,21 @@
         alert('새로 가져올 항목이 없습니다. (신규 0건 · 중복 건너뜀 ' + skipCount + '건 · 손상명 없음 ' + invalidCount + '건)');
         return;
       }
+      // 외관분석프로그램이 만든 파일명(기존손상_<시설물코드>.xlsx)의 코드와 지금 시설물이 달라 보이면 알려 준다.
+      // 시설물 이름 규칙이 서로 달라 막지는 않고, 확인 창에 한 줄만 덧붙인다.
+      let facilityWarn = '';
+      const fm = /^기존손상_(.+?)\.xlsx?$/i.exec(file.name || '');
+      if(fm){
+        const norm = s => String(s || '').toLowerCase().replace(/[\s_\-.]/g, '');
+        const code = norm(fm[1]), sname = norm(site.name);
+        if(code && sname && sname.indexOf(code) < 0 && code.indexOf(sname) < 0){
+          facilityWarn = '\n\n⚠ 파일 이름의 시설물 코드(' + fm[1] + ')와 지금 선택된 시설물(' + (site.name || '') + ')이 달라 보입니다.\n다른 시설물의 파일이면 [취소]하고 시설물을 바꿔 주세요.';
+        }
+      }
       const summaryMsg = '가져올 항목: 신규 ' + newCount + '건' +
         (skipCount > 0 ? ' · 이미 있는 ID라 건너뛴 항목 ' + skipCount + '건' : '') +
         (invalidCount > 0 ? ' · 손상명이 비어 제외된 행 ' + invalidCount + '건' : '') +
+        facilityWarn +
         '\n\n이대로 가져올까요?';
       if(!confirm(summaryMsg)) return;
 
