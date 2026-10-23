@@ -3210,7 +3210,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v107';
+  const PS_BUILD = 'v108';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -11992,6 +11992,55 @@
     facilityModal.style.display = 'flex';
   }
 
+  // ---------- 지도 배경 전환 (일반 / 위성) ----------
+  // 시설물의 시작·끝 위치처럼 실제 모습을 보고 눌러야 할 때를 위해 Esri 위성영상 배경을 추가한다.
+  // 기존 일반 지도(OpenStreetMap) 레이어는 그대로 두고 켜고 끌 뿐이며, 마지막으로 고른 배경을 기억한다.
+  // (보고서용 지도 이미지는 계속 일반 지도를 쓴다.)
+  let osmBaseLayer = null, satBaseLayer = null, baseMapKind = 'osm';
+
+  function setBaseMap(kind){
+    if(!leafletMap || !osmBaseLayer || !satBaseLayer) return;
+    if(kind === 'sat'){
+      if(leafletMap.hasLayer(osmBaseLayer)) leafletMap.removeLayer(osmBaseLayer);
+      if(!leafletMap.hasLayer(satBaseLayer)) satBaseLayer.addTo(leafletMap);
+      satBaseLayer.bringToBack();
+    } else {
+      if(leafletMap.hasLayer(satBaseLayer)) leafletMap.removeLayer(satBaseLayer);
+      if(!leafletMap.hasLayer(osmBaseLayer)) osmBaseLayer.addTo(leafletMap);
+      osmBaseLayer.bringToBack();
+    }
+    baseMapKind = kind === 'sat' ? 'sat' : 'osm';
+    const btn = document.getElementById('btnBaseMapToggle');
+    if(btn) btn.textContent = baseMapKind === 'sat' ? '🗺 일반 지도' : '🛰 위성 사진';
+    try{ localStorage.setItem('ps_basemap', baseMapKind); }catch(e){}
+  }
+
+  function installBaseMapToggle(){
+    if(!leafletMap || leafletMap.__psBaseToggle) return;
+    leafletMap.__psBaseToggle = true;
+    leafletMap.eachLayer(l => { if(!osmBaseLayer && l instanceof L.TileLayer) osmBaseLayer = l; });
+    satBaseLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 20, maxNativeZoom: 19,
+      attribution: 'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
+    });
+    const Ctl = L.Control.extend({
+      options: { position: 'topright' },
+      onAdd: function(){
+        const b = L.DomUtil.create('button', 'ps-basemap-btn');
+        b.id = 'btnBaseMapToggle'; b.type = 'button';
+        b.style.cssText = 'background:#fff;color:#1a1206;border:1px solid rgba(0,0,0,.35);border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,.35);cursor:pointer;';
+        b.textContent = '🛰 위성 사진';
+        L.DomEvent.disableClickPropagation(b);
+        L.DomEvent.on(b, 'click', () => setBaseMap(baseMapKind === 'sat' ? 'osm' : 'sat'));
+        return b;
+      }
+    });
+    new Ctl().addTo(leafletMap);
+    let saved = null;
+    try{ saved = localStorage.getItem('ps_basemap'); }catch(e){}
+    if(saved === 'sat') setBaseMap('sat');
+  }
+
   // ---------- 기준점 (시설물 시점·종점·중간점) ----------
   // 손상 위치를 "시점에서 몇 m"로 계산하는 기준. 시설물(site)의 refPoints 배열에만 저장하고,
   // 계산·표시는 피치샷 데스크가 한다. 이 블록은 기존 저장/동기화 함수를 호출만 하고 고치지 않는다.
@@ -16351,6 +16400,7 @@
       attribution: '© OpenStreetMap'
     }).addTo(leafletMap);
     mapMarkerLayer = L.layerGroup().addTo(leafletMap);
+    installBaseMapToggle(); // 일반/위성 배경 전환 버튼(별도 블록). 지도 클릭·지점 처리는 건드리지 않는다
 
     leafletMap.on('click', (e)=>{
       if(movingMarkerId){

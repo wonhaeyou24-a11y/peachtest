@@ -20,6 +20,11 @@ check('지도 지정: 일반 지점 만들기 가로채기(capture)', /mapStage\
 check('지도 지정: 확대 단계 제한', /REF_PICK_MIN_ZOOM = 18/.test(html));
 check('지도 지정: 기존 지도 클릭 처리는 수정 없음', html.includes("leafletMap.on('click', (e)=>{\n      if(movingMarkerId){"));
 
+// 1-3. 지도 배경 전환(일반/위성)
+check('위성 배경 레이어(Esri)', html.includes('World_Imagery/MapServer/tile'));
+check('기존 일반 지도 레이어 유지(OSM)', html.includes("L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'"));
+check('배경 전환은 지도 초기화에서 한 줄만 호출', (html.match(/installBaseMapToggle\(\);/g) || []).length === 1);
+
 // 2. 연결 지점: 정보 수정에서 보이고, 새 시설물에서는 숨김
 check('정보 수정 때 구역 표시', /fmYear\.value = site\.completionYear \|\| '';\s*renderRefPoints\(site\);/.test(html));
 check('새 시설물에서는 숨김', /renderRefPoints\(null\);/.test(html));
