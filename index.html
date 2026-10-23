@@ -3210,7 +3210,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v110';
+  const PS_BUILD = 'v111';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -11992,23 +11992,24 @@
     facilityModal.style.display = 'flex';
   }
 
-  // ---------- 지도 배경 전환 (일반 / 위성 Esri / 위성 브이월드) ----------
-  // 시설물의 시작·끝 위치처럼 실제 모습을 보고 눌러야 할 때를 위해 위성 사진 배경을 추가한다.
+  // ---------- 지도 배경 전환 (일반 / 위성 브이월드) ----------
+  // 시설물의 시작·끝 위치처럼 실제 모습을 보고 눌러야 할 때를 위해 브이월드(국토교통부) 위성 사진 배경을 추가한다.
+  //  - 지도를 가리지 않게 줌 버튼(+/−) 바로 아래에 같은 크기의 아이콘 버튼 하나만 둔다.
+  //    누르면 일반 ↔ 위성 전환, 길게 누르면 인증키 입력·변경·삭제.
   //  - 일반 지도(OpenStreetMap) 레이어는 그대로 두고 켜고 끌 뿐이다. 마지막으로 고른 배경은 기억한다.
-  //  - 브이월드(국토교통부) 위성+지명은 인증키가 있어야 한다. 키는 이 기기의 localStorage 에만 저장하며
-  //    코드나 저장소에는 넣지 않는다. 받지 못하면 자동으로 Esri 위성으로 돌아간다.
+  //  - 인증키는 이 기기의 localStorage 에만 저장하며 코드나 저장소에는 넣지 않는다. 처음 위성을 켤 때 한 번 묻는다.
+  //  - 위성 사진을 받지 못하면(키·등록 주소 오류, 인터넷 문제) 안내하고 일반 지도로 돌아간다.
   //  - 보고서용 지도 이미지는 계속 일반 지도를 쓴다.
-  let osmBaseLayer = null, esriBaseLayer = null, vwBaseLayer = null, vwLabelLayer = null, baseMapKind = 'osm';
+  let osmBaseLayer = null, vwBaseLayer = null, vwLabelLayer = null, baseMapKind = 'osm';
   let vwFailNotified = false;
-  const BASEMAP_LABEL = { osm: '🗺 일반 지도', esri: '🛰 위성 (Esri)', vw: '🛰 위성 (브이월드)' };
 
   function vworldKey(){ try{ return (localStorage.getItem('ps_vworld_key') || '').trim(); }catch(e){ return ''; } }
   function storeVworldKey(k){ try{ if(k) localStorage.setItem('ps_vworld_key', k); else localStorage.removeItem('ps_vworld_key'); }catch(e){} }
 
-  // 인증키를 묻는다. 새 키를 저장했으면 그 키를, 취소했으면 ''(아무것도 안 바꿈)을 돌려준다.
+  // 인증키를 묻는다. 새 키를 저장했으면 그 키를, 취소했거나 비웠으면 ''를 돌려준다(비우면 저장된 키를 지운다).
   function askVworldKey(){
     const cur = vworldKey();
-    const k = window.prompt('브이월드 인증키를 입력하세요.\n· 이 기기에만 저장됩니다.\n· 비우고 확인하면 저장된 키를 지웁니다.', cur);
+    const k = window.prompt('브이월드 인증키를 입력하세요.\n· 이 기기에만 저장됩니다.\n· 나중에 바꾸려면 위성 버튼을 길게 누르세요.\n· 비우고 확인하면 저장된 키를 지웁니다.', cur);
     if(k === null) return '';
     const t = k.trim();
     storeVworldKey(t);
@@ -12019,38 +12020,43 @@
     const root = 'https://api.vworld.kr/req/wmts/1.0.0/' + encodeURIComponent(key);
     vwBaseLayer = L.tileLayer(root + '/Satellite/{z}/{y}/{x}.jpeg', { maxZoom: 20, maxNativeZoom: 19, attribution: '© VWorld (국토교통부)' });
     vwLabelLayer = L.tileLayer(root + '/Hybrid/{z}/{y}/{x}.png', { maxZoom: 20, maxNativeZoom: 19 });
-    // 키가 틀렸거나 등록한 주소(도메인)와 다르면 타일이 전부 실패한다 — 아무것도 못 받은 채 4번 실패하면 알리고 Esri 로 돌아간다
+    // 키가 틀렸거나 등록한 주소(도메인)와 다르면 타일이 전부 실패한다 — 아무것도 못 받은 채 4번 실패하면 알리고 일반 지도로 돌아간다
     let ok = 0, bad = 0;
     vwBaseLayer.on('tileload', () => { ok++; });
     vwBaseLayer.on('tileerror', () => {
       bad++;
       if(ok === 0 && bad >= 4 && !vwFailNotified && baseMapKind === 'vw'){
         vwFailNotified = true;
-        alert('브이월드 위성 사진을 받지 못했습니다.\n· 인증키가 맞는지 확인하세요 (🔑 버튼)\n· 인증키를 발급받을 때 등록한 사이트 주소가 이 앱 주소와 같아야 합니다\n· 인터넷 연결을 확인하세요\n\nEsri 위성으로 바꿉니다.');
-        setBaseMap('esri');
+        alert('브이월드 위성 사진을 받지 못했습니다.\n· 인증키가 맞는지 확인하세요 (위성 버튼을 길게 누르면 키 변경)\n· 인증키를 발급받을 때 등록한 사이트 주소가 이 앱 주소와 같아야 합니다\n· 인터넷 연결을 확인하세요\n\n일반 지도로 바꿉니다.');
+        setBaseMap('osm');
       }
     });
   }
 
   function refreshBaseMapButton(){
-    const btn = document.getElementById('btnBaseMapToggle');
-    if(btn) btn.textContent = BASEMAP_LABEL[baseMapKind] || BASEMAP_LABEL.osm;
+    const a = document.getElementById('btnBaseMapToggle');
+    if(!a) return;
+    a.textContent = baseMapKind === 'vw' ? '🗺' : '🛰';
+    a.title = baseMapKind === 'vw' ? '일반 지도로 (길게 누르면 인증키 변경)' : '위성 사진으로 (길게 누르면 인증키 변경)';
+    a.setAttribute('aria-label', a.title);
   }
 
   function setBaseMap(kind){
-    if(!leafletMap || !osmBaseLayer || !esriBaseLayer) return;
+    if(!leafletMap || !osmBaseLayer) return;
     let key = '';
     if(kind === 'vw'){
       key = vworldKey() || askVworldKey();
       if(!key) return;                       // 키를 안 넣으면 지금 배경 그대로
     }
-    [osmBaseLayer, esriBaseLayer, vwBaseLayer, vwLabelLayer].forEach(l => { if(l && leafletMap.hasLayer(l)) leafletMap.removeLayer(l); });
+    [osmBaseLayer, vwBaseLayer, vwLabelLayer].forEach(l => { if(l && leafletMap.hasLayer(l)) leafletMap.removeLayer(l); });
     if(kind === 'vw'){
       vwFailNotified = false;
       buildVworldLayers(key);                // 켤 때마다 새로 만들어, 키가 틀리면 그때마다 실패를 알아챈다
-      vwBaseLayer.addTo(leafletMap); vwLabelLayer.addTo(leafletMap); vwBaseLayer.bringToBack(); }
-    else if(kind === 'esri'){ esriBaseLayer.addTo(leafletMap); esriBaseLayer.bringToBack(); }
-    else { kind = 'osm'; osmBaseLayer.addTo(leafletMap); osmBaseLayer.bringToBack(); }
+      vwBaseLayer.addTo(leafletMap); vwLabelLayer.addTo(leafletMap); vwBaseLayer.bringToBack();
+    } else {
+      kind = 'osm';
+      osmBaseLayer.addTo(leafletMap); osmBaseLayer.bringToBack();
+    }
     baseMapKind = kind;
     refreshBaseMapButton();
     try{ localStorage.setItem('ps_basemap', baseMapKind); }catch(e){}
@@ -12060,44 +12066,42 @@
     if(!leafletMap || leafletMap.__psBaseToggle) return;
     leafletMap.__psBaseToggle = true;
     leafletMap.eachLayer(l => { if(!osmBaseLayer && l instanceof L.TileLayer) osmBaseLayer = l; });
-    esriBaseLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-      maxZoom: 20, maxNativeZoom: 19,
-      attribution: 'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
-    });
-    const btnStyle = 'background:#fff;color:#1a1206;border:1px solid rgba(0,0,0,.35);border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,.35);cursor:pointer;';
     const Ctl = L.Control.extend({
-      options: { position: 'topleft' },   // 오른쪽 위에 두면 안내 배너(이동·기준점 지정)의 취소 버튼을 가린다
+      options: { position: 'topleft' },   // 왼쪽 위(줌 버튼 아래): 오른쪽 위는 안내 배너(이동·기준점 지정)의 취소 버튼을 가린다
       onAdd: function(){
-        const box = L.DomUtil.create('div', 'ps-basemap-box');
-        box.style.cssText = 'display:flex;gap:6px;align-items:center;';
-        const b = L.DomUtil.create('button', 'ps-basemap-btn', box);
-        b.id = 'btnBaseMapToggle'; b.type = 'button'; b.style.cssText = btnStyle;
-        b.textContent = BASEMAP_LABEL.osm;
-        const k = L.DomUtil.create('button', 'ps-basemap-key', box);
-        k.id = 'btnVworldKey'; k.type = 'button'; k.style.cssText = btnStyle; k.textContent = '🔑';
-        k.title = '브이월드 인증키 입력·변경';
-        L.DomEvent.disableClickPropagation(box);
-        // 누를 때마다: 일반 → (브이월드: 키가 있을 때만) → Esri 위성 → 일반
-        L.DomEvent.on(b, 'click', () => {
-          const order = vworldKey() ? ['osm', 'vw', 'esri'] : ['osm', 'esri'];
-          const i = order.indexOf(baseMapKind);
-          setBaseMap(order[(i + 1) % order.length]);
+        const bar = L.DomUtil.create('div', 'leaflet-bar ps-basemap-box');
+        const a = L.DomUtil.create('a', 'ps-basemap-btn', bar);
+        a.id = 'btnBaseMapToggle'; a.href = '#'; a.setAttribute('role', 'button');
+        a.style.cssText = 'display:flex;align-items:center;justify-content:center;font-size:17px;text-decoration:none;cursor:pointer;';
+        L.DomEvent.disableClickPropagation(bar);
+        // 누르면 일반 ↔ 위성, 0.7초 이상 길게 누르면 인증키 입력창
+        let timer = null, longDone = false;
+        const clear = () => { if(timer){ clearTimeout(timer); timer = null; } };
+        L.DomEvent.on(a, 'pointerdown', () => {
+          longDone = false; clear();
+          timer = setTimeout(() => {
+            longDone = true; timer = null;
+            const had = vworldKey();
+            const t = askVworldKey();
+            if(t){ setBaseMap('vw'); }
+            else if(had && !vworldKey() && baseMapKind === 'vw'){ setBaseMap('osm'); }   // 키를 지웠으면 위성을 쓸 수 없다
+          }, 700);
         });
-        L.DomEvent.on(k, 'click', () => {
-          const had = vworldKey();
-          const t = askVworldKey();
-          if(t){ setBaseMap('vw'); }
-          else if(had && !vworldKey() && baseMapKind === 'vw'){ setBaseMap('esri'); }   // 키를 지웠으면 브이월드를 쓸 수 없다
+        ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => L.DomEvent.on(a, ev, clear));
+        L.DomEvent.on(a, 'click', (e) => {
+          L.DomEvent.preventDefault(e);
+          if(longDone){ longDone = false; return; }
+          setBaseMap(baseMapKind === 'vw' ? 'osm' : 'vw');
         });
-        return box;
+        L.DomEvent.on(a, 'contextmenu', (e) => L.DomEvent.preventDefault(e));   // 길게 눌렀을 때 폰의 메뉴가 뜨지 않게
+        return bar;
       }
     });
     new Ctl().addTo(leafletMap);
+    refreshBaseMapButton();
     let saved = null;
     try{ saved = localStorage.getItem('ps_basemap'); }catch(e){}
-    if(saved === 'sat') saved = 'esri';       // v108 까지의 저장값
-    if(saved === 'esri') setBaseMap('esri');
-    else if(saved === 'vw' && vworldKey()) setBaseMap('vw');
+    if(saved === 'vw' && vworldKey()) setBaseMap('vw');   // v108~v109 의 'sat'/'esri' 저장값은 일반 지도로 시작
   }
 
   // ---------- 기준점 (시설물 시점·종점·중간점) ----------
@@ -12351,7 +12355,7 @@
     else if(lastGps) at = [lastGps.lat, lastGps.lng];
     if(leafletMap && at) leafletMap.setView(at, Math.max(leafletMap.getZoom(), REF_PICK_MIN_ZOOM));
     refDrawMapLayer(site);
-    moveBannerText.textContent = '지도에서 ' + label + ' 위치를 눌러주세요 (' + REF_PICK_MIN_ZOOM + '단계 이상으로 확대)';
+    moveBannerText.textContent = '📍 ' + label + ' 위치를 누르세요 (확대 ' + REF_PICK_MIN_ZOOM + '단계↑)';
     moveBanner.style.display = 'flex';
   }
 
@@ -12383,7 +12387,7 @@
     ev.stopPropagation(); ev.preventDefault(); // 일반 지점 만들기로 넘어가지 않게 막는다
     const z = leafletMap.getZoom();
     if(z < REF_PICK_MIN_ZOOM){
-      moveBannerText.textContent = '더 확대해주세요 (지금 ' + z + '단계 → ' + REF_PICK_MIN_ZOOM + '단계 이상). 확대한 뒤 ' + refPick.label + ' 위치를 눌러주세요';
+      moveBannerText.textContent = '더 확대하세요 (지금 ' + z + '단계 → ' + REF_PICK_MIN_ZOOM + '단계↑)';
       return;
     }
     const ll = leafletMap.mouseEventToLatLng(ev);

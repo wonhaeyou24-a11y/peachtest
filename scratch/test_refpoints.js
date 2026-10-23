@@ -21,12 +21,13 @@ check('지도 지정: 확대 단계 제한', /REF_PICK_MIN_ZOOM = 18/.test(html)
 check('지도 지정: 기존 지도 클릭 처리는 수정 없음', html.includes("leafletMap.on('click', (e)=>{\n      if(movingMarkerId){"));
 
 // 1-3. 지도 배경 전환(일반/위성)
-check('위성 배경 레이어(Esri)', html.includes('World_Imagery/MapServer/tile'));
+check('위성 사진은 브이월드만 사용 (Esri 는 오래된 사진이라 제거)', !html.includes('arcgisonline') && !html.includes('World_Imagery'));
 check('기존 일반 지도 레이어 유지(OSM)', html.includes("L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'"));
 check('브이월드 위성(Satellite jpeg)+지명(Hybrid png) 타일 주소', html.includes("'/Satellite/{z}/{y}/{x}.jpeg'") && html.includes("'/Hybrid/{z}/{y}/{x}.png'") && html.includes('https://api.vworld.kr/req/wmts/1.0.0/'));
 check('브이월드 인증키는 코드에 넣지 않고 기기(localStorage)에만 저장', html.includes("localStorage.getItem('ps_vworld_key')") && !/vworld\.kr\/req\/wmts\/1\.0\.0\/[A-F0-9]{8}-/i.test(html));
-check('타일 실패 시 Esri 로 자동 복귀 안내', html.includes('브이월드 위성 사진을 받지 못했습니다') && html.includes("setBaseMap('esri')"));
-check('배경 전환 버튼은 왼쪽 위(오른쪽 위는 안내 배너의 취소 버튼을 가림)', /options: \{ position: 'topleft' \},\s*\/\/ 오른쪽 위에 두면/.test(html));
+check('타일 실패 시 안내 후 일반 지도로 자동 복귀', html.includes('브이월드 위성 사진을 받지 못했습니다') && html.includes('일반 지도로 바꿉니다') && html.includes("setBaseMap('osm')"));
+check('지도 버튼은 줌 버튼 아래 아이콘 하나(누르면 전환, 길게 누르면 키 변경)', html.includes("L.DomUtil.create('div', 'leaflet-bar ps-basemap-box')") && html.includes("'pointerdown'") && /\}, 700\);/.test(html) && !html.includes('btnVworldKey'));
+check('배경 전환 버튼은 왼쪽 위(오른쪽 위는 안내 배너의 취소 버튼을 가림)', /options: \{ position: 'topleft' \},\s*\/\/ 왼쪽 위\(줌 버튼 아래\)/.test(html));
 check('배경 전환은 지도 초기화에서 한 줄만 호출', (html.match(/installBaseMapToggle\(\);/g) || []).length === 1);
 
 // 2. 연결 지점: 정보 수정에서 보이고, 새 시설물에서는 숨김
