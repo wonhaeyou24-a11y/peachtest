@@ -2632,6 +2632,12 @@
           <button class="primary" id="fmRefFinish" type="button" style="display:none;">지금 확정</button>
           <button class="ghost" id="fmRefCancel" type="button" style="display:none;">측정 취소</button>
         </div>
+        <div class="hint" style="margin-top:10px;">GPS가 안 잡히는 곳(건물 안, 옹벽 아래 등)이면 지도에서 직접 눌러 지정할 수 있습니다. (지도를 충분히 확대해서 눌러주세요)</div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
+          <button class="ghost" id="fmRefPickStart" type="button">🗺 시점 지도에서 지정</button>
+          <button class="ghost" id="fmRefPickMid" type="button">🗺 중간점 지도에서 지정</button>
+          <button class="ghost" id="fmRefPickEnd" type="button">🗺 종점 지도에서 지정</button>
+        </div>
       </div>
     </div>
     <div class="modal-foot">
@@ -3204,7 +3210,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v106';
+  const PS_BUILD = 'v107';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -12001,6 +12007,9 @@
   const fmRefEnd = document.getElementById('fmRefEnd');
   const fmRefFinish = document.getElementById('fmRefFinish');
   const fmRefCancel = document.getElementById('fmRefCancel');
+  const fmRefPickStart = document.getElementById('fmRefPickStart');
+  const fmRefPickMid = document.getElementById('fmRefPickMid');
+  const fmRefPickEnd = document.getElementById('fmRefPickEnd');
   let refCapture = null; // { siteId, role, label, samples, lastTs, startedAt, timer }
 
   function refPointsOf(site){ return Array.isArray(site && site.refPoints) ? site.refPoints : []; }
@@ -12010,7 +12019,7 @@
 
   function refSetButtons(){
     const busy = !!refCapture;
-    [fmRefStart, fmRefMid, fmRefEnd].forEach(b => { if(b) b.disabled = busy; });
+    [fmRefStart, fmRefMid, fmRefEnd, fmRefPickStart, fmRefPickMid, fmRefPickEnd].forEach(b => { if(b) b.disabled = busy; });
     if(fmRefFinish) fmRefFinish.style.display = busy ? '' : 'none';
     if(fmRefCancel) fmRefCancel.style.display = busy ? '' : 'none';
   }
@@ -12035,8 +12044,12 @@
       txt.style.flex = '1';
       const t = r.recordedAt ? new Date(r.recordedAt) : null;
       const hhmm = t && !isNaN(t) ? (String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0')) : '';
-      txt.textContent = '✅ ' + r.label + ' · ±' + Math.round(r.accuracy) + 'm (' + refQualityText(r.quality) + ') · 표본 ' +
-        r.samples + '개 · 퍼짐 ' + r.spread + 'm' + (hhmm ? ' · ' + hhmm : '') + (r.spread > 15 ? ' · 측정 중 움직였을 수 있음' : '');
+      if(r.source === 'map'){
+        txt.textContent = '✅ ' + r.label + ' · 🗺 지도에서 지정 (눌러 찍은 오차 약 ±' + (Math.round(r.accuracy * 10) / 10) + 'm)' + (hhmm ? ' · ' + hhmm : '');
+      } else {
+        txt.textContent = '✅ ' + r.label + ' · ±' + Math.round(r.accuracy) + 'm (' + refQualityText(r.quality) + ') · 표본 ' +
+          r.samples + '개 · 퍼짐 ' + r.spread + 'm' + (hhmm ? ' · ' + hhmm : '') + (r.spread > 15 ? ' · 측정 중 움직였을 수 있음' : '');
+      }
       const del = document.createElement('button');
       del.type = 'button'; del.className = 'ghost'; del.textContent = '삭제';
       del.addEventListener('click', () => deleteRefPoint(site.id, r.id));
@@ -12094,6 +12107,21 @@
     };
   }
 
+  // 기준점 1건을 만들어 site.refPoints 에 넣는다(시점·종점은 기존 것을 교체, 중간점은 추가).
+  // GPS 측정과 지도 지정이 같이 쓴다. fields: lat,lng,accuracy,spread,samples,source,...
+  function refBuildRecord(site, role, fields){
+    const existing = refPointsOf(site);
+    const label = role === 'start' ? '시점' : (role === 'end' ? '종점' : '중간 ' + (existing.filter(r => r.role === 'mid').length + 1));
+    const rec = Object.assign({
+      id: 'rp' + Date.now() + Math.random().toString(36).slice(2, 5),
+      role, label,
+      recordedAt: new Date().toISOString()
+    }, fields);
+    rec.quality = refQualityOf(rec.accuracy);
+    site.refPoints = existing.filter(r => role === 'mid' || r.role !== role).concat([rec]);
+    return rec;
+  }
+
   function stopRefCapture(){
     if(refCapture && refCapture.timer) clearInterval(refCapture.timer);
     refCapture = null;
@@ -12145,16 +12173,8 @@
     const sum = refSummarize(c.samples);
     stopRefCapture();
     if(!site) return;
-    const existing = refPointsOf(site);
-    let label = c.label;
-    if(c.role === 'mid') label = '중간 ' + (existing.filter(r => r.role === 'mid').length + 1);
-    const rec = Object.assign({
-      id: 'rp' + Date.now() + Math.random().toString(36).slice(2, 5),
-      role: c.role, label,
-      quality: refQualityOf(sum.accuracy),
-      recordedAt: new Date().toISOString()
-    }, sum);
-    site.refPoints = existing.filter(r => c.role === 'mid' || r.role !== c.role).concat([rec]);
+    const rec = refBuildRecord(site, c.role, Object.assign({ source: 'gps' }, sum));
+    const label = rec.label;
     renderRefPoints(site);
     await persistRefPoints(site);
     fmRefStatus.style.whiteSpace = 'pre-line';
@@ -12171,6 +12191,109 @@
     const site = sites.find(s => s.id === editingSiteId);
     renderRefPoints(site || null);
   });
+
+  // ----- 지도에서 직접 지정 (GPS가 안 잡히는 곳) -----
+  // 지도를 눌러 그 위치를 기준점으로 저장한다. 기존 지도 클릭 처리(지점 만들기)는 건드리지 않고,
+  // 지정 중일 때만 지도 영역의 클릭을 먼저 받아 가로챈다. 충분히 확대(18단계 이상)해야 눌러진다.
+  const REF_PICK_MIN_ZOOM = 18;
+  let refPick = null;       // { siteId, role, label }
+  let refMapLayer = null;   // 지정하는 동안만 보여주는 기존 기준점 표시
+
+  function refClearMapLayer(){
+    if(refMapLayer){ try{ refMapLayer.remove(); }catch(e){} refMapLayer = null; }
+  }
+
+  function refDrawMapLayer(site){
+    refClearMapLayer();
+    if(!leafletMap) return;
+    const pts = refPointsOf(site);
+    if(!pts.length) return;
+    refMapLayer = L.layerGroup().addTo(leafletMap);
+    pts.forEach(r => {
+      const icon = L.divIcon({
+        className: '',
+        html: '<div style="background:#E04F5F;color:#fff;border-radius:4px;padding:1px 5px;font-size:11px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);">' + r.label + '</div>',
+        iconSize: [44, 18], iconAnchor: [22, 9]
+      });
+      L.marker([r.lat, r.lng], { icon, interactive: false }).addTo(refMapLayer);
+    });
+  }
+
+  async function startRefMapPick(role){
+    if(refCapture || refPick) return;
+    const site = sites.find(s => s.id === editingSiteId);
+    if(!site) return;
+    const label = role === 'start' ? '시점' : (role === 'end' ? '종점' : '중간점');
+    const had = refPointsOf(site).find(r => r.role === role);
+    if(role !== 'mid' && had && !confirm(label + '이 이미 저장되어 있습니다. 다시 지정해서 바꿀까요?')) return;
+    refPick = { siteId: site.id, role, label };
+    facilityModal.style.display = 'none';
+    updatePcExplorerDocking();
+    // 지정할 시설물이 지금 열려 있는 시설물이 아니면 "전환"과 같은 순서로 연다
+    if(currentSiteId !== site.id){
+      commitLiveToCurrentSite();
+      await loadSite(site);
+      saveState();
+    }
+    if(currentMode !== 'map') switchMode('map');
+    // 이미 아는 위치(기준점 → 지점 → 내 위치) 근처로 지도를 옮긴다
+    let at = null;
+    const known = refPointsOf(site)[0] || (site.markers || []).find(m => m.lat != null && m.lng != null);
+    if(known) at = [known.lat, known.lng];
+    else if(lastGps) at = [lastGps.lat, lastGps.lng];
+    if(leafletMap && at) leafletMap.setView(at, Math.max(leafletMap.getZoom(), REF_PICK_MIN_ZOOM));
+    refDrawMapLayer(site);
+    moveBannerText.textContent = '지도에서 ' + label + ' 위치를 눌러주세요 (' + REF_PICK_MIN_ZOOM + '단계 이상으로 확대)';
+    moveBanner.style.display = 'flex';
+  }
+
+  async function finishRefMapPick(lat, lng, zoom){
+    const p = refPick;
+    refPick = null;
+    moveBanner.style.display = 'none';
+    refClearMapLayer();
+    if(!p) return;
+    const site = sites.find(s => s.id === p.siteId);
+    if(!site) return;
+    // 눌러서 지정한 오차 추정: 화면 1픽셀이 몇 m인지 × 손가락으로 누르는 오차(약 8픽셀). 지도 자체의 위치 오차는 포함되지 않는다.
+    const mpp = 156543.03392 * Math.cos(lat * Math.PI / 180) / Math.pow(2, zoom);
+    const acc = Math.max(0.1, Math.round(mpp * 8 * 10) / 10);
+    const rec = refBuildRecord(site, p.role, {
+      lat: Math.round(lat * 1e7) / 1e7, lng: Math.round(lng * 1e7) / 1e7,
+      accuracy: acc, spread: 0, samples: 1, source: 'map', zoom
+    });
+    await persistRefPoints(site);
+    openFacilityModalForEdit(site); // 결과를 보여주고, 이어서 다음 기준점을 지정할 수 있게 창을 다시 연다
+    fmRefStatus.style.whiteSpace = 'pre-line';
+    fmRefStatus.textContent = '🗺 ' + rec.label + ' 지도에서 지정됨 (눌러 찍은 오차 약 ±' + acc + 'm)\n※ 지도 자체의 위치 오차는 포함되지 않았습니다.';
+  }
+
+  if(mapStage) mapStage.addEventListener('click', (ev) => {
+    if(!refPick || !leafletMap) return;
+    // 확대/축소 버튼 등 지도 조작 버튼은 그대로 동작
+    if(ev.target && ev.target.closest && ev.target.closest('.leaflet-control, button')) return;
+    ev.stopPropagation(); ev.preventDefault(); // 일반 지점 만들기로 넘어가지 않게 막는다
+    const z = leafletMap.getZoom();
+    if(z < REF_PICK_MIN_ZOOM){
+      moveBannerText.textContent = '더 확대해주세요 (지금 ' + z + '단계 → ' + REF_PICK_MIN_ZOOM + '단계 이상). 확대한 뒤 ' + refPick.label + ' 위치를 눌러주세요';
+      return;
+    }
+    const ll = leafletMap.mouseEventToLatLng(ev);
+    finishRefMapPick(ll.lat, ll.lng, z);
+  }, true);
+
+  btnCancelMove.addEventListener('click', () => {
+    if(!refPick) return;
+    const site = sites.find(s => s.id === refPick.siteId);
+    refPick = null;
+    refClearMapLayer();
+    moveBanner.style.display = 'none';
+    if(site) openFacilityModalForEdit(site);
+  });
+
+  if(fmRefPickStart) fmRefPickStart.addEventListener('click', () => startRefMapPick('start'));
+  if(fmRefPickMid) fmRefPickMid.addEventListener('click', () => startRefMapPick('mid'));
+  if(fmRefPickEnd) fmRefPickEnd.addEventListener('click', () => startRefMapPick('end'));
 
   function openFacilityModalForEdit(site){
     editingSiteId = site.id;

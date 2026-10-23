@@ -14,6 +14,12 @@ function check(name, ok, detail) { console.log(`[${ok ? 'PASS' : 'FAIL'}] ${name
 ['fmRefSection', 'fmRefList', 'fmRefStatus', 'fmRefStart', 'fmRefMid', 'fmRefEnd', 'fmRefFinish', 'fmRefCancel']
   .forEach(id => check('요소 ' + id, html.includes('id="' + id + '"')));
 
+// 1-2. 지도에서 직접 지정(GPS가 안 잡히는 곳)
+['fmRefPickStart', 'fmRefPickMid', 'fmRefPickEnd'].forEach(id => check('요소 ' + id, html.includes('id="' + id + '"')));
+check('지도 지정: 일반 지점 만들기 가로채기(capture)', /mapStage\.addEventListener\('click'[\s\S]*?\}, true\);/.test(html));
+check('지도 지정: 확대 단계 제한', /REF_PICK_MIN_ZOOM = 18/.test(html));
+check('지도 지정: 기존 지도 클릭 처리는 수정 없음', html.includes("leafletMap.on('click', (e)=>{\n      if(movingMarkerId){"));
+
 // 2. 연결 지점: 정보 수정에서 보이고, 새 시설물에서는 숨김
 check('정보 수정 때 구역 표시', /fmYear\.value = site\.completionYear \|\| '';\s*renderRefPoints\(site\);/.test(html));
 check('새 시설물에서는 숨김', /renderRefPoints\(null\);/.test(html));
