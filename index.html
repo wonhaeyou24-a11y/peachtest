@@ -2619,6 +2619,20 @@
         <label>관리기관<input id="fmAgency" type="text" placeholder="예: OO시설공단"></label>
         <label>준공년도<input id="fmYear" type="text" inputmode="numeric" placeholder="예: 2005"></label>
       </div>
+      <!-- 기준점(시점·종점): 정보 수정 때만 보인다. 손상 위치를 "시점에서 몇 m"로 계산하는 기준 -->
+      <div id="fmRefSection" style="display:none; margin-top:14px; padding-top:12px; border-top:1px solid var(--line);">
+        <div style="font-weight:700; margin-bottom:4px;">📍 기준점 (시점·종점)</div>
+        <div class="hint">시설물의 시작·끝 지점에 서서 버튼을 누르면 GPS를 30초 동안 평균 내어 저장합니다. 나중에 손상 위치를 "시점에서 몇 m"로 계산하는 기준이 됩니다. 하늘이 트인 곳에서 가만히 서서 측정하세요. 굽은 시설물은 중간점도 찍어주세요.</div>
+        <div id="fmRefList" style="margin-top:8px;"></div>
+        <div id="fmRefStatus" class="hint" style="margin-top:6px;"></div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;">
+          <button class="ghost" id="fmRefStart" type="button">📍 시점 찍기</button>
+          <button class="ghost" id="fmRefMid" type="button">📍 중간점 추가</button>
+          <button class="ghost" id="fmRefEnd" type="button">📍 종점 찍기</button>
+          <button class="primary" id="fmRefFinish" type="button" style="display:none;">지금 확정</button>
+          <button class="ghost" id="fmRefCancel" type="button" style="display:none;">측정 취소</button>
+        </div>
+      </div>
     </div>
     <div class="modal-foot">
       <button class="ghost" id="fmCancel">취소</button>
@@ -3190,7 +3204,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v105';
+  const PS_BUILD = 'v106';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -11968,8 +11982,195 @@
     fmDesc.value=''; fmLength.value=''; fmHeight.value='';
     fmSurveyDate.value = new Date().toISOString().slice(0,10);
     fmRoute.value=''; fmAddress.value=''; fmAgency.value=''; fmYear.value='';
+    renderRefPoints(null); // 새 시설물에는 기준점 구역을 숨긴다(만든 뒤 "정보 수정"에서 찍는다)
     facilityModal.style.display = 'flex';
   }
+
+  // ---------- 기준점 (시설물 시점·종점·중간점) ----------
+  // 손상 위치를 "시점에서 몇 m"로 계산하는 기준. 시설물(site)의 refPoints 배열에만 저장하고,
+  // 계산·표시는 피치샷 데스크가 한다. 이 블록은 기존 저장/동기화 함수를 호출만 하고 고치지 않는다.
+  // refPoints: [{ id, role:'start'|'mid'|'end', label, lat, lng, accuracy, spread, samples, quality, recordedAt }]
+  const REF_CAPTURE_SEC = 30;       // 평균 내는 시간
+  const REF_CAPTURE_MAX_SEC = 90;   // 표본이 모자랄 때 기다려주는 최대 시간
+  const REF_MIN_SAMPLES = 3;
+  const fmRefSection = document.getElementById('fmRefSection');
+  const fmRefList = document.getElementById('fmRefList');
+  const fmRefStatus = document.getElementById('fmRefStatus');
+  const fmRefStart = document.getElementById('fmRefStart');
+  const fmRefMid = document.getElementById('fmRefMid');
+  const fmRefEnd = document.getElementById('fmRefEnd');
+  const fmRefFinish = document.getElementById('fmRefFinish');
+  const fmRefCancel = document.getElementById('fmRefCancel');
+  let refCapture = null; // { siteId, role, label, samples, lastTs, startedAt, timer }
+
+  function refPointsOf(site){ return Array.isArray(site && site.refPoints) ? site.refPoints : []; }
+  function refRoleOrder(r){ return r.role === 'start' ? 0 : (r.role === 'end' ? 2 : 1); }
+  function refQualityOf(acc){ return acc <= 5 ? 'good' : (acc <= 10 ? 'fair' : 'poor'); }
+  function refQualityText(q){ return q === 'good' ? '좋음' : (q === 'fair' ? '보통' : '오차 큼 ⚠'); }
+
+  function refSetButtons(){
+    const busy = !!refCapture;
+    [fmRefStart, fmRefMid, fmRefEnd].forEach(b => { if(b) b.disabled = busy; });
+    if(fmRefFinish) fmRefFinish.style.display = busy ? '' : 'none';
+    if(fmRefCancel) fmRefCancel.style.display = busy ? '' : 'none';
+  }
+
+  function renderRefPoints(site){
+    if(!fmRefSection) return;
+    fmRefSection.style.display = site ? '' : 'none';
+    if(!site) return;
+    const list = refPointsOf(site).slice().sort((a, b) =>
+      refRoleOrder(a) - refRoleOrder(b) || String(a.recordedAt || '').localeCompare(String(b.recordedAt || '')));
+    fmRefList.textContent = '';
+    if(!list.length){
+      const empty = document.createElement('div');
+      empty.className = 'hint';
+      empty.textContent = '아직 저장된 기준점이 없습니다.';
+      fmRefList.appendChild(empty);
+    }
+    list.forEach(r => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--line); font-size:13px;';
+      const txt = document.createElement('div');
+      txt.style.flex = '1';
+      const t = r.recordedAt ? new Date(r.recordedAt) : null;
+      const hhmm = t && !isNaN(t) ? (String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0')) : '';
+      txt.textContent = '✅ ' + r.label + ' · ±' + Math.round(r.accuracy) + 'm (' + refQualityText(r.quality) + ') · 표본 ' +
+        r.samples + '개 · 퍼짐 ' + r.spread + 'm' + (hhmm ? ' · ' + hhmm : '') + (r.spread > 15 ? ' · 측정 중 움직였을 수 있음' : '');
+      const del = document.createElement('button');
+      del.type = 'button'; del.className = 'ghost'; del.textContent = '삭제';
+      del.addEventListener('click', () => deleteRefPoint(site.id, r.id));
+      row.appendChild(txt); row.appendChild(del);
+      fmRefList.appendChild(row);
+    });
+    if(!refCapture){
+      const s = list.find(r => r.role === 'start'), e = list.find(r => r.role === 'end');
+      let msg = '';
+      if(s && e){
+        const d = haversine(s.lat, s.lng, e.lat, e.lng);
+        msg = '시점~종점 직선거리 약 ' + d.toFixed(1) + 'm';
+        const len = parseFloat(String(site.length || '').replace(/,/g, ''));
+        if(isFinite(len) && len > 0) msg += ' (입력된 연장 ' + len + 'm)';
+      } else if(list.length){
+        msg = '시점과 종점을 모두 찍으면 직선거리가 표시됩니다.';
+      }
+      if(!iOwnFacility(site)) msg += (msg ? '\n' : '') + '※ 다른 사람이 만든 시설물이라 기준점이 클라우드에 올라가지 않고 이 기기에만 저장됩니다.';
+      fmRefStatus.style.whiteSpace = 'pre-line';
+      fmRefStatus.textContent = msg;
+    }
+    refSetButtons();
+  }
+
+  async function persistRefPoints(site){
+    site.savedAt = new Date().toISOString();
+    try{ await saveState(); }catch(e){}
+    // saveState는 지금 열려 있는 시설물만 큐에 넣는다 — 수정한 시설물이 다른 것일 수 있어 직접 큐에 넣는다.
+    try{ queueEntitySyncForFacility(site); }catch(e){}
+  }
+
+  function deleteRefPoint(siteId, refId){
+    const site = sites.find(s => s.id === siteId);
+    if(!site) return;
+    const r = refPointsOf(site).find(x => x.id === refId);
+    if(!r) return;
+    if(!confirm(r.label + ' 기준점을 삭제할까요?')) return;
+    site.refPoints = refPointsOf(site).filter(x => x.id !== refId);
+    persistRefPoints(site);
+    renderRefPoints(site);
+  }
+
+  function refSummarize(samples){
+    // 정확도(오차) 값이 작은 표본일수록 더 믿고 평균을 낸다
+    let sw = 0, la = 0, ln = 0;
+    samples.forEach(s => { const w = 1 / Math.pow(Math.max(s.accuracy || 50, 1), 2); sw += w; la += s.lat * w; ln += s.lng * w; });
+    const lat = la / sw, lng = ln / sw;
+    const accs = samples.map(s => s.accuracy || 50).sort((a, b) => a - b);
+    const med = accs[Math.floor(accs.length / 2)];
+    let spread = 0;
+    samples.forEach(s => { spread = Math.max(spread, haversine(lat, lng, s.lat, s.lng)); });
+    return {
+      lat: Math.round(lat * 1e7) / 1e7, lng: Math.round(lng * 1e7) / 1e7,
+      accuracy: Math.round(med * 10) / 10, spread: Math.round(spread * 10) / 10, samples: samples.length
+    };
+  }
+
+  function stopRefCapture(){
+    if(refCapture && refCapture.timer) clearInterval(refCapture.timer);
+    refCapture = null;
+    refSetButtons();
+  }
+
+  function startRefCapture(role){
+    if(refCapture) return;
+    const site = sites.find(s => s.id === editingSiteId);
+    if(!site) return;
+    if(!navigator.geolocation){ alert('이 기기는 GPS를 지원하지 않습니다.'); return; }
+    const had = refPointsOf(site).find(r => r.role === role);
+    const label = role === 'start' ? '시점' : (role === 'end' ? '종점' : '중간점');
+    if(role !== 'mid' && had && !confirm(label + '이 이미 저장되어 있습니다. 다시 찍어서 바꿀까요?')) return;
+    refCapture = { siteId: site.id, role, label, samples: [], lastTs: null, startedAt: Date.now(), timer: null };
+    refCapture.timer = setInterval(refCaptureTick, 500);
+    refSetButtons();
+    refCaptureTick();
+  }
+
+  function refCaptureTick(){
+    const c = refCapture;
+    if(!c) return;
+    // 버튼을 누르기 전에 받은 값(걸어오는 동안의 옛 위치, 캐시된 값)은 표본에서 뺀다
+    if(lastGps && lastGps.lat != null && lastGps.timestamp !== c.lastTs && lastGps.timestamp >= c.startedAt){
+      c.lastTs = lastGps.timestamp;
+      c.samples.push({ lat: lastGps.lat, lng: lastGps.lng, accuracy: lastGps.accuracy });
+    }
+    const sec = Math.floor((Date.now() - c.startedAt) / 1000);
+    fmRefStatus.style.whiteSpace = 'pre-line';
+    fmRefStatus.textContent = c.label + ' 측정 중… ' + sec + '/' + REF_CAPTURE_SEC + '초 · 표본 ' + c.samples.length + '개 · ' +
+      (lastGps ? '현재 ±' + Math.round(lastGps.accuracy) + 'm' : 'GPS 신호 대기 중') + '\n움직이지 말고 기다려주세요.';
+    if(sec >= REF_CAPTURE_SEC && c.samples.length >= REF_MIN_SAMPLES){ finishRefCapture(); return; }
+    if(sec >= REF_CAPTURE_MAX_SEC){
+      const n = c.samples.length;
+      stopRefCapture();
+      fmRefStatus.textContent = 'GPS 표본이 부족해(' + n + '개) 저장하지 못했습니다. 하늘이 트인 곳에서 다시 시도해주세요.';
+    }
+  }
+
+  async function finishRefCapture(){
+    const c = refCapture;
+    if(!c) return;
+    if(c.samples.length < REF_MIN_SAMPLES){
+      fmRefStatus.textContent = '표본이 ' + REF_MIN_SAMPLES + '개 이상 모여야 확정할 수 있습니다. 조금만 더 기다려주세요. (지금 ' + c.samples.length + '개)';
+      return;
+    }
+    const site = sites.find(s => s.id === c.siteId);
+    const sum = refSummarize(c.samples);
+    stopRefCapture();
+    if(!site) return;
+    const existing = refPointsOf(site);
+    let label = c.label;
+    if(c.role === 'mid') label = '중간 ' + (existing.filter(r => r.role === 'mid').length + 1);
+    const rec = Object.assign({
+      id: 'rp' + Date.now() + Math.random().toString(36).slice(2, 5),
+      role: c.role, label,
+      quality: refQualityOf(sum.accuracy),
+      recordedAt: new Date().toISOString()
+    }, sum);
+    site.refPoints = existing.filter(r => c.role === 'mid' || r.role !== c.role).concat([rec]);
+    renderRefPoints(site);
+    await persistRefPoints(site);
+    fmRefStatus.style.whiteSpace = 'pre-line';
+    fmRefStatus.textContent = '✅ ' + label + ' 저장됨 (±' + Math.round(rec.accuracy) + 'm, ' + refQualityText(rec.quality) + ')' +
+      (rec.quality === 'poor' ? '\n오차가 큽니다. 하늘이 트인 곳에서 다시 찍는 것을 권합니다.' : '');
+  }
+
+  if(fmRefStart) fmRefStart.addEventListener('click', () => startRefCapture('start'));
+  if(fmRefMid) fmRefMid.addEventListener('click', () => startRefCapture('mid'));
+  if(fmRefEnd) fmRefEnd.addEventListener('click', () => startRefCapture('end'));
+  if(fmRefFinish) fmRefFinish.addEventListener('click', () => finishRefCapture());
+  if(fmRefCancel) fmRefCancel.addEventListener('click', () => {
+    stopRefCapture();
+    const site = sites.find(s => s.id === editingSiteId);
+    renderRefPoints(site || null);
+  });
 
   function openFacilityModalForEdit(site){
     editingSiteId = site.id;
@@ -11990,6 +12191,7 @@
     fmAddress.value = site.address || '';
     fmAgency.value = site.agency || '';
     fmYear.value = site.completionYear || '';
+    renderRefPoints(site);
     facilityModal.style.display = 'flex';
   }
 
