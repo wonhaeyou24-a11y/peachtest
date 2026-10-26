@@ -1313,7 +1313,7 @@
       display:grid; grid-template-columns: minmax(0, 44%) minmax(0, 1fr);
       grid-template-rows:auto 1fr; column-gap:12px; align-items:start;
     }
-    #previewModal .photo-card-top{ grid-column:1; grid-row:1 / span 2; align-self:start; border-radius:8px; }
+    #previewModal .photo-card-top{ grid-column:1; grid-row:1 / span 2; align-self:start; border-radius:8px; position:sticky; top:0; }   /* 가로 2단 화면에서만 왼쪽 사진 고정 */
     #previewModal .photo-card-top img{ max-height: calc(98vh - 168px); border-radius:8px; }
     #previewModal .damage-box{ grid-column:2; grid-row:1; border-top:none; padding-top:0; }
     #previewModal .photo-card > textarea.photo-note,
@@ -1690,13 +1690,11 @@
        않는다 — 그래서 모서리는 사진(.photo-card-top img)쪽에 직접 둥글게 준다. */
   }
   .photo-card-top{
-    /* iOS Safari에서 이 sticky 사진과 스크롤되는 손상 선택 영역이 겹쳐 보이는
-       렌더링 버그가 있다는 걸 알면서도, "사진 고정 + 아래만 스크롤"이 현장
-       업무 효율에 더 중요하다는 요청으로 되돌린다. isolation/transform으로
-       별도 레이어를 만들어 완화를 시도하지만 iOS에서 100% 해결된다는 보장은
-       없다 — 겹침이 남아있다면 실제 기기에서의 추가 스크린샷이 다음 시도에 필요하다. */
-    position: sticky;
-    top: 0;
+    /* v113: 세로 화면에서는 사진을 고정하지 않고 창 전체가 함께 스크롤된다.
+       사진을 위에 고정해 두니 손상내용을 쓰고 체크하는 영역이 좁아져 현장에서 보기 어려웠다
+       (그리고 iOS 에서 고정 사진과 아래 입력칸이 겹쳐 보이는 문제도 있었다).
+       가로 모드의 2단 화면(왼쪽 사진·오른쪽 입력)에서만 사진을 왼쪽에 고정한다 — 아래 미디어쿼리 참고. */
+    position: static;
     z-index: 2;
     background: var(--panel-2);
     border-radius: 8px 8px 0 0;
@@ -3210,7 +3208,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v112';
+  const PS_BUILD = 'v113';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{

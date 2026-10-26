@@ -32,8 +32,8 @@ function extract(src, header) {
 }
 
 // ---------------------------------------------------------------- 1) 정적 확인
-check('PS_BUILD v112', html.includes("const PS_BUILD = 'v112'"));
-check('service-worker 캐시 이름도 v112', /point-shot-v112-/.test(fs.readFileSync(path.join(__dirname, '..', 'service-worker.js'), 'utf8')));
+check('PS_BUILD v112 이상 (이 수정이 들어간 버전)', /const PS_BUILD = 'v(11[2-9]|1[2-9]\d)'/.test(html));
+check('service-worker 캐시 이름도 v112 이상', /point-shot-v(11[2-9]|1[2-9]\d)-/.test(fs.readFileSync(path.join(__dirname, '..', 'service-worker.js'), 'utf8')));
 check('deleteMarker 가 삭제를 클라우드 큐에 넣음', /idbDeleteInspectionPoint\(markerId, false\)[^\n]*\n\s*try\{ queueMarkerDeleteSync\(m\); \}catch\(e\)\{\}/.test(html));
 check('Ctrl+Z "찍기 취소" 도 삭제를 큐에 넣음', /idbDeleteInspectionPoint\(action\.markerId, true\)[^\n]*\n\s*try\{ queueMarkerDeleteSync\(m\); \}catch\(e\)\{\}/.test(html));
 check('pull 3곳이 삭제 표시된 지점을 받지 않음', (html.match(/from\('ps_inspection_points'\)\.select\('\*'\)\.eq\('project_id', (cloudProjectId|targetProjId)\)\.is\('deleted_at', null\)/g) || []).length === 3);
