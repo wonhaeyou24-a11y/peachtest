@@ -3,7 +3,7 @@
  */
 
 const fs = require('fs');
-const indexHtml = fs.readFileSync('c:\\Users\\dashl\\Desktop\\peachtest\\index.html', 'utf8');
+const indexHtml = fs.readFileSync(require('path').join(__dirname, '..', 'index.html'), 'utf8');
 
 const results = [];
 function record(id, name, pass, detail) {

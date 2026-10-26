@@ -7,7 +7,7 @@
  */
 
 const fs = require('fs');
-const indexHtml = fs.readFileSync('c:\\Users\\dashl\\Desktop\\peachtest\\index.html', 'utf8');
+const indexHtml = fs.readFileSync(require('path').join(__dirname, '..', 'index.html'), 'utf8');
 
 const results = [];
 function record(id, name, pass, detail) {
@@ -99,7 +99,7 @@ async function runPeachShotRegressionSuite() {
   record('REG-04', '도면 추가 버튼 정상 표시', indexHtml.includes('renderDrawingTabs') && indexHtml.includes('＋ 도면 추가') && indexHtml.includes('drawing-tab-add'), '도면 0개 시에도 도면 추가 버튼 항상 노출 확인');
 
   // REG-05 ~ REG-08: 지점 생성 및 카메라 연동
-  record('REG-05', '도면 모드 -> 지점 생성', indexHtml.includes('commitNewMarker(newMarkerBase({ xPct, yPct, drawingId: currentDrawingId }));'), '도면 탭 터치 시 동기식 commitNewMarker 호출 확인');
+  record('REG-05', '도면 모드 -> 지점 생성', /const newImgMarker = newMarkerBase\(\{ xPct, yPct, drawingId: currentDrawingId \}\);\s*lastPointAction = \{[^}]*\};\s*commitNewMarker\(newImgMarker\);/.test(indexHtml), '도면 탭 터치 시 동기식 commitNewMarker 호출 확인');
   record('REG-06', '지도 모드 -> 지점 생성', indexHtml.includes("leafletMap.on('click'") && indexHtml.includes('commitNewMarker(marker);'), '지도 클릭 시 동기식 commitNewMarker 호출 확인');
   record('REG-07', 'GPS -> 지점 생성', indexHtml.includes('btnAddAtGps') && indexHtml.includes('commitNewMarker(marker);'), 'GPS 버튼 클릭 시 동기식 commitNewMarker 호출 확인');
   record('REG-08', '지점 생성 -> 카메라 즉시 열림', indexHtml.includes('function commitNewMarker(marker){') && indexHtml.includes('openCapture('), '사용자 제스처 동기 실행 체인 내 openCapture 즉시 실행 확인');

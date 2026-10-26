@@ -1,6 +1,6 @@
 const fs = require('fs');
 
-const indexHtml = fs.readFileSync('c:\\Users\\dashl\\Desktop\\peachtest\\index.html', 'utf8');
+const indexHtml = fs.readFileSync(require('path').join(__dirname, '..', 'index.html'), 'utf8');
 
 const results = [];
 function record(id, name, pass, detail) {
@@ -27,7 +27,8 @@ async function runPhase42TestSuite() {
     indexHtml.includes("await processSyncQueue()") &&
     indexHtml.includes("await pullCloudChanges()");
 
-  const hasPsInspectionPointsMapping = indexHtml.includes("drawing_id: (point && point.drawingId) || null") &&
+  // (지점의 소속 도면은 drawing_id 컬럼이 아니라 data 블롭의 drawingId 로만 다닌다 — 위 도면 항목 참고)
+  const hasPsInspectionPointsMapping = indexHtml.includes("drawing_id: null, // 경로 단일화: 도면 참조는 data.drawingId 로만") &&
     indexHtml.includes("facility_id: facId") &&
     indexHtml.includes("project_id: projId") &&
     indexHtml.includes("schema_version: 8") &&
@@ -38,8 +39,11 @@ async function runPhase42TestSuite() {
     indexHtml.includes("damage_type: dmg.damageType || dmg.damage_type || dmg.type || null") &&
     indexHtml.includes("component: dmg.component || null");
 
-  const hasPsDrawingsMapping = indexHtml.includes("name: drawing.name || '도면'") &&
-    indexHtml.includes("svg_data: drawing.svgData || drawing.svg || null");
+  // 도면은 더 이상 ps_drawings 테이블이 아니라 시설물 blob(ps_facilities.data.drawings)으로만 동기화된다
+  // (경로 단일화: 도면 행이 없어서 지점 업로드가 거부되던 FK 문제를 없앰). 그래서 도면 지문이 시설물 변경 감지에 들어 있는지 확인한다.
+  const hasPsDrawingsMapping = indexHtml.includes('copy.__drawingsFingerprint') &&
+    indexHtml.includes("(site.drawings || [])") &&
+    !indexHtml.includes("from('ps_drawings').upsert(");
 
   const hasPsPhotoIndexMapping = indexHtml.includes("from('ps_photo_index').upsert({") &&
     indexHtml.includes("photo_id: entityId") &&
@@ -57,7 +61,7 @@ async function runPhase42TestSuite() {
     hasSyncDiagnostics && hasRetryDelays && hasSyncProcessingLock && hasOnlineAutoSync &&
     hasPsInspectionPointsMapping && hasPsDamagesMapping && hasPsDrawingsMapping &&
     hasPsPhotoIndexMapping && hasPsSyncConflictsMapping,
-    '7개 Supabase 테이블 스키마, PeachShotSyncDiagnostics, 재시도 백오프 정적 선언 확인');
+    'Supabase 테이블 스키마(도면은 시설물 blob), PeachShotSyncDiagnostics, 재시도 백오프 정적 선언 확인');
 
   // --- Dynamic Simulation Engine ---
   class MockDatabase {

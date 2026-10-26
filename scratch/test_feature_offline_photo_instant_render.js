@@ -3,7 +3,7 @@
  */
 
 const fs = require('fs');
-const indexHtml = fs.readFileSync('c:\\Users\\dashl\\Desktop\\peachtest\\index.html', 'utf8');
+const indexHtml = fs.readFileSync(require('path').join(__dirname, '..', 'index.html'), 'utf8');
 
 const results = [];
 function record(id, name, pass, detail) {
@@ -21,7 +21,8 @@ async function runFeatureTest() {
   record('FEAT-01', 'extractPhotoBlobsFromMarkers 메모리 p.src 보존', preservesMemorySrc, '사진 바이너리는 photoBlobs에 안전 저장되고 메모리 src는 UI를 위해 온전히 유지됨');
 
   // 2. performSaveState에서 KV 스토어에만 경량 스냅샷을 만들어 저장하는지 검증
-  const hasLightweightSnapshot = indexHtml.includes('const lightweightSites = (sites || []).map') && indexHtml.includes('delete pCopy.src');
+  // 저장은 sites 를 직접 고치지 않고 복사본만 경량화한다: lightweightSitesFor(sites) -> stripPhotoHeavyFields(복사본 pCopy 에서 src 삭제)
+  const hasLightweightSnapshot = indexHtml.includes('const lightweightSites = lightweightSitesFor(sites);') && indexHtml.includes('function stripPhotoHeavyFields(p){') && indexHtml.includes('delete pCopy.src');
   record('FEAT-02', 'performSaveState KV 스토어 전용 경량 스냅샷 직렬화', hasLightweightSnapshot, '실시간 메모리 손상 없이 IndexedDB KV 스냅샷만 Base64 제외 경량 직렬화');
 
   // 3. openPreview 및 renderPreviewGrid에 photoBlobs 즉시 로드 이중 방어가 적용되었는지 검증
