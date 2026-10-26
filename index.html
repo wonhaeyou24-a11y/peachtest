@@ -3208,7 +3208,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v113';
+  const PS_BUILD = 'v114';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -16888,6 +16888,15 @@
     return true;
   }
 
+  // v114: 손상 입력(구분·부위·손상명 변경, 손상 추가·삭제)을 하면 기록목록도 바로 새로 그린다.
+  // 예전엔 지점 상세 창 안의 입력 화면만 다시 그리고 기록목록은 안 그려서, 입력한 내용이 목록에 한참 뒤(상세 창을 다시 열 때 등)에야 보였다.
+  // 짧게 모아서 한 번만 그린다(칩을 연달아 눌러도 입력이 느려지지 않게).
+  let recordListRefreshTimer = null;
+  function scheduleRecordListRefresh(){
+    clearTimeout(recordListRefreshTimer);
+    recordListRefreshTimer = setTimeout(()=>{ try{ renderLog(); }catch(e){} }, 120);
+  }
+
   function renderLog(){
     // 보고서 작업목록 화면은 markers 검색/필터와 무관한 별도 뷰라 가장 먼저 분기한다.
     if(window.innerWidth > 880 && logViewMode === 'worklist'){
@@ -18382,7 +18391,9 @@
       damageListLabel.className = 'damage-label';
       damageBox.appendChild(damageListLabel);
 
+      let damageFormBuilt = false;   // 처음 만드는 중에는 기록목록을 다시 그리지 않는다
       function renderDamageRecords(){
+        if(damageFormBuilt) scheduleRecordListRefresh();   // 값을 바꿨거나 손상을 추가·삭제한 경우: 기록목록도 갱신
         damageBox.querySelectorAll('.damage-record').forEach(el=>el.remove());
         const site = currentSiteObj();
         const stdList = site ? resolveDamageStandard(site.facilityType, site.facilityForm) : null;
@@ -18666,7 +18677,7 @@
             partInput.type = 'text';
             partInput.value = d.component || '';
             partInput.placeholder = '부위 입력 (예: 전면부)';
-            partInput.addEventListener('change', ()=>{ d.component = partInput.value; saveState(); });
+            partInput.addEventListener('change', ()=>{ d.component = partInput.value; scheduleRecordListRefresh(); saveState(); });
             partWrap.appendChild(partInput);
           }
 
@@ -18983,6 +18994,7 @@
         });
       }
       renderDamageRecords();
+      damageFormBuilt = true;
 
       const addDamageBtn = document.createElement('button');
       addDamageBtn.className = 'log-btn role-gated';
@@ -19134,6 +19146,7 @@
   if(btnSaveClosePreview) btnSaveClosePreview.addEventListener('click', async ()=>{
     btnSaveClosePreview.disabled = true;
     try{ await saveState(); }catch(e){}
+    try{ renderLog(); }catch(e){}   // 저장한 내용이 기록목록에 바로 보이게
     btnSaveClosePreview.disabled = false;
     closePreviewModal();
   });
