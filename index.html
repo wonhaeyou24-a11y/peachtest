@@ -3210,7 +3210,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v111';
+  const PS_BUILD = 'v112';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -3596,6 +3596,33 @@
       });
     });
   }
+
+  // ---------- 갑작스런 종료 추적 (v112) ----------
+  // iOS 가 메모리 때문에 앱 화면(웹 프로세스)을 갑자기 끝내면 JS 오류가 남지 않아 원인을 알 수 없었다
+  // (화면이 하얗게 되며 첫 화면으로 돌아가는 현상). "마지막 동작"을 기기에 적어 두고, 다음 실행 때 앞선 실행이
+  // 정상적으로 닫히지 않았으면 진단로그에 남긴다. 기록만 하며 앱 동작에는 영향이 없다.
+  const PS_CRUMB_KEY = 'ps_last_crumb', PS_CLEAN_KEY = 'ps_clean_exit';
+  function psCrumb(action, extra){
+    try{ localStorage.setItem(PS_CRUMB_KEY, JSON.stringify(Object.assign({ t: new Date().toISOString(), a: action }, extra || {}))); }catch(e){}
+  }
+  function psInitCrashTrace(){
+    try{
+      const prevClean = localStorage.getItem(PS_CLEAN_KEY);   // '1' = 화면이 숨겨지며 끝남, '0' = 화면이 켜진 채 끝남(갑작스런 종료), null = 처음
+      const prevCrumbRaw = localStorage.getItem(PS_CRUMB_KEY);
+      let prevCrumb = null; try{ prevCrumb = prevCrumbRaw ? JSON.parse(prevCrumbRaw) : null; }catch(e){}
+      localStorage.setItem(PS_CLEAN_KEY, '0');
+      if(prevClean === '0'){
+        diagLog('lifecycle', '이전 실행이 화면이 켜진 채 갑자기 종료된 것으로 보임 (하얀 화면 후 다시 시작)', { lastCrumb: prevCrumb });
+      } else if(prevCrumb){
+        diagLog('lifecycle', '이전 실행의 마지막 동작', { lastCrumb: prevCrumb, cleanExit: prevClean });
+      }
+    }catch(e){}
+    try{
+      document.addEventListener('visibilitychange', ()=>{ try{ localStorage.setItem(PS_CLEAN_KEY, document.visibilityState === 'hidden' ? '1' : '0'); }catch(e){} });
+      window.addEventListener('pagehide', ()=>{ try{ localStorage.setItem(PS_CLEAN_KEY, '1'); }catch(e){} });
+    }catch(e){}
+  }
+  psInitCrashTrace();
 
   // ================================================================
   // 데이터 스키마 버전 / 마이그레이션 — STEP 2
@@ -7053,7 +7080,7 @@
     if(!isTeamProject){
       try{
         const [ptR, edR] = await Promise.all([
-          supabaseClient.from('ps_inspection_points').select('*').eq('project_id', cloudProjectId),
+          supabaseClient.from('ps_inspection_points').select('*').eq('project_id', cloudProjectId).is('deleted_at', null),
           supabaseClient.from('ps_existing_damages').select('*').eq('project_id', cloudProjectId)
         ]);
         if(ptR.error) throw ptR.error;
@@ -10838,6 +10865,16 @@
           if(found){ point = found; if(!item.facilityId) item.facilityId = s.id; if(!item.projectId) item.projectId = s.projectId; break; }
         }
         if(!point && op !== 'delete') return { ok: true };
+        // 삭제 작업(v112): 지점이 이미 markers 에서 빠졌으므로 휴지통에 있는 지점 내용을 그대로 실어 보낸다
+        // (빈 내용으로 덮어써 클라우드 행의 내용이 사라지는 것 방지).
+        if(!point && op === 'delete') point = findTrashedMarker(entityId);
+        // 휴지통에서도 못 찾으면(휴지통을 비운 뒤 등) 행의 내용은 건드리지 않고 삭제 표시만 한다.
+        if(!point && op === 'delete'){
+          const nowIso = new Date().toISOString();
+          const { error: delErr } = await supabaseClient.from('ps_inspection_points')
+            .update({ deleted_at: nowIso, updated_at: nowIso, updated_by: userId }).eq('id', entityId);
+          return delErr ? { ok: false, reason: delErr.message } : { ok: true };
+        }
         const projId = item.projectId || currentProjectId;
         const facId = item.facilityId || currentSiteId;
         const pObj = projects.find(p => p.id === projId);
@@ -10847,7 +10884,7 @@
         // 수 있으므로 둘 중 큰 값을 기준으로 삼는다(project 브랜치와 동일한 처리 —
         // 이게 없으면 pull로 최신 revision을 받아와도 큐에 남은 옛 스냅샷 때문에 계속 충돌).
         const ipBaseRevision = Math.max(expectedRevision, (point && typeof point.revision === 'number') ? point.revision : 1);
-        const { data: existing, error: checkErr } = await fetchExisting('ps_inspection_points', 'revision, data, user_id, project_id, facility_id');
+        const { data: existing, error: checkErr } = await fetchExisting('ps_inspection_points', 'revision, data, user_id, project_id, facility_id, deleted_at');
         // 같은 id의 행이 "다른 프로젝트/시설물"에 있으면(불러오기로 생긴 사본 등) 내용이 같아도 건너뛰면 안 된다 —
         // 건너뛰면 이 프로젝트에는 그 지점이 영영 안 올라간다(2026-10-08 동암중: 로컬 39개 중 36개만 확인됨).
         const ipMoved = !!(existing && ((existing.project_id && existing.project_id !== projId) || (existing.facility_id && existing.facility_id !== facId)));
@@ -10861,12 +10898,12 @@
           return { ok: true, skipped: true, reason: 'not-owner' };
         }
         // 클라우드에 이미 있고 내용이 로컬과 같으면 올릴 게 없다 — 넘어간다.
-        if(!checkErr && existing && !ipMoved && point && op !== 'delete' && sameSyncedContent(point, existing.data || existing)){
+        if(!checkErr && existing && !existing.deleted_at && !ipMoved && point && op !== 'delete' && sameSyncedContent(point, existing.data || existing)){   // 삭제 표시가 있는 행은 건너뛰지 않는다 (복원하면 deleted_at 이 지워져야 함)
           if(typeof existing.revision === 'number') point.revision = Math.max(point.revision || 1, existing.revision);
           return { ok: true, skipped: true };
         }
         if(!checkErr && existing && existing.revision && existing.revision > ipBaseRevision){
-          if(!ipMoved && point && sameSyncedContent(point, existing.data || existing)){
+          if(!ipMoved && point && !existing.deleted_at && sameSyncedContent(point, existing.data || existing)){
             // 리비전만 뒤처졌을 뿐 조사 내용은 동일 — 충돌 아님. 클라우드 리비전 수용.
             point.revision = existing.revision;
             diagLog('sync', 'auto-reconcile: inspection_point ' + entityId, { adopted_revision: existing.revision });
@@ -11200,7 +11237,7 @@
       //   "팀원 자료 가져오기" 체감 속도 개선.
       const [_facR, _ptR, _edR] = await Promise.all([
         supabaseClient.from('ps_facilities').select('*').eq('project_id', targetProjId),
-        supabaseClient.from('ps_inspection_points').select('*').eq('project_id', targetProjId),
+        supabaseClient.from('ps_inspection_points').select('*').eq('project_id', targetProjId).is('deleted_at', null),
         supabaseClient.from('ps_existing_damages').select('*').eq('project_id', targetProjId)
       ]);
       const remoteFacs = _facR && _facR.data;
@@ -11277,7 +11314,7 @@
       const remotePointFacility = new Map(); // id -> facility_id (진단용)
       try{
         const remotePts = _remotePtsPrefetched
-          || ((await supabaseClient.from('ps_inspection_points').select('*').eq('project_id', targetProjId)).data);
+          || ((await supabaseClient.from('ps_inspection_points').select('*').eq('project_id', targetProjId).is('deleted_at', null)).data);
         if(Array.isArray(remotePts)){
           remotePts.forEach(rp => {
             remotePointIds.add(rp.id); remotePointFacility.set(rp.id, rp.facility_id);
@@ -16096,6 +16133,29 @@
     })();
   }
 
+  // ---------- 지점 삭제를 클라우드에 알린다 (v112) ----------
+  // 예전엔 지점을 삭제하면 기기 안의 휴지통으로만 가고 클라우드에는 그대로 남아, 피치샷 데스크·팀원이 삭제한 지점을 계속 받았다.
+  // 이제 삭제 작업을 큐에 넣는다. 클라우드 행은 지우지 않고 deleted_at 만 기록(소프트 삭제)하므로 복원할 수 있다.
+  function findTrashedMarker(id){
+    const scan = arr => (arr || []).find(x => x && x.type === 'marker' && x.data && x.data.id === id);
+    let t = scan(trash);
+    if(!t){ for(const s of sites){ t = scan(s.trash); if(t) break; } }
+    return t ? t.data : null;
+  }
+  function queueMarkerDeleteSync(m){
+    if(!m || !m.id) return;
+    const meId = (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null;
+    if(m.createdBy && meId && m.createdBy !== meId) return;   // 팀원 지점은 내가 올리지 않는다 (기존 규칙과 같음)
+    // 복원했을 때 "내용이 그대로"라며 다시 올라가지 않는 일이 없도록, 마지막으로 큐에 넣은 내용 서명을 지운다
+    try{ lastQueuedEntitySignatures.delete('inspection_point:' + m.id); }catch(e){}
+    enqueueEntitySync({
+      entityType: 'inspection_point', entityId: m.id, operation: 'delete',
+      projectId: currentProjectId, facilityId: currentSiteId,
+      revision: (typeof m.revision === 'number' ? m.revision : 1),
+      payload: { id: m.id }
+    }).catch(()=>{});
+  }
+
   async function deleteMarker(markerId){
     const m = markers.find(x => x.id === markerId);
     if(!m) return;
@@ -16105,6 +16165,7 @@
     trash.push(trashItem);
     lastPointAction = { type:'delete', trashItem };
     try{ await idbDeleteInspectionPoint(markerId, false); }catch(e){}
+    try{ queueMarkerDeleteSync(m); }catch(e){}
     logActivity('지점 삭제', '지점 ' + m.num + ' (휴지통으로 이동)');
     if(movingMarkerId === markerId) cancelMoveMode();
     renderMarkers();
@@ -16126,6 +16187,7 @@
       if(activeMarkerId === action.markerId) closeCaptureModal();
       markers = markers.filter(x => x.id !== action.markerId);
       try{ await idbDeleteInspectionPoint(action.markerId, true); }catch(e){}
+      try{ queueMarkerDeleteSync(m); }catch(e){}
       logActivity('되돌리기(Ctrl+Z)', '지점 ' + m.num + ' 찍기 취소');
       renderMarkers(); renderMapMarkers(); renderLog(); updateCounts();
       saveState();
@@ -17844,6 +17906,26 @@
   }
 
   closeCapture.addEventListener('click', closeCaptureModal);
+
+  // 촬영 흐름 기록 (v112): 화면이 갑자기 닫히는 문제의 원인을 찾기 위한 것 — 기록만 한다.
+  try{
+    let captureWasOpen = false;
+    new MutationObserver(()=>{
+      const open = captureModal.style.display !== 'none' && captureModal.style.display !== '';
+      if(open === captureWasOpen) return;
+      captureWasOpen = open;
+      if(open){
+        psCrumb('촬영창 열림', { mode: currentMode, basemap: (function(){ try{ return localStorage.getItem('ps_basemap') || 'osm'; }catch(e){ return null; } })(), markerId: activeMarkerId });
+        diagLogMemorySnapshot('촬영창 열림 (' + (currentMode === 'map' ? '지도모드' : '도면모드') + ')');
+      } else {
+        psCrumb('촬영창 닫힘', { mode: currentMode });
+      }
+    }).observe(captureModal, { attributes: true, attributeFilter: ['style'] });
+    btnShoot.addEventListener('click', ()=>{   // capture 단계에서 기록만 먼저 하고, 실제 촬영 처리는 아래 기존 핸들러가 그대로 한다
+      const am = markers.find(x=>x.id===activeMarkerId);
+      psCrumb('촬영 버튼', { mode: currentMode, video: video.videoWidth + 'x' + video.videoHeight, photosOnMarker: am && am.photos ? am.photos.length : 0 });
+    }, true);
+  }catch(e){}
   btnDoneCapture.addEventListener('click', closeCaptureModal);
   captureModal.addEventListener('click', (e)=>{ if(e.target === captureModal) closeCaptureModal(); });
 
