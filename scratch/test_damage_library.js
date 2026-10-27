@@ -29,6 +29,7 @@ function extractConst(header) { const i = html.indexOf(header); if (i < 0) throw
 
 // ---------------------------------------------------------------- 정적 확인
 check('PS_BUILD v120 이상', /const PS_BUILD = 'v(12[0-9]|1[3-9]\d)'/.test(html));
+check('여러 형식에 한 번에 담기: 다른 형식 후보·보관(dmPendingForms)·저장 3종에서 함께 저장', ['const dmPendingForms = new Map()', "dmFlushPendingForms('project')", "dmFlushPendingForms('global')", "dmFlushPendingForms('org', orgId)", 'dmLoadFormData(type, form)'].every(k => html.includes(k)));
 check('읽는 지점 하나: getMeasurementFields 가 라이브러리를 먼저 봄', html.includes('const lib = dmLibraryEffective().get(damageType); if(lib && lib.fields.length) return lib.fields;'));
 check('라이브러리 저장소는 이 기기 저장소 키(point-shot-damage-library) + 시작 시 불러옴', html.includes("const DAMAGE_LIBRARY_KEY = 'point-shot-damage-library';") && (html.match(/loadDamageLibrary\(\)/g) || []).length >= 3);
 check('손상마스터 화면: 라이브러리 버튼·부위별 "손상명 가져오기"·카드의 "규모 변경"', ['btnOpenDamageLibrary', '📚 손상명 가져오기', 'dm-scale-btn', 'window.dmPickFromLibrary', 'window.openDamageLibrary'].every(k => html.includes(k)));
@@ -44,7 +45,7 @@ function build(state) {
   const scope = { STANDARD_DB, MEASUREMENT_TEMPLATES, DM_LABEL_PRESETS, globalDamageMaster: state.global || {}, orgDamageMasterCache: {}, projects: state.projects || [], currentProjectId: state.pid || null,
     damageLibrary: state.library || {}, Date, Array, Object, Set, Map, JSON, currentSiteObj: () => null, resolveDamageStandard: () => null };
   const proxy = new Proxy(scope, { has: () => true, get: (t, k) => (k === Symbol.unscopables ? undefined : (k in t ? t[k] : (k in globalThis ? globalThis[k] : undefined))), set: (t, k, v) => { t[k] = v; return true; } });
-  const names = ['dmNormLabel', 'dmFieldDef', 'dmLibraryEffective', 'getMeasurementFields', 'dmNormalizeMeasurementItems', 'syncMeasurementText'];
+  const names = ['dmNormLabel', 'dmFieldDef', 'dmLibraryEffective', 'getMeasurementFields', 'dmNormalizeMeasurementItems', 'syncMeasurementText', 'dmApplyPickToData'];
   const body = `with(__p){ let dmLibCache = null; function dmLibInvalidate(){ dmLibCache = null; }\n${names.map(n => extractFn('function ' + n + '(')).join('\n')}\n return { ${names.join(', ')}, dmLibInvalidate }; }`;
   return new Function('__p', body)(proxy);
 }
@@ -86,6 +87,20 @@ check('수량과 개소 값이 둘 다 있으면 개소 값을 남기고 옛 수
 const d3 = { damageType: '균열', measurementItems: [{ type: 'dm:길이', label: '길이', value: '1.5', unit: 'm' }] };
 t.syncMeasurementText(d3);
 check('수량이 없는 일반 기록은 문자열이 예전과 같음 ("길이 1.5m")', d3.measurement === '길이 1.5m', d3.measurement);
+
+// ---- v121: 부위 묶기 적용 (현재 형식·다른 형식 공통 함수) ----
+t = build({});
+const base = [{ damageType: '균열', component: '전면부' }, { damageType: '박리', component: '전면부' }, { damageType: '이물질 집적', component: '배수시설' }];
+const r1 = t.dmApplyPickToData(base, '전면부', ['유실'], []);
+check('담기: 라이브러리의 규모(유실=4항목)와 부위를 가진 새 항목이 추가됨', r1.length === 4 && r1[3].damageType === '유실' && r1[3].component === '전면부' && r1[3].measurementFields.length === 4 && r1[3].enabled === true);
+check('담기: 이미 있는 손상명은 중복해서 담지 않음 (다른 형식에 이미 있을 때)', t.dmApplyPickToData(r1, '전면부', ['유실', '균열'], []).length === 4);
+const r2 = t.dmApplyPickToData(base, '전면부', [], ['균열']);
+check('빼기: 그 부위의 그 손상명만 빠지고 다른 부위·다른 손상명은 그대로', r2.length === 2 && !r2.some(x => x.damageType === '균열') && r2.some(x => x.damageType === '이물질 집적') && r2.some(x => x.damageType === '박리'));
+const r3 = t.dmApplyPickToData(base, '배수시설', [], ['이물질 집적']);
+check('빼기: 손상명을 모두 빼도 부위는 빈 자리표시 항목으로 남음 (현장에서 부위만 고르면 상태양호)', r3.some(x => x.component === '배수시설' && x.damageType === '') && r3.length === 3);
+const r4 = t.dmApplyPickToData(base, '전면부', ['유실'], ['균열']);
+check('추가와 빼기를 한 번에 해도 됨', r4.some(x => x.damageType === '유실') && !r4.some(x => x.damageType === '균열'));
+check('원본 배열은 바뀌지 않음 (다른 형식 보관용 복사본만 바뀜)', base.length === 3 && base[0].damageType === '균열');
 
 console.log(fail ? `\n실패 ${fail}건` : '\n모두 통과');
 process.exit(fail ? 1 : 0);

@@ -3235,7 +3235,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v120';
+  const PS_BUILD = 'v121';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -21693,10 +21693,12 @@
     if (dmIsDirty) {
       if (!confirm('저장하지 않은 변경사항이 있습니다. 닫으시겠습니까?')) return;
     }
+    dmPendingForms.clear();
     dmModal.style.display = 'none';
   }
   
   async function loadDmConfig() {
+    dmPendingForms.clear();
     const type = dmTypeSel.value;
     const form = dmFormSel.value;
     if (!type || !form) return;
@@ -22208,22 +22210,99 @@
     if(!rows.length){ const e = document.createElement('div'); e.style.cssText = 'color:var(--muted); font-size:13px; padding:12px 0;'; e.textContent = '검색 결과가 없습니다. 위에서 새 손상명으로 등록할 수 있습니다.'; host.appendChild(e); }
   }
 
-  // 부위 묶기: 라이브러리에서 이 부위에 쓸 손상명을 골라 담는다 (체크 해제하면 이 부위에서 뺀다).
+  // ---- v121: 여러 형식에 한 번에 담기 ----
+  // 현재 화면에서 고르는 형식(dmCurrentData) 외의 다른 종류·형식 데이터는 여기 보관해 두었다가, 저장 버튼을 누를 때 같은 위치(프로젝트/이 기기/조직)에 함께 저장한다.
+  const dmPendingForms = new Map();   // 'type\u0001form' -> { type, form, data }
+  const dmPfKey = (t, f) => t + '\u0001' + f;
+  // 다른 형식의 현재 손상마스터 (loadDmConfig 와 같은 우선순위: 프로젝트 > 조직 > 이 기기 공용 > 기준DB). 복사본을 돌려준다.
+  function dmLoadFormData(type, form){
+    const pend = dmPendingForms.get(dmPfKey(type, form));
+    if(pend) return JSON.parse(JSON.stringify(pend.data));
+    const proj = projects.find(x => x.id === currentProjectId) || {};
+    const orgId = proj.organizationId || null;
+    const pick = (o) => o && o[type] && o[type][form];
+    let data = pick(proj.damageMaster);
+    if(!(data && data.length)){ const e = orgId && pick(orgDamageMasterCache[orgId]); data = e && e.data; }
+    if(!(data && data.length)) data = pick(globalDamageMaster);
+    if(!(data && data.length)) data = pick(STANDARD_DB);
+    return JSON.parse(JSON.stringify(data || []));
+  }
+  // 한 형식의 데이터에 "부위 partName 에 toAdd 담기 / toRemove 빼기"를 적용한 새 배열을 돌려준다.
+  function dmApplyPickToData(data, partName, toAdd, toRemove){
+    let out = data.slice();
+    if(toRemove.length) out = out.filter(it => !((it.component || '').trim() === partName && toRemove.includes(it.damageType)));
+    const exists = new Set(out.filter(it => (it.component || '').trim() === partName && it.damageType).map(it => it.damageType));
+    toAdd.forEach(n => {
+      if(exists.has(n)) return;
+      const r = dmLibraryEffective().get(n);
+      const b = (r && r.base) || {};
+      out.push({
+        damageType: n, component: partName, cause: b.cause || '', investigationItems: b.investigationItems || '',
+        repairOptions: (b.repairOptions || []).slice(), reinforcementOptions: (b.reinforcementOptions || []).slice(),
+        sourcePage: b.sourcePage || '', measurementFields: r ? JSON.parse(JSON.stringify(r.fields)) : [], enabled: true
+      });
+    });
+    // 손상명을 모두 뺀 부위도 부위 자체는 남도록 빈 자리표시 항목을 둔다 (현장에서 부위만 고르면 상태양호)
+    if(!out.some(it => (it.component || '').trim() === partName)){
+      out.push({ damageType:'', component: partName, cause:'', repairOptions:[], reinforcementOptions:[], enabled:true });
+    }
+    return out;
+  }
+  // 저장 버튼을 누를 때: 보관해 둔 다른 형식을 같은 위치에 함께 저장한다. 반환: 함께 저장한 형식 수 (조직 저장은 실패 목록도).
+  async function dmFlushPendingForms(scope, orgId){
+    let n = 0; const failed = [];
+    const proj = projects.find(x => x.id === currentProjectId);
+    for(const pf of Array.from(dmPendingForms.values())){
+      const copy = JSON.parse(JSON.stringify(pf.data));
+      if(scope === 'project' && proj){
+        if(!proj.damageMaster) proj.damageMaster = {};
+        if(!proj.damageMaster[pf.type]) proj.damageMaster[pf.type] = {};
+        proj.damageMaster[pf.type][pf.form] = copy; n++;
+      } else if(scope === 'global'){
+        if(!globalDamageMaster[pf.type]) globalDamageMaster[pf.type] = {};
+        globalDamageMaster[pf.type][pf.form] = copy;
+        if(!globalDamageMasterVersion[pf.type]) globalDamageMasterVersion[pf.type] = {};
+        globalDamageMasterVersion[pf.type][pf.form] = (globalDamageMasterVersion[pf.type][pf.form] || 0) + 1; n++;
+      } else if(scope === 'org'){
+        const r = await pushOrgDamageMaster(orgId, pf.type, pf.form, copy);
+        if(r && r.ok) n++; else failed.push(pf.type + ' / ' + pf.form);
+      }
+    }
+    if(scope !== 'org' || !failed.length) dmPendingForms.clear();
+    dmLibInvalidate();
+    return { n, failed };
+  }
+  function dmOtherNote(r){ return r && r.n ? '다른 형식 ' + r.n + '개에도 같은 변경을 함께 저장했습니다.\n' : ''; }
+
+  // 부위 묶기: 라이브러리에서 이 부위에 쓸 손상명을 골라 담는다 (체크 해제하면 이 부위에서 뺀다). 같은 이름의 부위가 있는 다른 형식에도 한 번에 적용할 수 있다.
   window.dmPickFromLibrary = function(partName){
     const lib = Array.from(dmLibraryEffective().values()).sort((a, b) => a.name.localeCompare(b.name, 'ko'));
     const have = new Set((dmCurrentData || []).filter(it => (it.component || '').trim() === partName && it.damageType).map(it => it.damageType));
     const chosen = new Set(have);
+    const curType = dmTypeSel.value, curForm = dmFormSel.value;
+    // 다른 종류·형식 후보
+    const others = [];
+    Object.keys(FACILITY_FORMS).forEach(type => {
+      if(type === '기타') return;
+      FACILITY_FORMS[type].forEach(form => {
+        if(form === '기타' || (type === curType && form === curForm)) return;
+        const data = dmLoadFormData(type, form);
+        const items = data.filter(it => (it.component || '').trim() === partName);
+        others.push({ type, form, hasPart: items.length > 0, names: new Set(items.filter(it => it.damageType).map(it => it.damageType)), on: items.length > 0 });
+      });
+    });
     const ov = dlcOverlay('dmPickModal', `
-      <div class="modal" style="max-width:640px; width:96%; height:86vh; display:flex; flex-direction:column; background:var(--panel);">
+      <div class="modal" style="max-width:660px; width:96%; height:90vh; display:flex; flex-direction:column; background:var(--panel);">
         <div class="modal-header" style="padding:14px 18px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;">
-          <h2 style="margin:0; font-size:16px;">📚 "${escapeHtml(partName)}" 에 묶을 손상명</h2>
+          <h2 style="margin:0; font-size:16px;">📚 "${escapeHtml(partName)}" 에 묶을 손상명 <span style="font-weight:400; font-size:12px; color:var(--muted);">(${escapeHtml(curType)} / ${escapeHtml(curForm)})</span></h2>
           <button class="ghost" id="dpClose" style="padding:4px 8px;">✕</button>
         </div>
         <div style="padding:10px 18px 0;">
           <div class="std-ref-note" style="margin-bottom:8px;">체크한 손상명이 이 부위의 현장 손상명 칩이 됩니다. 새로 담는 손상명은 라이브러리의 규모와 기존 원인·보수 문구를 함께 가져옵니다. 손상명이 하나도 없는 부위는 현장에서 "상태양호"로 봅니다.</div>
           <input type="text" id="dpSearch" placeholder="손상명 검색" style="width:100%; box-sizing:border-box; padding:8px; background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:4px;">
         </div>
-        <div id="dpList" style="flex:1; overflow-y:auto; padding:10px 18px; display:flex; flex-direction:column; gap:4px;"></div>
+        <div id="dpList" style="flex:1; overflow-y:auto; padding:10px 18px; display:flex; flex-direction:column; gap:4px; min-height:120px;"></div>
+        <div id="dpOthers" style="border-top:1px solid var(--line); padding:10px 18px; max-height:34%; overflow-y:auto;"></div>
         <div style="padding:12px 18px; border-top:1px solid var(--line); display:flex; gap:8px; justify-content:flex-end; align-items:center;">
           <span id="dpCount" style="margin-right:auto; font-size:12px; color:var(--muted);"></span>
           <button class="ghost" id="dpCancel">취소</button>
@@ -22244,36 +22323,64 @@
         row.appendChild(cb); row.appendChild(t); listHost.appendChild(row);
       });
     }
-    function count(){ ov.querySelector('#dpCount').textContent = '선택 ' + chosen.size + '개'; }
+    function changes(){
+      return { toAdd: Array.from(chosen).filter(n => !have.has(n)), toRemove: Array.from(have).filter(n => !chosen.has(n)) };
+    }
+    function count(){
+      const c = changes(); const sel = others.filter(o => o.on && o.hasPart).length;
+      ov.querySelector('#dpCount').textContent = '선택 ' + chosen.size + '개 · 추가 ' + c.toAdd.length + ' · 빼기 ' + c.toRemove.length + (sel ? ' · 다른 형식 ' + sel + '개에도 적용' : '');
+    }
+    function drawOthers(){
+      const host = ov.querySelector('#dpOthers'); host.innerHTML = '';
+      const head = document.createElement('div'); head.style.cssText = 'font-size:13px; font-weight:700; margin-bottom:4px;';
+      head.textContent = '같은 이름의 "' + partName + '" 부위가 있는 다른 형식에도 같은 변경 적용';
+      const hint = document.createElement('div'); hint.style.cssText = 'font-size:11px; color:var(--muted); margin-bottom:6px;';
+      hint.textContent = '이번에 새로 체크한 손상명은 추가하고, 체크를 푼 손상명은 뺍니다. 다른 형식에 이미 있는 손상명은 그대로 둡니다. 저장 버튼을 누를 때 같은 위치에 함께 저장됩니다.';
+      host.appendChild(head); host.appendChild(hint);
+      const eligible = others.filter(o => o.hasPart);
+      if(!eligible.length){ const e = document.createElement('div'); e.style.cssText = 'font-size:12px; color:var(--muted);'; e.textContent = '이 부위가 있는 다른 형식이 없습니다.'; host.appendChild(e); return; }
+      const all = document.createElement('label'); all.style.cssText = 'display:flex; gap:8px; align-items:center; font-size:12px; margin-bottom:4px; cursor:pointer;';
+      const allCb = document.createElement('input'); allCb.type = 'checkbox'; allCb.checked = eligible.every(o => o.on);
+      allCb.addEventListener('change', ()=>{ eligible.forEach(o => { o.on = allCb.checked; }); drawOthers(); count(); });
+      all.appendChild(allCb); all.appendChild(document.createTextNode('모두 선택 (' + eligible.length + '개 형식)')); host.appendChild(all);
+      others.forEach(o => {
+        const row = document.createElement('label');
+        row.style.cssText = 'display:flex; gap:8px; align-items:center; font-size:12px; padding:3px 0; cursor:' + (o.hasPart ? 'pointer' : 'default') + '; opacity:' + (o.hasPart ? '1' : '0.45') + ';';
+        const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = o.on && o.hasPart; cb.disabled = !o.hasPart;
+        cb.addEventListener('change', ()=>{ o.on = cb.checked; allCb.checked = eligible.every(x => x.on); count(); });
+        const txt = document.createElement('span');
+        txt.textContent = o.type + ' / ' + o.form + (o.hasPart ? ' — 현재 손상명 ' + o.names.size + '개' : ' — 이 부위 없음');
+        row.appendChild(cb); row.appendChild(txt); host.appendChild(row);
+      });
+    }
     ov.querySelector('#dpSearch').addEventListener('input', draw);
     ov.querySelector('#dpClose').addEventListener('click', ()=> ov.remove());
     ov.querySelector('#dpCancel').addEventListener('click', ()=> ov.remove());
     ov.querySelector('#dpApply').addEventListener('click', ()=>{
-      const toAdd = Array.from(chosen).filter(n => !have.has(n));
-      const toRemove = Array.from(have).filter(n => !chosen.has(n));
-      if(toRemove.length && !confirm('이 부위에서 손상명 ' + toRemove.length + '개를 뺍니다:\n' + toRemove.join(', ') + '\n(현장에서 이미 입력한 기록은 지워지지 않습니다.) 계속할까요?')) return;
-      if(toRemove.length){
-        dmCurrentData = dmCurrentData.filter(it => !((it.component || '').trim() === partName && toRemove.includes(it.damageType)));
+      const { toAdd, toRemove } = changes();
+      const targets = others.filter(o => o.on && o.hasPart);
+      if(!toAdd.length && !toRemove.length){ ov.remove(); return; }
+      // 다른 형식에서 실제로 바뀌는 수를 미리 계산해 확인받는다
+      const plan = targets.map(o => ({ o, add: toAdd.filter(n => !o.names.has(n)), rem: toRemove.filter(n => o.names.has(n)) })).filter(x => x.add.length || x.rem.length);
+      let msg = '';
+      if(toRemove.length) msg += '이 형식(' + curForm + ")의 '" + partName + "' 에서 손상명 " + toRemove.length + '개를 뺍니다: ' + toRemove.join(', ') + '\n';
+      if(plan.length){
+        msg += '\n다른 형식 ' + plan.length + '개에도 적용합니다:\n' + plan.map(x => ' · ' + x.o.type + ' / ' + x.o.form + ' — 추가 ' + x.add.length + (x.rem.length ? ', 빼기 ' + x.rem.length : '')).join('\n') + '\n';
       }
-      toAdd.forEach(n => {
-        const r = dmLibraryEffective().get(n);
-        const b = (r && r.base) || {};
-        dmCurrentData.push({
-          damageType: n, component: partName, cause: b.cause || '', investigationItems: b.investigationItems || '',
-          repairOptions: (b.repairOptions || []).slice(), reinforcementOptions: (b.reinforcementOptions || []).slice(),
-          sourcePage: b.sourcePage || '', measurementFields: r ? JSON.parse(JSON.stringify(r.fields)) : [], enabled: true
-        });
+      if(msg){ msg += '\n(현장에서 이미 입력한 기록은 지워지지 않습니다.) 계속할까요?'; if(!confirm(msg)) return; }
+      dmCurrentData = dmApplyPickToData(dmCurrentData, partName, toAdd, toRemove);
+      plan.forEach(x => {
+        const data = dmApplyPickToData(dmLoadFormData(x.o.type, x.o.form), partName, x.add, x.rem);
+        dmPendingForms.set(dmPfKey(x.o.type, x.o.form), { type: x.o.type, form: x.o.form, data });
       });
-      // 손상명을 모두 뺀 부위도 부위 자체는 남도록 빈 자리표시 항목을 둔다 (현장에서 부위만 고르면 상태양호)
-      if(!dmCurrentData.some(it => (it.component || '').trim() === partName)){
-        dmCurrentData.push({ damageType:'', component: partName, cause:'', repairOptions:[], reinforcementOptions:[], enabled:true });
-      }
-      if(toAdd.length || toRemove.length) markDmDirty();
+      markDmDirty();
       ov.remove();
       renderDmList(); renderDmPartsList();
+      if(plan.length) showToastSafe('다른 형식 ' + plan.length + '개에도 반영했습니다. 저장 버튼을 누르면 함께 저장됩니다.');
     });
-    draw(); count();
+    draw(); drawOthers(); count();
   };
+  function showToastSafe(msg){ try{ if(typeof showToast === 'function') showToast(msg); else alert(msg); }catch(e){} }
 
   window.saveDamageMaster = async function() {
     const type = dmTypeSel.value;
@@ -22285,6 +22392,7 @@
     if (!proj.damageMaster[type]) proj.damageMaster[type] = {};
     
     proj.damageMaster[type][form] = JSON.parse(JSON.stringify(dmCurrentData));
+    const otherRes = await dmFlushPendingForms('project');   // v121: 다른 형식에도 담았다면 함께 저장
     dmLibInvalidate();
     
     await saveState();
@@ -22292,7 +22400,7 @@
     
     dmIsDirty = false;
     document.getElementById('dmUnsavedWarning').style.display = 'none';
-    alert('이 프로젝트에만 저장되었습니다. 다른 프로젝트나 앞으로 만들 프로젝트에는 영향이 없습니다.');
+    alert(dmOtherNote(otherRes) + '이 프로젝트에만 저장되었습니다. 다른 프로젝트나 앞으로 만들 프로젝트에는 영향이 없습니다.');
   };
 
   // ---- 전체(공용) 손상마스터로 저장 — 여러 프로젝트가 재사용하는 라이브러리 (명령문 33-34번) ----
@@ -22311,13 +22419,14 @@
 
     if (!globalDamageMasterVersion[type]) globalDamageMasterVersion[type] = {};
     globalDamageMasterVersion[type][form] = (globalDamageMasterVersion[type][form] || 0) + 1;
+    const otherRes = await dmFlushPendingForms('global');   // v121: 다른 형식에도 담았다면 함께 저장
 
     await saveGlobalDamageMaster();
     logActivity('손상마스터 저장(이 기기 공용)', type + ' / ' + form + ' — 버전 ' + globalDamageMasterVersion[type][form] + '로 저장');
 
     dmIsDirty = false;
     document.getElementById('dmUnsavedWarning').style.display = 'none';
-    alert('이 기기의 공용 손상마스터에 버전 ' + globalDamageMasterVersion[type][form] + '(으)로 저장되었습니다.\n이미 진행 중인 다른 프로젝트는 그대로이며, 이 기기에서 새로 만드는 프로젝트부터 적용됩니다.');
+    alert(dmOtherNote(otherRes) + '이 기기의 공용 손상마스터에 버전 ' + globalDamageMasterVersion[type][form] + '(으)로 저장되었습니다.\n이미 진행 중인 다른 프로젝트는 그대로이며, 이 기기에서 새로 만드는 프로젝트부터 적용됩니다.');
     loadDmConfig();
   };
 
@@ -22338,11 +22447,12 @@
       alert('조직 전체 저장 실패: ' + result.reason + '\n(이 기기에는 별도로 "이 기기에 저장"을 눌러 보관할 수 있습니다.)');
       return;
     }
+    const otherRes = await dmFlushPendingForms('org', orgId);   // v121: 다른 형식에도 담았다면 함께 저장
     logActivity('손상마스터 저장(조직 공유)', type + ' / ' + form + ' — 버전 ' + result.version + '로 저장');
 
     dmIsDirty = false;
     document.getElementById('dmUnsavedWarning').style.display = 'none';
-    alert('조직 전체 손상마스터에 버전 ' + result.version + '(으)로 저장되었습니다.\n같은 조직 팀원의 다음 신규 시설물부터 이 내용이 적용됩니다.');
+    alert(dmOtherNote(otherRes) + (otherRes.failed.length ? '※ 다음 형식은 저장하지 못했습니다(다시 담아 저장해 주세요): ' + otherRes.failed.join(', ') + '\n' : '') + '조직 전체 손상마스터에 버전 ' + result.version + '(으)로 저장되었습니다.\n같은 조직 팀원의 다음 신규 시설물부터 이 내용이 적용됩니다.');
     loadDmConfig();
   };
 
