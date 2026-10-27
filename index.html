@@ -3235,7 +3235,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v121';
+  const PS_BUILD = 'v122';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -14475,7 +14475,8 @@
       const photos = m.photos || [];
       if(photos.length === 0){ noPhoto.push(m); return; }
       photos.forEach((p, idx)=>{
-        const hasDamage = p.damages && p.damages.length > 0;
+        // v122: 촬영 직후 자동으로 열리는 빈 손상 기록(v118)만 있는 사진도 "미입력"으로 센다. 부위만 골랐으면 상태양호로 입력된 것.
+        const hasDamage = !!(p.damages && p.damages.some(d => d && (d.damageType || d.component)));
         if(!hasDamage) noDamageInfo.push({ m, idx });
         if(p.quality && p.quality.warnings && p.quality.warnings.length){
           qualityIssues.push({ m, idx, warnings: p.quality.warnings });
@@ -14540,7 +14541,7 @@
       qualityIssues.map(x => '<div class="audit-row"><span>지점 ' + x.m.num + ' · 사진 ' + (x.idx+1) + ' — ' + x.warnings.join(', ') + '</span><button class="log-btn" data-jump="' + x.m.id + '">보기</button></div>').join('')
     );
     html += section('중복 의심 사진', duplicates.length,
-      duplicates.map(x => '<div class="audit-row"><span>지점 ' + x.a.m.num + '-' + (x.a.idx+1) + ' ↔ 지점 ' + x.b.m.num + '-' + (x.b.idx+1) + ' (유사도 ' + Math.round((1-x.dist/64)*100) + '%)</span><button class="log-btn" data-jump="' + x.a.m.id + '">보기</button></div>').join('')
+      duplicates.slice(0, 200).map(x => '<div class="audit-row"><span>지점 ' + x.a.m.num + '-' + (x.a.idx+1) + ' ↔ 지점 ' + x.b.m.num + '-' + (x.b.idx+1) + ' (유사도 ' + Math.round((1-x.dist/64)*100) + '%)</span><button class="log-btn" data-jump="' + x.a.m.id + '">보기</button></div>').join('') + (duplicates.length > 200 ? '<div class="audit-row"><span>… 외 ' + (duplicates.length - 200) + '건은 표시하지 않았습니다 (같은 사진을 여러 번 찍은 경우 등)</span></div>' : '')
     );
     html += section('중복 위치 의심(지도, 5m 이내)', dupLocations.length,
       dupLocations.map(x => '<div class="audit-row"><span>지점 ' + x.a.num + ' ↔ 지점 ' + x.b.num + ' (약 ' + x.dist.toFixed(1) + 'm)</span><button class="log-btn" data-jump="' + x.a.id + '">보기</button></div>').join('')
@@ -17138,7 +17139,7 @@
     if(photos.length === 0) return 'status-danger';
     const allDamages = [];
     photos.forEach(p => (p.damages || []).forEach(d => allDamages.push(d)));
-    if(allDamages.length === 0 || allDamages.every(d => !d.damageType)) return 'status-warn';
+    if(allDamages.length === 0 || allDamages.every(d => !d.damageType && !d.component)) return 'status-warn';   // v122: 부위만 있으면 상태양호
     return 'status-ok';
   }
 

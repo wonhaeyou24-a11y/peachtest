@@ -13,5 +13,8 @@ check('addPhoto 는 autoDamage 옵션일 때만 표시함 (사진첩 가져오�
 check('실시간 카메라 촬영·카메라앱/사진 선택 촬영 두 경로 모두 autoDamage 로 호출', html.includes('await addPhoto(activeMarkerId, dataUrl, deviceExif, { autoDamage: true });') && html.includes('await addPhoto(activeMarkerId, dataUrl, exif, { autoDamage: true });'));
 check('상세창은 보고 있는 사진에서만, 손상이 없을 때만, 조회전용이 아닐 때만 자동 추가하고 사진당 한 번만 함', html.includes('if(freshPhotoIds.has(p.id) && idx === previewSelIdx){') && html.includes('freshPhotoIds.delete(p.id);') && html.includes("if(!p.damages.length && !document.body.classList.contains('viewer-mode')) addDamageBtn.click();"));
 check('자동 추가는 기존 "+ 손상 추가" 버튼 동작을 그대로 사용 (저장·기록목록 갱신 경로 동일)', html.includes("addDamageBtn.click();") );
+check('v122: 자동 검수 "손상정보 미입력" — 빈 손상 기록(손상명·부위 없음)만 있는 사진도 미입력으로 셈 (부위만 있으면 상태양호로 입력된 것)', html.includes("const hasDamage = !!(p.damages && p.damages.some(d => d && (d.damageType || d.component)));"));
+check('v122: 지점 상태 점도 부위만 있는 기록(상태양호)은 입력된 것으로 봄', html.includes("allDamages.every(d => !d.damageType && !d.component)) return 'status-warn';"));
+check('v122: 중복 의심 사진 목록은 200건까지만 표시하고 나머지는 개수 안내', html.includes('duplicates.slice(0, 200).map(x =>') && html.includes('건은 표시하지 않았습니다'));
 console.log(fail ? `\n실패 ${fail}건` : '\n모두 통과');
 process.exit(fail ? 1 : 0);
