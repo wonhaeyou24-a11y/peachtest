@@ -2888,6 +2888,7 @@
     <div class="modal-header" style="padding:15px 20px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;">
       <h2 style="margin:0; font-size:18px;">손상마스터 관리</h2>
       <div style="display:flex; gap:8px; align-items:center;">
+        <button class="ghost" id="btnOpenDmVersions" onclick="openDmVersions()" style="padding:6px 12px;" title="손상마스터(손상명 라이브러리 + 종류·형식별 손상세팅)를 버전으로 저장·비교·되돌리기·파일로 내보내기">🗂 버전</button>
         <button class="primary" id="btnOpenDamageLibrary" onclick="openDamageLibrary()" style="padding:6px 12px;" title="손상명과 규모(폭·길이·너비·깊이·개소 등)를 한 곳에서 관리합니다. 부위별로 이 목록에서 손상명을 가져와 묶습니다.">📚 손상명 라이브러리</button>
         <button class="ghost" onclick="closeDamageMaster()" style="padding:4px 8px;">✕</button>
       </div>
@@ -3235,7 +3236,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v123';
+  const PS_BUILD = 'v125';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -7113,6 +7114,30 @@
   //    하면 조직과 끊긴 별개 프로젝트가 생겨 서로 자료가 절대 안 합쳐졌다.
   //  - 개인 프로젝트(organization_id 없음): 예전처럼 새 id로 복제(남의 개인 프로젝트를
   //    내 사본으로 가져오는 용도).
+  // v124: 시설물 행의 도면 수 — ps_facilities.data 안에는 도면 이미지(base64)가 통째로 들어 있어 그대로 받으면 무겁다.
+  // 그래서 도면 id 만 앞에서 10개까지 읽는다(d0~d9). 도면이 10개 이상이면 "10+"로 표시한다.
+  const DRAW_ID_SELECT = Array.from({ length: 10 }, (_, i) => 'd' + i + ':data->drawings->' + i + '->>id').join(',');
+  function drawingsFromRow(r){
+    const ids = [];
+    for(let i = 0; i < 10; i++){ const v = r && r['d' + i]; if(v != null && v !== '') ids.push(String(v)); }
+    return { ids, capped: !!(r && r.d9 != null && r.d9 !== '') };
+  }
+  async function fetchCloudDrawingCounts(projectId){
+    // 반환: { byFacility: Map(facilityId -> {ids, capped}), total, capped }
+    const byFacility = new Map(); let total = 0, capped = false;
+    for(let off = 0; off < 100000; off += 1000){
+      let q = supabaseClient.from('ps_facilities').select('id,' + DRAW_ID_SELECT);
+      if(projectId) q = q.eq('project_id', projectId);
+      const { data, error } = await q.range(off, off + 999);
+      if(error) throw error;
+      (data || []).forEach(r => { const d = drawingsFromRow(r); byFacility.set(r.id, d); total += d.ids.length; if(d.capped) capped = true; });
+      if(!data || data.length < 1000) break;
+    }
+    return { byFacility, total, capped };
+  }
+  const drawingCountText = (n, capped)=> n + (capped ? '+' : '') + '개';
+  const countLocalDrawings = (siteList)=> siteList.reduce((a, s) => a + (s.drawings || []).filter(d => d && (d.imageSrc || d.imageRef)).length, 0);
+
   // 클라우드 프로젝트의 지점 id 집합과 사진 수 (불러오기 전 비교용)
   async function fetchCloudProjectCounts(cloudProjectId){
     const pointIds = new Set(); let photos = 0;
@@ -7123,7 +7148,9 @@
       (data || []).forEach(r => { pointIds.add(r.id); photos += Array.isArray(r.ph) ? r.ph.length : 0; });
       if(!data || data.length < 1000) break;
     }
-    return { pointIds, points: pointIds.size, photos };
+    let draw = { byFacility: new Map(), total: 0, capped: false };
+    try{ draw = await fetchCloudDrawingCounts(cloudProjectId); }catch(e){ /* 도면 수는 보조 정보 — 못 읽어도 불러오기 비교는 계속한다 */ draw = null; }
+    return { pointIds, points: pointIds.size, photos, draw };
   }
 
   // 같은 프로젝트가 폰에 이미 있을 때: 비교해서 보여주고, 폰에만 있는 내용이 있으면 경고한다.
@@ -7140,13 +7167,28 @@
       if(!cloud.pointIds.has(m.id)) onlyPts++;
       (m.photos || []).forEach(p => { lph++; if(!p.cloudRef) onlyPhotos++; });
     }));
-    const compare = '"' + localProject.name + '"\n\n이 기기: 지점 ' + lp + '개 · 사진 ' + lph + '장\n클라우드: 지점 ' + cloud.points + '개 · 사진 ' + cloud.photos + '장';
+    // v124: 도면 수량 — 이 기기에만 있는 도면(클라우드에 아직 없음)은 교체하면 사라지므로 함께 경고한다
+    let onlyDraws = 0;
+    const lDraw = countLocalDrawings(localSites);
+    if(cloud.draw){
+      localSites.forEach(s => {
+        const cd = cloud.draw.byFacility.get(s.id);
+        (s.drawings || []).forEach(d => {
+          if(!(d && (d.imageSrc || d.imageRef))) return;
+          if(!cd) { onlyDraws++; return; }
+          if(!cd.capped && !cd.ids.includes(String(d.id))) onlyDraws++;
+        });
+      });
+    }
+    const drawLocalTxt = ' · 도면 ' + lDraw + '개';
+    const drawCloudTxt = cloud.draw ? ' · 도면 ' + drawingCountText(cloud.draw.total, cloud.draw.capped) : ' · 도면 (확인 못 함)';
+    const compare = '"' + localProject.name + '"\n\n이 기기: 지점 ' + lp + '개 · 사진 ' + lph + '장' + drawLocalTxt + '\n클라우드: 지점 ' + cloud.points + '개 · 사진 ' + cloud.photos + '장' + drawCloudTxt;
 
-    if(onlyPts === 0 && onlyPhotos === 0){
+    if(onlyPts === 0 && onlyPhotos === 0 && onlyDraws === 0){
       return confirm(compare + '\n\n이 기기의 같은 프로젝트를 클라우드 내용으로 교체합니다.\n(교체 직전의 기기 상태는 "복구 스냅샷"에 보관됩니다)\n\n교체할까요?');
     }
 
-    const warn = '⚠ ' + compare + '\n\n이 기기에만 있는 내용이 있습니다 (클라우드에 아직 없음):\n · 지점 ' + onlyPts + '개\n · 사진 ' + onlyPhotos + '장\n\n지금 교체하면 이 내용은 프로젝트에서 사라집니다.';
+    const warn = '⚠ ' + compare + '\n\n이 기기에만 있는 내용이 있습니다 (클라우드에 아직 없음):\n · 지점 ' + onlyPts + '개\n · 사진 ' + onlyPhotos + '장' + (onlyDraws ? '\n · 도면 ' + onlyDraws + '개' : '') + '\n\n지금 교체하면 이 내용은 프로젝트에서 사라집니다.';
     if(confirm(warn + '\n\n[확인] 먼저 이 기기 내용을 클라우드에 백업한 뒤 교체 (추천)\n[취소] 백업하지 않고 다음 단계로')){
       let res;
       await psProgress.start('교체 전에 클라우드에 백업하는 중…', localProject.name);
@@ -7345,7 +7387,7 @@
       }catch(e){ console.warn('불러오기 후 반영 실패', e); }
     }
     renderCloudSyncBody();
-    let doneMsg = '클라우드에서 "' + newProject.name + '" 프로젝트를 불러왔습니다.\n시설물 ' + newSites.length + '개 · 지점 ' + restoredCounts.points + '개 · 기존손상 ' + restoredCounts.damages + '개';
+    let doneMsg = '클라우드에서 "' + newProject.name + '" 프로젝트를 불러왔습니다.\n시설물 ' + newSites.length + '개 · 지점 ' + restoredCounts.points + '개 · 도면 ' + countLocalDrawings(newSites) + '개 · 기존손상 ' + restoredCounts.damages + '개';
     if(restoreError){
       doneMsg += '\n\n⚠ 지점/손상을 가져오는 중 문제가 있었습니다: ' + restoreError + '\n(클라우드 자료는 그대로이니 다시 시도하실 수 있습니다)';
     } else if(newSites.length > 0 && restoredCounts.points === 0){
@@ -13322,14 +13364,19 @@
       try{ await supabaseClient.rpc('ps_purge_expired_projects'); }catch(e){} // 보관 30일이 지난 것 정리
       const [projs, facs, pts] = await Promise.all([
         fetchAllRows('ps_projects', 'id,name,organization_id,user_id,updated_at,deleted_at'),
-        fetchAllRows('ps_facilities', 'id,project_id'),
+        fetchAllRows('ps_facilities', 'id,project_id,' + DRAW_ID_SELECT),   // v124: 도면 수 (도면 id 만 읽음)
         fetchAllRows('ps_inspection_points', 'id,project_id,ph:data->photos')
       ]);
       let usage = null;
       try{ const r = await supabaseClient.rpc('ps_storage_usage'); usage = r.data; }catch(e){}
 
-      const facCnt = {}, ptCnt = {}, phCnt = {};
-      facs.forEach(f => { facCnt[f.project_id] = (facCnt[f.project_id] || 0) + 1; });
+      const facCnt = {}, ptCnt = {}, phCnt = {}, drCnt = {}, drCapped = {};
+      facs.forEach(f => {
+        facCnt[f.project_id] = (facCnt[f.project_id] || 0) + 1;
+        const dr = drawingsFromRow(f);
+        drCnt[f.project_id] = (drCnt[f.project_id] || 0) + dr.ids.length;
+        if(dr.capped) drCapped[f.project_id] = true;
+      });
       pts.forEach(r => {
         ptCnt[r.project_id] = (ptCnt[r.project_id] || 0) + 1;
         phCnt[r.project_id] = (phCnt[r.project_id] || 0) + (Array.isArray(r.ph) ? r.ph.length : 0);
@@ -13382,7 +13429,7 @@
       const card = (p, isTrash)=>{
         const c = mk('div', 'border:1px solid var(--line); border-radius:8px; padding:10px; margin:8px 0; background:var(--panel);');
         const kind = p.organization_id ? '팀' : '개인';
-        const counts = '시설물 ' + (facCnt[p.id] || 0) + ' · 지점 ' + (ptCnt[p.id] || 0) + ' · 사진 ' + (phCnt[p.id] || 0);
+        const counts = '시설물 ' + (facCnt[p.id] || 0) + ' · 지점 ' + (ptCnt[p.id] || 0) + ' · 사진 ' + (phCnt[p.id] || 0) + ' · 도면 ' + drawingCountText(drCnt[p.id] || 0, drCapped[p.id]);
         let sub = '최근 수정 ' + (p.updated_at ? new Date(p.updated_at).toLocaleString('ko-KR') : '-');
         if(isTrash){
           const daysLeft = Math.max(0, 30 - Math.floor((Date.now() - new Date(p.deleted_at).getTime()) / 86400000));
@@ -22398,6 +22445,291 @@
     draw(); drawOthers(); count();
   };
   function showToastSafe(msg){ try{ if(typeof showToast === 'function') showToast(msg); else alert(msg); }catch(e){} }
+
+  // ================================================================
+  // v124: 손상마스터 버전 — "이 기기의 기본 손상세팅"(손상명 라이브러리 + 종류·형식별 공용 손상세팅)을 버전으로 저장한다.
+  //  - 정리하는 동안 중간 상태를 버전으로 남기고, 바뀐 내용(추가·삭제·변경)을 보고, 필요하면 되돌린다.
+  //  - 최종 확정(새 기본값으로 반영)과 프로젝트 올리기는 최종 버전이 정해진 뒤에 한다 — 여기서는 만들지 않았다.
+  //  - 프로젝트 전용 손상마스터와 이미 입력한 현장 기록은 건드리지 않는다. 이 기기에만 저장된다(파일로 내보내 다른 기기에서 가져올 수 있다).
+  // ================================================================
+  const DM_VERSIONS_KEY = 'point-shot-damage-master-versions';
+  const DM_VERSIONS_MAX = 40;
+  let dmVersions = [];
+  async function loadDmVersions(){ try{ dmVersions = (await storageGet(DM_VERSIONS_KEY)) || []; }catch(e){ dmVersions = []; } if(!Array.isArray(dmVersions)) dmVersions = []; }
+  async function saveDmVersions(){ await storageSet(DM_VERSIONS_KEY, dmVersions); }
+  const dmClone = v => JSON.parse(JSON.stringify(v));
+
+  // 지금 이 기기의 기본 손상세팅: 라이브러리(직접 등록·수정분) + 종류·형식별 공용 세팅(없으면 기준DB)
+  function dmCaptureSet(){
+    const forms = {};
+    Object.keys(FACILITY_FORMS).forEach(type => {
+      if(type === '기타') return;
+      FACILITY_FORMS[type].forEach(form => {
+        if(form === '기타') return;
+        const g = globalDamageMaster[type] && globalDamageMaster[type][form];
+        const src = (g && g.length) ? g : ((STANDARD_DB[type] && STANDARD_DB[type][form]) || []);
+        if(!forms[type]) forms[type] = {};
+        forms[type][form] = dmClone(src);
+      });
+    });
+    return { library: dmClone(damageLibrary || {}), forms };
+  }
+  function dmSetStats(set){
+    const names = new Set(); let entries = 0, forms = 0;
+    Object.values(set.forms || {}).forEach(byForm => Object.values(byForm).forEach(list => {
+      const named = (list || []).filter(it => it.damageType);
+      if(named.length) forms++;
+      named.forEach(it => { names.add(it.damageType); entries++; });
+    }));
+    Object.keys(set.library || {}).forEach(n => names.add(n));
+    return { names: names.size, entries, forms, library: Object.keys(set.library || {}).length };
+  }
+  const dmEntryKey = it => (it.component || '').trim() + '\u0001' + (it.damageType || '');
+  const dmScaleText = it => (it.measurementFields || []).map(f => dmNormLabel(f.label) + '(' + f.defaultUnit + ')').join('+');
+  const dmTextSig = it => JSON.stringify([it.cause || '', it.repairOptions || [], it.reinforcementOptions || [], it.investigationItems || '']);
+  const dmFieldsText = o => (o && Array.isArray(o.fields) ? o.fields.map(f => f.label).join('+') : '') || '기본';
+
+  // 두 세트의 차이 (a = 이전, b = 이후)
+  function dmDiffSets(a, b){
+    const out = { library: { added: [], removed: [], changed: [] }, forms: [], counts: { added: 0, removed: 0, changed: 0 } };
+    const la = (a && a.library) || {}, lb = (b && b.library) || {};
+    // 직접 등록한 손상명(custom)만 "추가/삭제". 기준DB에 있는 손상명의 규모를 고친 것은 "규모 변경"이다.
+    Object.keys(lb).forEach(n => {
+      if(!(n in la)){
+        if(lb[n].custom) out.library.added.push(n);
+        else out.library.changed.push({ name: n, from: '기본', to: dmFieldsText(lb[n]) });
+      } else if(JSON.stringify(la[n].fields || null) !== JSON.stringify(lb[n].fields || null)) out.library.changed.push({ name: n, from: dmFieldsText(la[n]), to: dmFieldsText(lb[n]) });
+    });
+    Object.keys(la).forEach(n => {
+      if(n in lb) return;
+      if(la[n].custom) out.library.removed.push(n);
+      else out.library.changed.push({ name: n, from: dmFieldsText(la[n]), to: '기본' });
+    });
+    const fa = (a && a.forms) || {}, fb = (b && b.forms) || {};
+    new Set([...Object.keys(fa), ...Object.keys(fb)]).forEach(type => {
+      new Set([...Object.keys(fa[type] || {}), ...Object.keys(fb[type] || {})]).forEach(form => {
+        const A = new Map(((fa[type] || {})[form] || []).filter(it => it.damageType).map(it => [dmEntryKey(it), it]));
+        const B = new Map(((fb[type] || {})[form] || []).filter(it => it.damageType).map(it => [dmEntryKey(it), it]));
+        const d = { type, form, added: [], removed: [], changed: [] };
+        B.forEach((it, k) => {
+          const o = A.get(k);
+          if(!o){ d.added.push(it); return; }
+          const what = [];
+          if(dmScaleText(o) !== dmScaleText(it)) what.push('규모');
+          if(dmTextSig(o) !== dmTextSig(it)) what.push('원인·보수 문구');
+          if((o.enabled !== false) !== (it.enabled !== false)) what.push('사용 여부');
+          if(what.length) d.changed.push({ it, what });
+        });
+        A.forEach((it, k) => { if(!B.has(k)) d.removed.push(it); });
+        if(d.added.length || d.removed.length || d.changed.length) out.forms.push(d);
+      });
+    });
+    out.counts.added = out.library.added.length + out.forms.reduce((x, d) => x + d.added.length, 0);
+    out.counts.removed = out.library.removed.length + out.forms.reduce((x, d) => x + d.removed.length, 0);
+    out.counts.changed = out.library.changed.length + out.forms.reduce((x, d) => x + d.changed.length, 0);
+    return out;
+  }
+  function dmDiffIsEmpty(d){ return !d.counts.added && !d.counts.removed && !d.counts.changed; }
+  // 화면에 보여 줄 문장들
+  function dmDiffLines(d){
+    const lines = [];
+    if(d.library.added.length) lines.push('[라이브러리] 추가: ' + d.library.added.join(', '));
+    if(d.library.removed.length) lines.push('[라이브러리] 삭제: ' + d.library.removed.join(', '));
+    d.library.changed.forEach(c => lines.push('[라이브러리] 규모 변경: ' + c.name + ' (' + c.from + ' → ' + c.to + ')'));
+    d.forms.forEach(f => {
+      const tag = '[' + f.type + ' / ' + f.form + '] ';
+      const label = it => (it.component ? it.component + ' · ' : '') + it.damageType;
+      if(f.added.length) lines.push(tag + '추가: ' + f.added.map(label).join(', '));
+      if(f.removed.length) lines.push(tag + '삭제: ' + f.removed.map(label).join(', '));
+      f.changed.forEach(c => lines.push(tag + '변경: ' + label(c.it) + ' (' + c.what.join(', ') + ')'));
+    });
+    return lines;
+  }
+  const dmFmtDate = iso => { try{ return new Date(iso).toLocaleString('ko-KR'); }catch(e){ return iso || ''; } };
+  const dmNextNum = ()=> dmVersions.reduce((m, v) => Math.max(m, v.num != null ? v.num : -1), -1) + 1;
+
+  async function dmCreateVersion(kind, note, set){
+    const num = dmNextNum();
+    const data = set || dmCaptureSet();
+    const v = { id: 'dmv' + Date.now() + Math.random().toString(36).slice(2, 6), num, kind, note: note || '', createdAt: new Date().toISOString(), stats: dmSetStats(data), set: data };
+    dmVersions.push(v);
+    if(dmVersions.length > DM_VERSIONS_MAX){
+      // 오래된 자동 저장부터 지운다 (수동 저장 버전은 지우지 않는다)
+      const autoIdx = dmVersions.findIndex(x => x.kind === 'auto');
+      if(autoIdx >= 0) dmVersions.splice(autoIdx, 1);
+    }
+    await saveDmVersions();
+    return v;
+  }
+  async function dmRestoreSet(set){
+    damageLibrary = dmClone(set.library || {});
+    await saveDamageLibrary();
+    Object.entries(set.forms || {}).forEach(([type, byForm]) => Object.entries(byForm).forEach(([form, data]) => {
+      if(!globalDamageMaster[type]) globalDamageMaster[type] = {};
+      globalDamageMaster[type][form] = dmClone(data);
+      if(!globalDamageMasterVersion[type]) globalDamageMasterVersion[type] = {};
+      globalDamageMasterVersion[type][form] = (globalDamageMasterVersion[type][form] || 0) + 1;
+    }));
+    await saveGlobalDamageMaster();   // dmLibInvalidate 포함
+  }
+
+  // 정리 점검: 정리할 곳을 찾아 준다 (보기만 한다)
+  function dmCleanupChecks(set){
+    set = set || dmCaptureSet();
+    const norm = n => String(n || '').replace(/[\s()\[\],.·ㆍ\-_/]/g, '');
+    const allNames = new Set(Object.keys(set.library || {}));
+    const byName = new Map();   // 이름 -> 형식별 항목들
+    Object.entries(set.forms || {}).forEach(([type, byForm]) => Object.entries(byForm).forEach(([form, list]) => (list || []).forEach(it => {
+      if(!it.damageType) return;
+      allNames.add(it.damageType);
+      if(!byName.has(it.damageType)) byName.set(it.damageType, []);
+      byName.get(it.damageType).push({ type, form, part: it.component || '', it });
+    })));
+    const groups = new Map();
+    allNames.forEach(n => { const k = norm(n); if(!groups.has(k)) groups.set(k, []); groups.get(k).push(n); });
+    const similar = Array.from(groups.values()).filter(g => g.length > 1);
+    const eff = dmLibraryEffective();
+    const noScale = Array.from(eff.values()).filter(r => !r.fields.length).map(r => r.name).sort();
+    const unused = Object.keys(set.library || {}).filter(n => !byName.has(n)).sort();
+    const emptyParts = [];
+    Object.entries(set.forms || {}).forEach(([type, byForm]) => Object.entries(byForm).forEach(([form, list]) => {
+      const parts = new Map();
+      (list || []).forEach(it => { const p = (it.component || '').trim(); if(!p) return; parts.set(p, (parts.get(p) || 0) + (it.damageType ? 1 : 0)); });
+      parts.forEach((cnt, p) => { if(cnt === 0) emptyParts.push(type + ' / ' + form + ' · ' + p); });
+    }));
+    const textDiffs = [];
+    byName.forEach((arr, n) => { const sigs = new Set(arr.map(x => dmTextSig(x.it))); if(arr.length > 1 && sigs.size > 1) textDiffs.push(n + ' (' + arr.length + '곳, 문구 ' + sigs.size + '종)'); });
+    textDiffs.sort();
+    return { similar, noScale, unused, emptyParts, textDiffs };
+  }
+
+  function dmDownloadJson(obj, filename){
+    const blob = new Blob([JSON.stringify(obj)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=> URL.revokeObjectURL(url), 4000);
+  }
+  const DM_FILE_KIND = 'peachshot-damage-master-set';
+
+  window.openDmVersions = async function(){
+    await loadDmVersions();
+    const ov = dlcOverlay('dmVersionsModal', `
+      <div class="modal" style="max-width:860px; width:96%; height:92vh; display:flex; flex-direction:column; background:var(--panel);">
+        <div class="modal-header" style="padding:14px 18px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;">
+          <h2 style="margin:0; font-size:17px;">🗂 손상마스터 버전</h2>
+          <button class="ghost" id="dvClose" style="padding:4px 8px;">✕</button>
+        </div>
+        <div id="dvBody" style="flex:1; overflow-y:auto; padding:14px 18px;"></div>
+      </div>`);
+    ov.querySelector('#dvClose').addEventListener('click', ()=> ov.remove());
+    // 처음 열 때: 정리 전 상태를 v0 으로 자동 보관
+    if(!dmVersions.length){ await dmCreateVersion('auto', '정리 전 상태 (자동 보관)'); }
+    dvRender();
+  };
+
+  function dvRender(){
+    const body = document.getElementById('dvBody'); if(!body) return;
+    body.innerHTML = '';
+    const mk = (tag, css, html)=>{ const el = document.createElement(tag); if(css) el.style.cssText = css; if(html != null) el.innerHTML = html; return el; };
+    const cur = dmCaptureSet();
+    const latest = dmVersions.length ? dmVersions[dmVersions.length - 1] : null;
+    const sorted = dmVersions.slice().sort((a, b) => (a.num - b.num) || (a.createdAt < b.createdAt ? -1 : 1));
+    const last = sorted[sorted.length - 1];
+
+    // --- 현재 상태 ---
+    const st = dmSetStats(cur);
+    const box = mk('div', 'border:1px solid var(--line); border-radius:8px; padding:12px; background:var(--panel-2); margin-bottom:12px;');
+    const diffNow = last ? dmDiffSets(last.set, cur) : null;
+    box.innerHTML = '<div style="font-weight:700; margin-bottom:4px;">현재 상태 (이 기기)</div>' +
+      '<div style="font-size:12px; color:var(--muted); line-height:1.6;">손상명 ' + st.names + '개 · 종류·형식별 항목 ' + st.entries + '건 · 라이브러리에서 직접 바꾼/등록한 것 ' + st.library + '개</div>' +
+      '<div style="font-size:12px; margin-top:6px;">' + (last ? (dmDiffIsEmpty(diffNow) ? '✓ 마지막 버전(v' + last.num + ') 이후 바뀐 것이 없습니다.' : '⚠ 마지막 버전(v' + last.num + ') 이후 바뀐 것: 추가 ' + diffNow.counts.added + ' · 삭제 ' + diffNow.counts.removed + ' · 변경 ' + diffNow.counts.changed + '건 (아직 버전으로 저장하지 않음)') : '') + '</div>';
+    const row = mk('div', 'display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;');
+    const save = mk('button', 'padding:6px 12px;', '💾 현재 상태를 새 버전으로 저장'); save.className = 'primary';
+    save.addEventListener('click', async ()=>{
+      const note = prompt('이 버전의 메모를 적어 주세요 (예: 손상명 정리 1차)', '');
+      if(note === null) return;
+      const v = await dmCreateVersion('manual', note.trim());
+      logActivity('손상마스터 버전 저장', 'v' + v.num + (v.note ? ' — ' + v.note : ''));
+      dvRender();
+    });
+    const exp = mk('button', 'padding:6px 12px;', '📤 현재 상태 파일로 내보내기'); exp.className = 'ghost';
+    exp.addEventListener('click', ()=> dmDownloadJson({ kind: DM_FILE_KIND, schema: 1, exportedAt: new Date().toISOString(), note: '현재 상태', set: cur }, '손상마스터_현재_' + new Date().toISOString().slice(0, 10) + '.json'));
+    const imp = mk('button', 'padding:6px 12px;', '📥 파일에서 버전으로 가져오기'); imp.className = 'ghost';
+    const file = mk('input'); file.type = 'file'; file.accept = '.json,application/json'; file.style.display = 'none';
+    imp.addEventListener('click', ()=> file.click());
+    file.addEventListener('change', async ()=>{
+      const f = file.files && file.files[0]; file.value = ''; if(!f) return;
+      try{
+        const j = JSON.parse(await f.text());
+        if(!j || j.kind !== DM_FILE_KIND || !j.set || !j.set.forms) throw new Error('손상마스터 파일이 아닙니다');
+        const v = await dmCreateVersion('import', '가져온 파일: ' + f.name + (j.note ? ' (' + j.note + ')' : ''), j.set);
+        alert('버전 v' + v.num + '으로 가져왔습니다.\n아직 적용되지는 않았습니다. 아래 목록에서 "이 버전으로 되돌리기"를 누르면 이 기기에 적용됩니다.');
+        dvRender();
+      }catch(e){ alert('가져오지 못했습니다: ' + ((e && e.message) || e)); }
+    });
+    row.appendChild(save); row.appendChild(exp); row.appendChild(imp); row.appendChild(file);
+    box.appendChild(row);
+    if(last && !dmDiffIsEmpty(diffNow)){
+      const det = mk('details', 'margin-top:8px; font-size:12px;'); det.innerHTML = '<summary style="cursor:pointer;">바뀐 내용 보기</summary>' + '<div style="line-height:1.7; padding-top:4px;">' + dmDiffLines(diffNow).map(l => escapeHtml(l)).join('<br>') + '</div>';
+      box.appendChild(det);
+    }
+    body.appendChild(box);
+
+    // --- 정리 점검 ---
+    const ck = dmCleanupChecks(cur);
+    const ckBox = mk('div', 'border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px;');
+    ckBox.innerHTML = '<div style="font-weight:700; margin-bottom:6px;">🔎 정리 점검 <span style="font-weight:400; font-size:12px; color:var(--muted);">(정리할 곳을 찾아 줍니다 — 보기만 하고 바꾸지 않습니다)</span></div>';
+    const mkDet = (title, items, hint)=>{
+      const d = mk('details', 'margin:4px 0; font-size:12px;');
+      d.innerHTML = '<summary style="cursor:pointer;">' + title + ' <b>' + items.length + '</b>' + (items.length ? '' : ' ✓') + '</summary>' +
+        (items.length ? '<div style="padding:4px 0 0 14px; line-height:1.7;">' + (hint ? '<div style="color:var(--muted);">' + hint + '</div>' : '') + items.map(x => escapeHtml(x)).join('<br>') + '</div>' : '');
+      return d;
+    };
+    ckBox.appendChild(mkDet('비슷한 이름 (띄어쓰기·괄호만 다른 것)', ck.similar.map(g => g.join('  ≈  ')), '같은 손상이면 한 이름으로 맞추는 것이 좋습니다.'));
+    ckBox.appendChild(mkDet('규모 항목이 없는 손상명', ck.noScale, '필요하면 손상명 라이브러리에서 규모 항목을 고르세요.'));
+    ckBox.appendChild(mkDet('형식별 원인·보수 문구가 서로 다른 손상명', ck.textDiffs, '의도한 차이가 아니면 한쪽으로 맞추세요.'));
+    ckBox.appendChild(mkDet('손상명이 하나도 없는 부위 (현장에서 상태양호로 보임)', ck.emptyParts));
+    ckBox.appendChild(mkDet('라이브러리에만 있고 어느 형식에도 묶이지 않은 손상명', ck.unused, '부위의 "손상명 가져오기"로 묶어야 현장 화면에 나옵니다.'));
+    body.appendChild(ckBox);
+
+    // --- 버전 목록 ---
+    body.appendChild(mk('div', 'font-weight:700; margin:8px 0;', '버전 이력 (' + dmVersions.length + '개)'));
+    sorted.slice().reverse().forEach(v => {
+      const idx = sorted.indexOf(v);
+      const prev = idx > 0 ? sorted[idx - 1] : null;
+      const c = mk('div', 'border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin:6px 0; background:var(--panel-2);');
+      const kindTxt = v.kind === 'auto' ? '자동 보관' : v.kind === 'import' ? '가져옴' : '직접 저장';
+      c.innerHTML = '<div style="display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap;"><div style="font-weight:700;">v' + v.num + (v.note ? ' — ' + escapeHtml(v.note) : '') + '</div><div style="font-size:11px; color:var(--muted);">' + kindTxt + ' · ' + escapeHtml(dmFmtDate(v.createdAt)) + '</div></div>' +
+        '<div style="font-size:12px; color:var(--muted); margin-top:2px;">손상명 ' + v.stats.names + '개 · 형식별 항목 ' + v.stats.entries + '건 · 라이브러리 수정/등록 ' + v.stats.library + '개</div>';
+      const acts = mk('div', 'display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;');
+      const mkBtn = (t, fn, danger)=>{ const b = mk('button', 'padding:4px 10px; font-size:12px;' + (danger ? ' color:#d33;' : ''), t); b.className = 'ghost'; b.addEventListener('click', fn); acts.appendChild(b); return b; };
+      const out = mk('div', 'font-size:12px; line-height:1.7; margin-top:6px; display:none;');
+      const show = (title, diff)=>{
+        out.style.display = 'block';
+        out.innerHTML = '<b>' + escapeHtml(title) + '</b> — 추가 ' + diff.counts.added + ' · 삭제 ' + diff.counts.removed + ' · 변경 ' + diff.counts.changed + '건<br>' + (dmDiffIsEmpty(diff) ? '차이가 없습니다.' : dmDiffLines(diff).map(l => escapeHtml(l)).join('<br>'));
+      };
+      mkBtn('이전 버전과의 차이', ()=> prev ? show('v' + prev.num + ' → v' + v.num, dmDiffSets(prev.set, v.set)) : show('v' + v.num + ' (첫 버전)', { library: { added: [], removed: [], changed: [] }, forms: [], counts: { added: 0, removed: 0, changed: 0 } }));
+      mkBtn('현재와의 차이', ()=> show('v' + v.num + ' → 현재', dmDiffSets(v.set, cur)));
+      mkBtn('파일로 내보내기', ()=> dmDownloadJson({ kind: DM_FILE_KIND, schema: 1, exportedAt: new Date().toISOString(), note: 'v' + v.num + (v.note ? ' ' + v.note : ''), set: v.set }, '손상마스터_v' + v.num + '_' + v.createdAt.slice(0, 10) + '.json'));
+      mkBtn('이 버전으로 되돌리기', async ()=>{
+        const d = dmDiffSets(cur, v.set);
+        if(!confirm('v' + v.num + '으로 되돌립니다.\n\n현재 → v' + v.num + ': 추가 ' + d.counts.added + ' · 삭제 ' + d.counts.removed + ' · 변경 ' + d.counts.changed + '건\n\n되돌리기 전의 현재 상태는 새 버전으로 자동 보관됩니다.\n(프로젝트 전용 손상마스터와 현장 기록은 바뀌지 않습니다)\n\n계속할까요?')) return;
+        const keep = await dmCreateVersion('auto', 'v' + v.num + '으로 되돌리기 직전 (자동 보관)');
+        await dmRestoreSet(v.set);
+        logActivity('손상마스터 되돌리기', 'v' + v.num + ' 적용 (직전 상태는 v' + keep.num + ' 로 보관)');
+        alert('v' + v.num + '으로 되돌렸습니다.\n(직전 상태는 v' + keep.num + ' 로 보관되어 있습니다)');
+        if(dmTypeSel.value && dmFormSel.value) loadDmConfig();
+        dvRender();
+      });
+      mkBtn('삭제', async ()=>{
+        if(dmVersions.length <= 1){ alert('마지막 버전은 지울 수 없습니다.'); return; }
+        if(!confirm('v' + v.num + '을(를) 이력에서 지울까요? (현재 설정은 바뀌지 않습니다)')) return;
+        dmVersions = dmVersions.filter(x => x.id !== v.id); await saveDmVersions(); dvRender();
+      }, true);
+      c.appendChild(acts); c.appendChild(out);
+      body.appendChild(c);
+    });
+  }
 
   window.saveDamageMaster = async function() {
     const type = dmTypeSel.value;

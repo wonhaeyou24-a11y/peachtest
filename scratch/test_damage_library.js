@@ -47,8 +47,10 @@ function build(state) {
   const scope = { STANDARD_DB, MEASUREMENT_TEMPLATES, DM_LABEL_PRESETS, globalDamageMaster: state.global || {}, orgDamageMasterCache: {}, projects: state.projects || [], currentProjectId: state.pid || null,
     damageLibrary: state.library || {}, Date, Array, Object, Set, Map, JSON, currentSiteObj: () => null, resolveDamageStandard: () => null };
   const proxy = new Proxy(scope, { has: () => true, get: (t, k) => (k === Symbol.unscopables ? undefined : (k in t ? t[k] : (k in globalThis ? globalThis[k] : undefined))), set: (t, k, v) => { t[k] = v; return true; } });
-  const names = ['dmNormLabel', 'dmFieldDef', 'dmLibraryEffective', 'getMeasurementFields', 'dmNormalizeMeasurementItems', 'syncMeasurementText', 'dmApplyPickToData'];
-  const body = `with(__p){ let dmLibCache = null; function dmLibInvalidate(){ dmLibCache = null; }\n${names.map(n => extractFn('function ' + n + '(')).join('\n')}\n return { ${names.join(', ')}, dmLibInvalidate }; }`;
+  const names = ['dmNormLabel', 'dmFieldDef', 'dmLibraryEffective', 'getMeasurementFields', 'dmNormalizeMeasurementItems', 'syncMeasurementText', 'dmApplyPickToData', 'dmDiffSets', 'dmDiffIsEmpty', 'dmDiffLines', 'dmCleanupChecks', 'dmSetStats'];
+  // v125 의 차이 계산이 쓰는 한 줄 도우미 (index.html 의 const 화살표 함수와 같은 내용)
+  const consts = "const dmEntryKey = it => (it.component || '').trim() + '\\u0001' + (it.damageType || ''); const dmScaleText = it => (it.measurementFields || []).map(f => dmNormLabel(f.label) + '(' + f.defaultUnit + ')').join('+'); const dmTextSig = it => JSON.stringify([it.cause || '', it.repairOptions || [], it.reinforcementOptions || [], it.investigationItems || '']); const dmFieldsText = o => (o && Array.isArray(o.fields) ? o.fields.map(f => f.label).join('+') : '') || '기본';";
+  const body = `with(__p){ let dmLibCache = null; function dmLibInvalidate(){ dmLibCache = null; }\n${consts}\n${names.map(n => extractFn('function ' + n + '(')).join('\n')}\n return { ${names.join(', ')}, dmLibInvalidate }; }`;
   return new Function('__p', body)(proxy);
 }
 let t = build({});
@@ -103,6 +105,28 @@ check('빼기: 손상명을 모두 빼도 부위는 빈 자리표시 항목으�
 const r4 = t.dmApplyPickToData(base, '전면부', ['유실'], ['균열']);
 check('추가와 빼기를 한 번에 해도 됨', r4.some(x => x.damageType === '유실') && !r4.some(x => x.damageType === '균열'));
 check('원본 배열은 바뀌지 않음 (다른 형식 보관용 복사본만 바뀜)', base.length === 3 && base[0].damageType === '균열');
+
+// ---- v125: 손상마스터 버전 (차이 계산·정리 점검) ----
+const mkE = (comp, name, extra) => Object.assign({ damageType: name, component: comp, cause: '', repairOptions: [], measurementFields: [] }, extra || {});
+const setA = { library: {}, forms: { '옹벽': { '콘크리트 옹벽': [mkE('전면부', '균열', { cause: 'A' }), mkE('전면부', '박리'), mkE('배수시설', '이물질 집적')] } } };
+const setB = { library: { '배수로 막힘': { custom: true, fields: [{ label: '길이', unit: 'm' }] }, '유실': { fields: [{ label: '너비', unit: 'm' }] } },
+  forms: { '옹벽': { '콘크리트 옹벽': [mkE('전면부', '균열', { cause: 'B' }), mkE('전면부', '유실'), mkE('배수시설', '이물질 집적', { measurementFields: [{ label: '길이', defaultUnit: 'm' }] })] } } };
+t = build({});
+const df = t.dmDiffSets(setA, setB);
+check('차이: 직접 등록한 손상명만 "추가", 기본 손상명의 규모 수정은 "규모 변경"', df.library.added.join() === '배수로 막힘' && df.library.changed.length === 1 && df.library.changed[0].name === '유실' && df.library.changed[0].from === '기본' && df.library.removed.length === 0, JSON.stringify(df.library));
+const f0 = df.forms[0];
+check('차이: 형식별 항목의 추가(유실)·삭제(박리)·변경(균열 문구, 이물질 집적 규모)', f0.added.map(x => x.damageType).join() === '유실' && f0.removed.map(x => x.damageType).join() === '박리' && f0.changed.map(c => c.it.damageType + ':' + c.what.join('/')).sort().join() === '균열:원인·보수 문구,이물질 집적:규모', JSON.stringify({ a: f0.added.length, r: f0.removed.length, c: f0.changed.map(c => c.it.damageType + ':' + c.what.join('/')) }));
+check('차이: 개수 집계 (추가 2 · 삭제 1 · 변경 3)', df.counts.added === 2 && df.counts.removed === 1 && df.counts.changed === 3, JSON.stringify(df.counts));
+check('차이: 같은 세트끼리는 차이 없음', t.dmDiffIsEmpty(t.dmDiffSets(setA, JSON.parse(JSON.stringify(setA)))));
+check('차이 문장: [라이브러리]·[종류 / 형식] 머리말', t.dmDiffLines(df).some(l => l.startsWith('[라이브러리] 추가: 배수로 막힘')) && t.dmDiffLines(df).some(l => l.startsWith('[옹벽 / 콘크리트 옹벽] 삭제: 전면부 · 박리')), JSON.stringify(t.dmDiffLines(df)));
+check('라이브러리에서 사라진 직접 등록 항목은 "삭제", 규모 수정이 사라지면 "기본으로"', t.dmDiffSets(setB, setA).library.removed.join() === '배수로 막힘' && t.dmDiffSets(setB, setA).library.changed.some(c => c.name === '유실' && c.to === '기본'));
+const ckSet = { library: { '미사용등록': { custom: true, fields: [] } }, forms: { '옹벽': { 'A': [mkE('전면부', '배수공 불량', { cause: 'x' }), mkE('전면부', '배수공불량', { cause: 'y' }), mkE('빈부위', ''), mkE('기타부', '균열', { cause: 'x' })], 'B': [mkE('기타부', '균열', { cause: 'z' })] } } };
+const ck = t.dmCleanupChecks(ckSet);
+check('정리 점검: 띄어쓰기만 다른 비슷한 이름 묶음', ck.similar.length === 1 && ck.similar[0].includes('배수공 불량') && ck.similar[0].includes('배수공불량'), JSON.stringify(ck.similar));
+check('정리 점검: 손상명 없는 부위 / 라이브러리에만 있는 손상명 / 형식별 문구가 다른 손상명', ck.emptyParts.join() === '옹벽 / A · 빈부위' && ck.unused.join() === '미사용등록' && ck.textDiffs.some(x => x.startsWith('균열 (2곳')), JSON.stringify({ e: ck.emptyParts, u: ck.unused, t: ck.textDiffs }));
+const stt = t.dmSetStats(ckSet);
+check('통계: 손상명 수·항목 수·형식 수', stt.entries === 4 && stt.forms === 2 && stt.library === 1 && stt.names === 4, JSON.stringify(stt));
+check('v125: 버전 저장·되돌리기·파일 내보내기/가져오기 화면 요소', ['window.openDmVersions', 'btnOpenDmVersions', 'dmCreateVersion', 'dmRestoreSet', 'kind !== DM_FILE_KIND', '정리 전 상태 (자동 보관)', '되돌리기 직전 (자동 보관)'].every(k => html.includes(k)));
 
 console.log(fail ? `\n실패 ${fail}건` : '\n모두 통과');
 process.exit(fail ? 1 : 0);

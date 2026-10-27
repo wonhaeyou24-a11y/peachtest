@@ -8,7 +8,7 @@
     const q = { op: 'select', f: [], single: false, maybe: false, payload: null, opts: null, count: null };
     const match = row => q.f.every(([k, t, v]) => (t === 'eq' ? row[k] === v : t === 'is' ? (v === null ? row[k] == null : row[k] === v) : t === 'in' ? v.includes(row[k]) : t === 'neq' ? row[k] !== v : true));
     const b = {
-      select() { return b; }, order() { return b; }, range() { return b; }, limit() { return b; },
+      select(cols) { q.cols = cols; return b; }, order() { return b; }, range() { return b; }, limit() { return b; },
       eq(k, v) { q.f.push([k, 'eq', v]); return b; }, neq(k, v) { q.f.push([k, 'neq', v]); return b; },
       is(k, v) { q.f.push([k, 'is', v]); return b; }, in(k, v) { q.f.push([k, 'in', v]); return b; },
       gte() { return b; }, lte() { return b; }, or() { return b; }, not() { return b; }, ilike() { return b; },
@@ -20,7 +20,20 @@
       then(res, rej) {
         try {
           let data = null;
-          if (q.op === 'select') { data = T(tname).filter(match).map(r => JSON.parse(JSON.stringify(r))); }
+          if (q.op === 'select') {
+            data = T(tname).filter(match).map(r => JSON.parse(JSON.stringify(r)));
+            // 별칭 열 흉내: "별칭:열->키->0->>키" (예: d0:data->drawings->0->>id, ph:data->photos)
+            const aliases = String(q.cols || '').split(',').map(x => x.trim()).filter(x => /^[\w]+:[\w]+(->>?[\w]+)+$/.test(x));
+            if (aliases.length) data = data.map(r => {
+              aliases.forEach(a => {
+                const [name, path] = [a.slice(0, a.indexOf(':')), a.slice(a.indexOf(':') + 1)];
+                const parts = path.split(/->>?/); let v = r[parts[0]];
+                for (let i = 1; i < parts.length && v != null; i++) v = Array.isArray(v) ? v[Number(parts[i])] : v[parts[i]];
+                r[name] = v === undefined ? null : v;
+              });
+              return r;
+            });
+          }
           else if (q.op === 'upsert' || q.op === 'insert') {
             const arr = Array.isArray(q.payload) ? q.payload : [q.payload];
             arr.forEach(row => {
