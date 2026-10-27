@@ -10,5 +10,8 @@ http.createServer((req, res) => {
   if (!fp.startsWith(ROOT) || !fs.existsSync(fp) || fs.statSync(fp).isDirectory()) { res.writeHead(404); return res.end('not found'); }
   let body = fs.readFileSync(fp);
   if (u === '/index.html') body = Buffer.from(body.toString('utf8').replace(/<script src="https:\/\/unpkg\.com\/@supabase\/supabase-js@2\/dist\/umd\/supabase\.js"><\/script>/, '<script src="/mock-supabase.js"></script>'));
+  if (u === '/index.html' && process.env.FAST_UPLOAD) {   // 시험용: 10분마다 도는 사진 자동 업로드를 3초마다 돌게 한다
+    body = Buffer.from(body.toString('utf8').replace(/(uploadPendingPhotosForProject\(proj\)[\s\S]*?\}, )10 \* 60 \* 1000\);/, '$13000);'));
+  }
   res.writeHead(200, { 'Content-Type': types[path.extname(fp)] || 'application/octet-stream', 'Cache-Control': 'no-store' }); res.end(body);
 }).listen(8765, '127.0.0.1', () => console.log('listening 8765'));

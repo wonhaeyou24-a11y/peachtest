@@ -3208,7 +3208,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v115';
+  const PS_BUILD = 'v116';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -6846,9 +6846,16 @@
     rep();
     try{
       for(const s of psites){
-        await hydratePhotoBlobs(s.markers || []);
+        // v116: 올릴 사진(cloudRef 없는 사진)이 있는 지점만 불러온다. 예전엔 올릴 것이 없어도 프로젝트의 모든 시설물의
+        // 모든 사진을 10분마다 메모리에 올리고 비우지 않아(수백 장·600MB 이상) 아이폰이 앱을 강제 종료했다.
+        const pendingMarkers = (s.markers || []).filter(m => (m.photos || []).some(ph => !ph.cloudRef));
+        if(!pendingMarkers.length) continue;
+        // 이 함수가 새로 불러오는 사진만 기억해 두었다가, 올린 뒤 메모리에서 내려놓는다 (원래 메모리에 있던 사진·방금 찍은 사진은 건드리지 않는다)
+        const loadedHere = [];
+        pendingMarkers.forEach(m => (m.photos || []).forEach(ph => { if(!ph.cloudRef && !ph.src) loadedHere.push({ ph, markerId: m.id }); }));
+        await hydratePhotoBlobs(pendingMarkers);
         let siteChanged = false;
-        for(const m of (s.markers || [])){
+        for(const m of pendingMarkers){
           for(const p of (m.photos || [])){
             if(p.src && !p.cloudRef){
               const photoId = p.id || genId();
@@ -6874,6 +6881,8 @@
           }
         }
         if(siteChanged) queueEntitySyncForFacility(s); // 방금 생긴 cloudRef를 지점 데이터에도 실어 보낸다
+        // 안전 저장소(photoBlobs)에서 읽어 온 것이 확인된(blobExtracted) 사진만 비운다. 못 올린 사진은 다음 번에 다시 불러온다.
+        loadedHere.forEach(x => { if(x.ph.src && x.ph.blobExtracted && x.markerId !== activeMarkerId) delete x.ph.src; });   // 지금 열어 보고 있는 지점의 사진은 그대로 둔다
       }
       if(uploadedCount > 0){
         try{ await processSyncQueue(); }catch(e){}
