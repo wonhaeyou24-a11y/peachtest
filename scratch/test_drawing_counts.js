@@ -20,7 +20,7 @@ function extractFn(header) {
 }
 check('PS_BUILD v125 이상', /const PS_BUILD = 'v(12[5-9]|1[3-9]\d)'/.test(html));
 check('도면 수는 도면 이미지를 받지 않고 id 만 읽음 (d0~d9, data->drawings->N->>id) — 시설물 데이터 전체를 받지 않는다', html.includes("const DRAW_ID_SELECT = Array.from({ length: 10 }, (_, i) => 'd' + i + ':data->drawings->' + i + '->>id').join(',');"));
-check('① 불러오기 전 비교: 이 기기·클라우드 도면 수 + 이 기기에만 있는 도면 경고', html.includes("const drawLocalTxt = ' · 도면 ' + lDraw + '개';") && html.includes('onlyDraws') && html.includes("(onlyDraws ? '\\n · 도면 ' + onlyDraws + '개' : '')"));
+check('① 불러오기 전 비교: 이 기기·클라우드 도면 수 + 이 기기에만 있는 도면 경고', html.includes("const drawLocalTxt = ' · 도면 ' + lDraw + '개';") && html.includes('onlyDraws') && html.includes("(onlyDraws ? '\\n⚠ 도면 ' + onlyDraws + '개' : '')"));
 check('② 불러오기 완료 안내에 도면 수', html.includes("개 · 도면 ' + countLocalDrawings(newSites) + '개 · 기존손상 '"));
 check('③ 클라우드 프로젝트 관리 목록에 도면 수', html.includes("' · 도면 ' + drawingCountText(drCnt[p.id] || 0, drCapped[p.id])") && html.includes("fetchAllRows('ps_facilities', 'id,project_id,' + DRAW_ID_SELECT)"));
 check('④ 클라우드 백업 완료 보고서의 도면(올라간 수/기기 수)은 그대로', html.includes("' · 도면 ' + r.drawings[0] + '/' + r.drawings[1]"));

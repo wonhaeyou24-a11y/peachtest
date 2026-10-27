@@ -1884,6 +1884,30 @@
   }
   /* v119: 터치 기기의 규모 값 칸 — 눌러서 숫자 입력판(휠·칩·±)을 연다 */
   .measurement-row input.nw-btn{ cursor:pointer; text-align:center; font-weight:700; font-size:15px; caret-color:transparent; }
+  /* v126: 알림창·확인창 — 경고·이상한 부분을 눈에 띄게 */
+  .psd-overlay{ position:fixed; inset:0; z-index:100200; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; padding:16px; box-sizing:border-box; }
+  .psd-card{ width:100%; max-width:460px; max-height:86vh; display:flex; flex-direction:column; background:var(--panel, #fff); color:var(--text); border-radius:14px; box-shadow:0 12px 40px rgba(0,0,0,.4); overflow:hidden; border-top:6px solid #3b82f6; }
+  .psd-card.lv-warn{ border-top-color:#E5A83B; } .psd-card.lv-danger{ border-top-color:#d33; } .psd-card.lv-ok{ border-top-color:#1F8A4C; }
+  .psd-head{ display:flex; align-items:center; gap:8px; padding:12px 16px 4px; font-size:15px; font-weight:800; }
+  .psd-card.lv-warn .psd-head{ color:#a86a00; } .psd-card.lv-danger .psd-head{ color:#d33; } .psd-card.lv-ok .psd-head{ color:#1F8A4C; }
+  .psd-body{ padding:6px 16px 12px; overflow-y:auto; font-size:14px; line-height:1.6; -webkit-overflow-scrolling:touch; }
+  .psd-line{ margin:2px 0; word-break:break-word; }
+  .psd-gap{ height:8px; }
+  .psd-muted{ font-size:12px; color:var(--muted); }
+  .psd-warn{ background:rgba(229,168,59,.18); border-left:4px solid #E5A83B; padding:5px 8px; border-radius:4px; font-weight:700; margin:4px 0; }
+  .psd-danger{ background:rgba(221,51,51,.12); border-left:4px solid #d33; padding:5px 8px; border-radius:4px; font-weight:800; color:#b91c1c; margin:4px 0; }
+  .psd-ok{ color:#1F8A4C; font-weight:700; }
+  .psd-num{ font-size:1.18em; font-weight:900; padding:0 2px; border-radius:3px; }
+  .psd-warn .psd-num{ background:rgba(229,168,59,.45); } .psd-danger .psd-num{ background:rgba(221,51,51,.22); }
+  .psd-choice{ font-weight:700; }
+  .psd-bad{ background:rgba(221,51,51,.18); color:#b91c1c; font-weight:900; border-radius:3px; padding:0 3px; }
+  .psd-actions{ display:flex; gap:8px; padding:10px 16px 14px; border-top:1px solid var(--line); }
+  .psd-actions button{ flex:1; min-height:46px; border-radius:10px; font-size:15px; font-weight:800; border:1px solid var(--line); background:var(--panel-2); color:var(--text); cursor:pointer; font-family:inherit; }
+  .psd-actions .psd-primary{ background:#3b82f6; border-color:#3b82f6; color:#fff; }
+  .psd-card.lv-warn .psd-primary{ background:#E5A83B; border-color:#E5A83B; color:#1a1a1a; }
+  .psd-card.lv-danger .psd-primary{ background:#d33; border-color:#d33; color:#fff; }
+  .psd-card.lv-ok .psd-primary{ background:#1F8A4C; border-color:#1F8A4C; color:#fff; }
+  .psd-actions button:focus-visible{ outline:3px solid #1d4ed8; outline-offset:2px; }
   .nw-overlay{ position:fixed; inset:0; z-index:100050; background:rgba(0,0,0,.5); display:flex; align-items:flex-end; justify-content:center; }
   .nw-sheet{ width:100%; max-width:480px; background:var(--panel, #fff); color:var(--text); border-radius:16px 16px 0 0; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); box-shadow:0 -6px 24px rgba(0,0,0,.3); }
   .nw-title{ font-size:13px; color:var(--muted); text-align:center; }
@@ -3236,7 +3260,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v125';
+  const PS_BUILD = 'v126';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -3246,6 +3270,86 @@
       if(t2) t2.textContent = 'PeachShot ' + PS_BUILD;
     });
   }catch(e){}
+  // ================================================================
+  // v126: 알림창·확인창 — 기본 alert/confirm 은 글자를 꾸밀 수 없어서, 경고·이상한 부분을 강조하는 창으로 대신한다.
+  //  - 줄마다 판단해서 경고(⚠·삭제·사라짐·실패·오류·되돌릴 수 없음 등)는 색 띠 + 굵은 글씨, 그 줄의 숫자("5개", "62장")는 크게 강조한다.
+  //  - 창 전체의 수준(정보/확인 필요/경고·삭제/완료)에 따라 위쪽 띠 색과 제목이 달라진다.
+  //  - alert 는 기다리지 않고 순서대로 하나씩 띄운다(예전처럼 코드가 멈추지 않는다). confirm 은 psConfirm() 으로 답을 기다린다.
+  //  - 위험한 확인창은 기본으로 "취소"에 포커스가 가고, 확인 버튼이 빨간색이다.
+  //  - 시험·자동화에서 window.confirm/alert 를 바꿔 끼운 경우에는 그 함수를 그대로 쓴다.
+  // ================================================================
+  const PSD_DANGER = /(사라집니다|사라질|사라지|삭제됩니다|삭제되고|삭제하면|완전히 삭제|지워집니다|지워지|되돌릴 수 없|복구할 수 없|돌이킬 수 없|영구)/;
+  const PSD_WARN = /(⚠|※|❗|🛑|실패|오류|문제|중단|못 했|못했|받지 못|올리지 못|확인되지|확인하지 못|덮어|충돌|부족|누락|주의|경고|재시도)/;   // 흔한 단어(교체·없습니다 등)는 넣지 않는다 — 경고가 흔해지면 정말 중요한 것이 묻힌다
+  function psdEscape(t){ return String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+  // 숫자 강조: 경고 줄은 숫자 + 단위("5개", "62장", "3.2MB", "±12m", "5%")를 크게. 그리고 어느 줄에서든
+  // "올라간 수/기기 수" 같은 a/b 비율에서 a < b 이면(빠진 것이 있다는 뜻) 빨간 표시를 한다.
+  function psdEmph(escaped, emphNums){
+    return escaped.replace(/(\d+)\/(\d+)|(±?\d[\d,]*(?:\.\d+)?)(\s?(?:개소|개|장|건|명|MB|GB|KB|%|m|초|분|일|시간|곳|번))?/g, (m, a, b)=>{
+      if(a !== undefined) return Number(a) < Number(b) ? '<span class="psd-bad">' + m + '</span>' : m;
+      return emphNums ? '<span class="psd-num">' + m + '</span>' : m;
+    });
+  }
+  function psdLevelOf(msg, kind){
+    const t = String(msg);
+    if(PSD_DANGER.test(t) || /^\s*(🛑|❌)/.test(t)) return 'danger';
+    if(/⚠|※|❗/.test(t) || /(실패|오류|문제|중단|못 했|못했|받지 못|올리지 못|확인되지|확인하지 못|충돌|부족|누락)/.test(t)) return 'warn';
+    if(/^\s*(✅|✓|🎉)/.test(t) || /(완료|저장되었|저장했|성공|복원했|불러왔)/.test(t) && kind === 'alert') return 'ok';
+    return kind === 'confirm' ? 'info' : 'info';
+  }
+  function psdFormat(msg){
+    const lines = String(msg == null ? '' : msg).split('\n');
+    return lines.map(raw => {
+      const line = raw.replace(/\s+$/, '');
+      if(!line.trim()) return '<div class="psd-gap"></div>';
+      const esc = psdEscape(line);
+      if(/^\s*\[(확인|취소|예|아니오)\]/.test(line)) return '<div class="psd-line psd-choice">' + esc.replace(/^(\s*\[[^\]]+\])/, '<b>$1</b>') + '</div>';
+      if(/^\s*\(.*\)\s*$/.test(line)) return '<div class="psd-line psd-muted">' + psdEmph(esc, false) + '</div>';
+      if(PSD_DANGER.test(line)) return '<div class="psd-line psd-danger">' + psdEmph(esc, true) + '</div>';
+      if(PSD_WARN.test(line)) return '<div class="psd-line psd-warn">' + psdEmph(esc, true) + '</div>';
+      if(/^\s*(✅|✓|🎉)/.test(line)) return '<div class="psd-line psd-ok">' + psdEmph(esc, false) + '</div>';
+      return '<div class="psd-line">' + psdEmph(esc, false) + '</div>';
+    }).join('');
+  }
+  const psdQueue = [];
+  let psdBusy = false;
+  function psdNext(){
+    if(psdBusy || !psdQueue.length) return;
+    psdBusy = true;
+    const job = psdQueue.shift();
+    const level = job.level || psdLevelOf(job.msg, job.kind);
+    const TITLES = { info: ['ℹ️', '알림'], warn: ['⚠️', '확인이 필요합니다'], danger: ['🛑', '주의 — 되돌릴 수 없을 수 있습니다'], ok: ['✅', '완료'] };
+    const conf = job.kind === 'confirm';
+    const [icon, title0] = TITLES[level] || TITLES.info;
+    const title = conf && level === 'info' ? '확인' : (conf && level === 'ok' ? '확인' : title0);
+    const ov = document.createElement('div'); ov.className = 'psd-overlay'; ov.setAttribute('role', 'alertdialog'); ov.setAttribute('aria-modal', 'true');
+    ov.innerHTML = '<div class="psd-card lv-' + level + '"><div class="psd-head"><span>' + icon + '</span><span>' + title + '</span></div><div class="psd-body">' + psdFormat(job.msg) + '</div><div class="psd-actions">' +
+      (conf ? '<button type="button" class="psd-cancel">취소</button>' : '') + '<button type="button" class="psd-primary psd-ok-btn">확인</button></div></div>';
+    document.body.appendChild(ov);
+    const okBtn = ov.querySelector('.psd-ok-btn'), cancelBtn = ov.querySelector('.psd-cancel');
+    let done = false;
+    const finish = (val)=>{ if(done) return; done = true; document.removeEventListener('keydown', onKey, true); ov.remove(); psdBusy = false; try{ job.resolve(val); }catch(e){} setTimeout(psdNext, 0); };
+    const onKey = (e)=>{
+      if(e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); finish(conf ? false : undefined); }
+      else if(e.key === 'Tab'){ const btns = [cancelBtn, okBtn].filter(Boolean); const i = btns.indexOf(document.activeElement); e.preventDefault(); btns[(i + (e.shiftKey ? -1 : 1) + btns.length) % btns.length].focus(); }
+    };
+    document.addEventListener('keydown', onKey, true);
+    okBtn.addEventListener('click', ()=> finish(conf ? true : undefined));
+    if(cancelBtn) cancelBtn.addEventListener('click', ()=> finish(false));
+    // 위험한 확인창은 실수로 Enter 를 눌러도 진행되지 않도록 "취소"에 포커스를 둔다
+    setTimeout(()=>{ try{ (conf && level === 'danger' && cancelBtn ? cancelBtn : okBtn).focus(); }catch(e){} }, 30);
+  }
+  function psAlert(msg, opts){ return new Promise(resolve => { psdQueue.push({ kind: 'alert', msg, level: opts && opts.level, resolve }); psdNext(); }); }
+  const psNativeConfirm = window.confirm, psNativeAlert = window.alert;
+  function psConfirm(msg, opts){
+    // 시험·자동화가 window.confirm 을 바꿔 끼웠으면 그것을 쓴다
+    if(window.confirm !== psNativeConfirm) return Promise.resolve(window.confirm(msg));
+    return new Promise(resolve => { psdQueue.push({ kind: 'confirm', msg, level: opts && opts.level, resolve }); psdNext(); });
+  }
+  try{
+    window.alert = function(msg){ psAlert(msg); };   // 예전 alert 처럼 기다리지 않고 순서대로 하나씩 띄운다
+    window.__psDialog = { psAlert, psConfirm, format: psdFormat, levelOf: psdLevelOf };
+  }catch(e){}
+
   const stage = document.getElementById('stage');
   const emptyMsg = document.getElementById('emptyMsg');
   const stageStatus = document.getElementById('stageStatus');
@@ -7185,11 +7289,11 @@
     const compare = '"' + localProject.name + '"\n\n이 기기: 지점 ' + lp + '개 · 사진 ' + lph + '장' + drawLocalTxt + '\n클라우드: 지점 ' + cloud.points + '개 · 사진 ' + cloud.photos + '장' + drawCloudTxt;
 
     if(onlyPts === 0 && onlyPhotos === 0 && onlyDraws === 0){
-      return confirm(compare + '\n\n이 기기의 같은 프로젝트를 클라우드 내용으로 교체합니다.\n(교체 직전의 기기 상태는 "복구 스냅샷"에 보관됩니다)\n\n교체할까요?');
+      return await psConfirm(compare + '\n\n이 기기의 같은 프로젝트를 클라우드 내용으로 교체합니다.\n(교체 직전의 기기 상태는 "복구 스냅샷"에 보관됩니다)\n\n교체할까요?');
     }
 
-    const warn = '⚠ ' + compare + '\n\n이 기기에만 있는 내용이 있습니다 (클라우드에 아직 없음):\n · 지점 ' + onlyPts + '개\n · 사진 ' + onlyPhotos + '장' + (onlyDraws ? '\n · 도면 ' + onlyDraws + '개' : '') + '\n\n지금 교체하면 이 내용은 프로젝트에서 사라집니다.';
-    if(confirm(warn + '\n\n[확인] 먼저 이 기기 내용을 클라우드에 백업한 뒤 교체 (추천)\n[취소] 백업하지 않고 다음 단계로')){
+    const warn = compare + '\n\n⚠ 이 기기에만 있는 내용이 있습니다 (클라우드에 아직 없음):' + (onlyPts ? '\n⚠ 지점 ' + onlyPts + '개' : '') + (onlyPhotos ? '\n⚠ 사진 ' + onlyPhotos + '장' : '') + (onlyDraws ? '\n⚠ 도면 ' + onlyDraws + '개' : '') + '\n\n지금 교체하면 이 내용은 프로젝트에서 사라집니다.';
+    if(await psConfirm(warn + '\n\n[확인] 먼저 이 기기 내용을 클라우드에 백업한 뒤 교체 (추천)\n[취소] 백업하지 않고 다음 단계로')){
       let res;
       await psProgress.start('교체 전에 클라우드에 백업하는 중…', localProject.name);
       try{ res = await backupProjectFull(localProject, (msg, pct)=>{ psProgress.set(pct, msg); }); }catch(e){ res = { ok:false, reason: (e && e.message) || String(e) }; }
@@ -7200,7 +7304,7 @@
         return false;
       }
     } else {
-      if(!confirm('정말 백업 없이 교체할까요?\n이 기기에만 있는 지점 ' + onlyPts + '개 · 사진 ' + onlyPhotos + '장이 프로젝트에서 사라집니다.\n(복구 스냅샷에는 지점 정보가 보관되지만 사진 연결은 보장되지 않습니다)')) return false;
+      if(!await psConfirm('정말 백업 없이 교체할까요?\n이 기기에만 있는 지점 ' + onlyPts + '개 · 사진 ' + onlyPhotos + '장이 프로젝트에서 사라집니다.\n(복구 스냅샷에는 지점 정보가 보관되지만 사진 연결은 보장되지 않습니다)')) return false;
     }
     return true;
   }
@@ -7639,7 +7743,7 @@
               delMemBtn.style.cssText = 'padding:2px 6px; font-size:11px;';
               delMemBtn.textContent = '제외';
               delMemBtn.addEventListener('click', async ()=>{
-                if(!confirm('"' + (m.email || '이 팀원') + '" 님을 조직에서 제외할까요?')) return;
+                if(!await psConfirm('"' + (m.email || '이 팀원') + '" 님을 조직에서 제외할까요?')) return;
                 delMemBtn.disabled = true;
                 const delRes = await removeOrganizationMember(org.id, m.id, m.user_id, m.role);
                 if(delRes.ok){
@@ -7756,7 +7860,7 @@
                 revokeBtn.style.cssText = 'padding:2px 6px; font-size:10px;';
                 revokeBtn.textContent = '취소';
                 revokeBtn.addEventListener('click', async ()=>{
-                  if(!confirm('이 초대 링크를 취소할까요?')) return;
+                  if(!await psConfirm('이 초대 링크를 취소할까요?')) return;
                   revokeBtn.disabled = true;
                   const revRes = await revokeOrganizationInvitation(inv.id);
                   if(revRes.ok) renderCloudSyncBody();
@@ -8244,7 +8348,7 @@
       setTimeout(()=>{
         const clearAllBtn = document.getElementById('btnClearAllConflicts');
         if(clearAllBtn) clearAllBtn.onclick = async ()=>{
-          if(!confirm(conflicts.length + '건의 충돌 기록을 전부 지울까요?\n(현재 조사 데이터에는 전혀 영향이 없습니다 — 충돌 "기록"만 지웁니다)')) return;
+          if(!await psConfirm(conflicts.length + '건의 충돌 기록을 전부 지울까요?\n(현재 조사 데이터에는 전혀 영향이 없습니다 — 충돌 "기록"만 지웁니다)')) return;
           await saveConflictRecords([]);
           renderSyncDashboard();
         };
@@ -9005,7 +9109,7 @@
       delBtn.className = 'site-delete';
       delBtn.textContent = '삭제';
       delBtn.addEventListener('click', async ()=>{
-        if(!confirm('"' + doc.name + '" 기준자료를 삭제할까요?\n(이미 기록된 기준 DB 버전 이력에는 영향을 주지 않습니다)')) return;
+        if(!await psConfirm('"' + doc.name + '" 기준자료를 삭제할까요?\n(이미 기록된 기준 DB 버전 이력에는 영향을 주지 않습니다)')) return;
         referenceDocs = referenceDocs.filter(d => d.id !== doc.id);
         await saveReferenceDocs();
         renderReferenceList();
@@ -12468,12 +12572,12 @@
     try{ queueEntitySyncForFacility(site); }catch(e){}
   }
 
-  function deleteRefPoint(siteId, refId){
+  async function deleteRefPoint(siteId, refId){
     const site = sites.find(s => s.id === siteId);
     if(!site) return;
     const r = refPointsOf(site).find(x => x.id === refId);
     if(!r) return;
-    if(!confirm(r.label + ' 기준점을 삭제할까요?')) return;
+    if(!await psConfirm(r.label + ' 기준점을 삭제할까요?')) return;
     site.refPoints = refPointsOf(site).filter(x => x.id !== refId);
     persistRefPoints(site);
     renderRefPoints(site);
@@ -12515,14 +12619,14 @@
     refSetButtons();
   }
 
-  function startRefCapture(role){
+  async function startRefCapture(role){
     if(refCapture) return;
     const site = sites.find(s => s.id === editingSiteId);
     if(!site) return;
     if(!navigator.geolocation){ alert('이 기기는 GPS를 지원하지 않습니다.'); return; }
     const had = refPointsOf(site).find(r => r.role === role);
     const label = role === 'start' ? '시점' : (role === 'end' ? '종점' : '중간점');
-    if(role !== 'mid' && had && !confirm(label + '이 이미 저장되어 있습니다. 다시 찍어서 바꿀까요?')) return;
+    if(role !== 'mid' && had && !await psConfirm(label + '이 이미 저장되어 있습니다. 다시 찍어서 바꿀까요?')) return;
     refCapture = { siteId: site.id, role, label, samples: [], lastTs: null, startedAt: Date.now(), timer: null };
     refCapture.timer = setInterval(refCaptureTick, 500);
     refSetButtons();
@@ -12612,7 +12716,7 @@
     if(!site) return;
     const label = role === 'start' ? '시점' : (role === 'end' ? '종점' : '중간점');
     const had = refPointsOf(site).find(r => r.role === role);
-    if(role !== 'mid' && had && !confirm(label + '이 이미 저장되어 있습니다. 다시 지정해서 바꿀까요?')) return;
+    if(role !== 'mid' && had && !await psConfirm(label + '이 이미 저장되어 있습니다. 다시 지정해서 바꿀까요?')) return;
     refPick = { siteId: site.id, role, label };
     facilityModal.style.display = 'none';
     updatePcExplorerDocking();
@@ -12776,10 +12880,10 @@
     fileInput.click();
   });
 
-  btnResetImage.addEventListener('click', ()=>{
+  btnResetImage.addEventListener('click', async ()=>{
     if(!currentSiteId){ btnNewSite.click(); return; }
     pendingNewDrawing = false;
-    if(baseImageSrc && !confirm('현재 도면의 이미지를 새로 불러오면, 이 도면에 찍어둔 마킹과 사진이 모두 사라집니다.\n(다른 도면의 조사점은 영향받지 않습니다)\n계속할까요?')) return;
+    if(baseImageSrc && !await psConfirm('현재 도면의 이미지를 새로 불러오면, 이 도면에 찍어둔 마킹과 사진이 모두 사라집니다.\n(다른 도면의 조사점은 영향받지 않습니다)\n계속할까요?')) return;
     fileInput.click();
   });
 
@@ -13095,11 +13199,11 @@
       const delBtn = document.createElement('button');
       delBtn.className = 'fc-btn card-btn danger';
       delBtn.textContent = '삭제';
-      delBtn.addEventListener('click', (e)=>{
+      delBtn.addEventListener('click', async (e)=>{
         e.stopPropagation();
         const pointCount = siteMarkers.length;
         const photoCount = siteMarkers.reduce((s,m)=>s+(m.photos||[]).length,0);
-        if(!confirm('"' + site.name + '" 시설물을 삭제할까요?\n(조사점 ' + pointCount + '개, 사진 ' + photoCount + '장)\n휴지통으로 이동되며, "⋯ → 휴지통"에서 복원할 수 있습니다.')) return;
+        if(!await psConfirm('"' + site.name + '" 시설물을 삭제할까요?\n(조사점 ' + pointCount + '개, 사진 ' + photoCount + '장)\n휴지통으로 이동되며, "⋯ → 휴지통"에서 복원할 수 있습니다.')) return;
         if(site.id === currentSiteId) commitLiveToCurrentSite();
         const proj = projects.find(p => p.id === site.projectId);
         deletedSites.push({
@@ -13406,7 +13510,7 @@
             alert('정리할 사진이 없습니다.@@(내 폴더 ' + r.totalFiles + '장은 모두 프로젝트에서 쓰고 있거나 최근 3일 안에 올라온 것입니다)'.replace(/@@/g, '\n'));
           } else {
             const mb = (r.bytes / 1048576).toFixed(1);
-            if(confirm(('내 폴더에서 어느 프로젝트(삭제 보관함 포함)에서도 쓰지 않고 3일이 넘은 사진 ' + r.unused.length + '장(약 ' + mb + ' MB)을 찾았습니다.@@@@지우면 되돌릴 수 없습니다. 지울까요?').replace(/@@/g, '\n'))){
+            if(await psConfirm(('내 폴더에서 어느 프로젝트(삭제 보관함 포함)에서도 쓰지 않고 3일이 넘은 사진 ' + r.unused.length + '장(약 ' + mb + ' MB)을 찾았습니다.@@@@지우면 되돌릴 수 없습니다. 지울까요?').replace(/@@/g, '\n'))){
               let deleted = 0;
               const paths = r.unused.map(f => r.uid + '/' + f.name);
               for(let i = 0; i < paths.length; i += 100){
@@ -13445,7 +13549,7 @@
           btn.className = isTrash ? 'ghost' : 'danger ghost';
           btn.addEventListener('click', async ()=>{
             if(isTrash){
-              if(!confirm('"' + p.name + '" 프로젝트를 복원할까요?')) return;
+              if(!await psConfirm('"' + p.name + '" 프로젝트를 복원할까요?')) return;
               btn.disabled = true;
               const { error } = await supabaseClient.rpc('ps_restore_project', { p_project_id: p.id });
               if(error) alert('복원 실패: ' + error.message); else alert('복원했습니다.');
@@ -13455,7 +13559,7 @@
             // 1단계: 내용 확인
             const msg = ('"' + p.name + '" [' + kind + ']@@' + counts + '@@@@이 프로젝트를 삭제 보관함으로 옮깁니다.@@30일 뒤 위 시설물·지점이 완전히 삭제됩니다 (그 전에는 복원 가능).' +
               (p.organization_id ? '@@팀 프로젝트라 다른 조직원도 그동안 받을 수 없습니다.' : '') + '@@@@계속할까요?').replace(/@@/g, '\n');
-            if(!confirm(msg)) return;
+            if(!await psConfirm(msg)) return;
             // 2단계: 이름을 똑같이 입력해야 진행(실수 방지)
             const typed = prompt('확인을 위해 프로젝트 이름을 똑같이 입력해 주세요:\n' + p.name);
             if(typed === null) return;
@@ -13619,7 +13723,7 @@
         const delBtn = document.createElement('button');
         delBtn.className = 'card-btn danger';
         delBtn.textContent = '삭제';
-        delBtn.addEventListener('click', (e)=>{
+        delBtn.addEventListener('click', async (e)=>{
           e.stopPropagation();
           if(facilityCount > 0){
             const backedUp = project.backupStatus === '백업완료';
@@ -13628,9 +13732,9 @@
               : '⚠ 이 프로젝트는 아직 백업하지 않았습니다. 먼저 백업하려면 "취소"를 누른 뒤 "백업"을 이용해주세요.';
             const msg = '"' + project.name + '" 프로젝트에는 시설물이 ' + facilityCount + '개 있습니다.\n' + backupNote +
               '\n\n삭제하면 시설물은 완전히 사라지지 않고 휴지통으로 이동됩니다 ("⋯ → 휴지통"에서 나중에 복원 가능).\n\n이 기기에서만 지워지며, 클라우드 원본은 그대로 남습니다.\n\n그래도 삭제할까요?';
-            if(!confirm(msg)) return;
+            if(!await psConfirm(msg)) return;
           } else {
-            if(!confirm('"' + project.name + '" 프로젝트를 삭제할까요?\n(이 기기에서만 지워지며, 클라우드 원본은 그대로 남습니다)')) return;
+            if(!await psConfirm('"' + project.name + '" 프로젝트를 삭제할까요?\n(이 기기에서만 지워지며, 클라우드 원본은 그대로 남습니다)')) return;
           }
           removeProjectLocally(project);
         });
@@ -13652,7 +13756,7 @@
             (project.organizationId ? '. 그동안 다른 조직원도 이 프로젝트를 받을 수 없습니다.' : '.') +
             '\n(사진 파일은 다른 프로젝트가 쓰고 있을 수 있어 여기서 지우지 않습니다)\n\n' +
             '이 기기의 시설물 자료는 그대로 남고(휴지통에서 복원 가능), 클라우드 연결만 끊어집니다.\n\n삭제 보관함으로 옮길까요?';
-          if(!confirm(warn)) return;
+          if(!await psConfirm(warn)) return;
           cloudDelBtn.disabled = true; cloudDelBtn.textContent = '삭제 중…';
           const result = await deleteCloudProjectData(project.id);
           if(!result.ok){
@@ -13817,7 +13921,7 @@
   // 프로젝트 복사 — 시설물까지 통째로 새 id로 복사한다(사진 원본 포함).
   // 백업/완료 상태 등은 새 프로젝트이므로 초기화한다.
   async function duplicateProject(project){
-    if(!confirm('"' + project.name + '" 프로젝트를 시설물까지 통째로 복사할까요?')) return;
+    if(!await psConfirm('"' + project.name + '" 프로젝트를 시설물까지 통째로 복사할까요?')) return;
     commitLiveToCurrentSite();
     const psites = sites.filter(s => s.projectId === project.id);
     for(const s of psites) await hydratePhotoBlobs(s.markers || []); // 복사본에도 사진 원본이 온전히 담기도록
@@ -14226,7 +14330,7 @@
         if(!(idx >= 0 && idx < projects.length)){ alert('취소되었습니다.'); return; }
         const target = projects[idx];
         const existingCount = sites.filter(s => s.projectId === target.id).length;
-        if(!confirm('"' + target.name + '" 프로젝트의 기존 시설물 ' + existingCount + '개가 모두 삭제되고,\n백업의 시설물 ' + restoredSites.length + '개로 교체됩니다.\n되돌릴 수 없습니다. 계속할까요?')) return;
+        if(!await psConfirm('"' + target.name + '" 프로젝트의 기존 시설물 ' + existingCount + '개가 모두 삭제되고,\n백업의 시설물 ' + restoredSites.length + '개로 교체됩니다.\n되돌릴 수 없습니다. 계속할까요?')) return;
         sites = sites.filter(s => s.projectId !== target.id);
         const newSites = cloneSitesWithNewIds();
         newSites.forEach(s => s.projectId = target.id);
@@ -14874,9 +14978,9 @@
     }
   }
 
-  function openBackupPromptDialog(project){
+  async function openBackupPromptDialog(project){
     const facilityCount = sites.filter(s => s.projectId === project.id).length;
-    if(!confirm(
+    if(!await psConfirm(
       '프로젝트 조사가 완료되었습니다.\n\n"' + project.name + '"\n시설물 ' + facilityCount + '개\n\n' +
       '지금 프로젝트 전체를 백업하시겠습니까?\n\n[확인] 지금 백업하기 · [취소] 나중에'
     )){
@@ -14958,7 +15062,7 @@
       purgeBtn.style.color = 'var(--danger)';
       purgeBtn.textContent = '완전삭제';
       purgeBtn.addEventListener('click', async ()=>{
-        if(!confirm('완전히 삭제하면 되돌릴 수 없습니다. 계속할까요?')) return;
+        if(!await psConfirm('완전히 삭제하면 되돌릴 수 없습니다. 계속할까요?')) return;
         await diagLogMemorySnapshot('휴지통 항목 완전삭제 전');
         if(item.type === 'marker'){
           await deleteOrphanedPhotoBlobs([item.data]);
@@ -15018,7 +15122,7 @@
       purgeBtn.style.color = 'var(--danger)';
       purgeBtn.textContent = '완전삭제';
       purgeBtn.addEventListener('click', async ()=>{
-        if(!confirm('"' + s.name + '"을(를) 완전히 삭제하면 되돌릴 수 없습니다.\n(조사점 ' + pointCount + '개, 사진 ' + photoCount + '장이 모두 사라집니다)\n계속할까요?')) return;
+        if(!await psConfirm('"' + s.name + '"을(를) 완전히 삭제하면 되돌릴 수 없습니다.\n(조사점 ' + pointCount + '개, 사진 ' + photoCount + '장이 모두 사라집니다)\n계속할까요?')) return;
         await diagLogMemorySnapshot('시설물 완전삭제 전 (' + s.name + ')');
         await deleteOrphanedPhotoBlobs(s.markers || []);
         // photoBlobs만 지우고 durable inspectionPoints 스토어의 지점 기록은 지금까지
@@ -15070,7 +15174,7 @@
     if(items.length === 0){ alert('휴지통이 비어 있습니다.'); return; }
     const markerItems = items.filter(i => i.type === 'marker');
     const photoCnt = items.reduce((a, i) => a + (i.type === 'marker' ? (i.data.photos || []).length : 1), 0);
-    if(!confirm('이 시설물의 휴지통을 모두 비웁니다.\n\n지점 ' + markerItems.length + '개 · 사진 ' + photoCnt + '장이 완전히 삭제되며 되돌릴 수 없습니다.\n\n정말 비울까요?')) return;
+    if(!await psConfirm('이 시설물의 휴지통을 모두 비웁니다.\n\n지점 ' + markerItems.length + '개 · 사진 ' + photoCnt + '장이 완전히 삭제되며 되돌릴 수 없습니다.\n\n정말 비울까요?')) return;
     await psProgress.start('휴지통 비우는 중…', '항목 ' + items.length + '개');
     try{
       await diagLogMemorySnapshot('휴지통 전체 비우기 전');
@@ -15104,7 +15208,7 @@
     if(items.length === 0){ alert('삭제된 시설물이 없습니다.'); return; }
     let pts = 0, phs = 0;
     items.forEach(it => { const s = it.site || {}; pts += (s.markers || []).length; phs += (s.markers || []).reduce((a, m) => a + (m.photos || []).length, 0); });
-    if(!confirm('삭제된 시설물 ' + items.length + '개를 모두 완전히 삭제합니다.\n\n(조사점 ' + pts + '개 · 사진 ' + phs + '장이 모두 사라지며 되돌릴 수 없습니다)\n\n정말 비울까요?')) return;
+    if(!await psConfirm('삭제된 시설물 ' + items.length + '개를 모두 완전히 삭제합니다.\n\n(조사점 ' + pts + '개 · 사진 ' + phs + '장이 모두 사라지며 되돌릴 수 없습니다)\n\n정말 비울까요?')) return;
     await psProgress.start('삭제된 시설물 비우는 중…', '시설물 ' + items.length + '개');
     try{
       await diagLogMemorySnapshot('삭제된 시설물 전체 비우기 전');
@@ -15272,9 +15376,9 @@
     saveState();
   });
 
-  edDelete.addEventListener('click', ()=>{
+  edDelete.addEventListener('click', async ()=>{
     if(!editingExistingDamageId) return;
-    if(!confirm('이 기존손상 기록을 삭제할까요? (목록에서만 사라지며, 필요하면 관리자가 복구할 수 있도록 원본은 보관됩니다)')) return;
+    if(!await psConfirm('이 기존손상 기록을 삭제할까요? (목록에서만 사라지며, 필요하면 관리자가 복구할 수 있도록 원본은 보관됩니다)')) return;
     const d = existingDamages.find(x => x.id === editingExistingDamageId);
     if(d){
       d.isDeleted = true;
@@ -15604,7 +15708,7 @@
         (invalidCount > 0 ? ' · 손상명이 비어 제외된 행 ' + invalidCount + '건' : '') +
         facilityWarn +
         '\n\n이대로 가져올까요?';
-      if(!confirm(summaryMsg)) return;
+      if(!await psConfirm(summaryMsg)) return;
 
       const now = new Date().toISOString();
       let num = site.nextExistingDamageNum || 1;
@@ -15671,7 +15775,7 @@
       try{ const rec = await idbGetPhotoBlob(k); if(rec && rec.blob) totalBytes += rec.blob.size || 0; }catch(e){}
     }
     const mb = (totalBytes / 1048576).toFixed(1);
-    if(!confirm('어느 지점에도(휴지통 포함) 연결되지 않은 사진 ' + orphanKeys.length + '장(약 ' + mb + 'MB)을 찾았습니다.\n\n' +
+    if(!await psConfirm('어느 지점에도(휴지통 포함) 연결되지 않은 사진 ' + orphanKeys.length + '장(약 ' + mb + 'MB)을 찾았습니다.\n\n' +
       '이 사진들은 이미 완전히 삭제된 지점의 흔적이거나, 저장 중 중단된 조각일 가능성이 높습니다.\n' +
       '지금 기기에서 완전히 지울까요? (되돌릴 수 없습니다)')) return;
     let deleted = 0;
@@ -15712,7 +15816,7 @@
       restoreBtn.className = 'log-btn';
       restoreBtn.textContent = '이 시점으로 복원';
       restoreBtn.addEventListener('click', async ()=>{
-        if(!confirm('이 스냅샷으로 복원하면 현재 화면의 저장되지 않은 최근 변경이 사라질 수 있습니다.\n계속할까요?')) return;
+        if(!await psConfirm('이 스냅샷으로 복원하면 현재 화면의 저장되지 않은 최근 변경이 사라질 수 있습니다.\n계속할까요?')) return;
         // ZIP 백업 복원과 동일한 안전장치: 덮어쓰기 전에 지금 상태를 먼저 저장해두고,
         // 복원 과정에서 문제가 생기면 이 지점으로 되돌린다.
         const preRestoreSnapshot = {
@@ -15803,7 +15907,7 @@
     if(!navigator.onLine){ alert('오프라인 상태입니다. 인터넷 연결 후 다시 시도해주세요.'); return; }
     const targets = markers.filter(m => m.lat != null && !m.address);
     if(targets.length === 0){ alert('주소 변환이 필요한 지점이 없습니다.'); return; }
-    if(!confirm(targets.length + '개 지점의 주소를 변환합니다. 지점 수에 따라 시간이 걸릴 수 있습니다. 계속할까요?')) return;
+    if(!await psConfirm(targets.length + '개 지점의 주소를 변환합니다. 지점 수에 따라 시간이 걸릴 수 있습니다. 계속할까요?')) return;
     let done = 0;
     for(const m of targets){
       try{
@@ -16403,7 +16507,7 @@
   async function deleteMarker(markerId){
     const m = markers.find(x => x.id === markerId);
     if(!m) return;
-    if(!confirm('지점 ' + m.num + '을(를) 삭제할까요?\n삭제해도 "휴지통"에서 복원할 수 있습니다.')) return;
+    if(!await psConfirm('지점 ' + m.num + '을(를) 삭제할까요?\n삭제해도 "휴지통"에서 복원할 수 있습니다.')) return;
     markers = markers.filter(x => x.id !== markerId);
     const trashItem = { type:'marker', data: m, deletedAt: new Date().toISOString() };
     trash.push(trashItem);
@@ -16560,7 +16664,7 @@
     const m = markers.find(x => x.id === markerId);
     if(!m) return;
     if(!lastGps){ alert('아직 GPS 위치를 확인하지 못했습니다. 잠시 후 다시 시도해주세요.'); return; }
-    if(!confirm('현재 GPS 위치(오차 ±' + Math.round(lastGps.accuracy) + 'm)를 이 지점에 기록할까요?\n(도면 위치는 그대로 유지되며 바뀌지 않습니다)')) return;
+    if(!await psConfirm('현재 GPS 위치(오차 ±' + Math.round(lastGps.accuracy) + 'm)를 이 지점에 기록할까요?\n(도면 위치는 그대로 유지되며 바뀌지 않습니다)')) return;
     m.lat = lastGps.lat;
     m.lng = lastGps.lng;
     m.gps = Object.assign({}, lastGps);
@@ -17050,10 +17154,10 @@
   // 사진만 바꾸고, 이건 그 도면 탭 자체를 없앤다). 잘못 올린 도면을 지울 때는
   // "이미지 교체"보다 이쪽이 맞다. 도면 탭의 ✕ 버튼과 openDrawingOptions(이름
   // 변경 메뉴)가 이 함수를 공유한다.
-  function deleteDrawing(d){
+  async function deleteDrawing(d){
     if(drawings.length <= 1){ alert('시설물에는 최소 1개의 도면이 있어야 합니다.'); return; }
     const affected = markers.filter(m => m.xPct != null && m.drawingId === d.id);
-    if(!confirm('도면 "' + d.name + '"을(를) 삭제할까요?\n이 도면의 조사점 ' + affected.length + '개는 휴지통으로 이동되어 복원할 수 있습니다.')) return;
+    if(!await psConfirm('도면 "' + d.name + '"을(를) 삭제할까요?\n이 도면의 조사점 ' + affected.length + '개는 휴지통으로 이동되어 복원할 수 있습니다.')) return;
     affected.forEach(m => trash.push({ type:'marker', data: m, deletedAt: new Date().toISOString() }));
     markers = markers.filter(m => !(m.xPct != null && m.drawingId === d.id));
     drawings = drawings.filter(x => x.id !== d.id);
@@ -17529,12 +17633,12 @@
     }
   }
 
-  function deleteFacility(facilityId){
+  async function deleteFacility(facilityId){
     const site = sites.find(s => s.id === facilityId);
     if(!site) return;
     const pointCount = (site.markers || []).length;
     const photoCount = (site.markers || []).reduce((s,m)=>s+(m.photos||[]).length,0);
-    if(!confirm('"' + site.name + '" 시설물을 삭제할까요?\n(조사점 ' + pointCount + '개, 사진 ' + photoCount + '장)\n휴지통으로 이동되며, "⋯ → 휴지통"에서 복원할 수 있습니다.')) return;
+    if(!await psConfirm('"' + site.name + '" 시설물을 삭제할까요?\n(조사점 ' + pointCount + '개, 사진 ' + photoCount + '장)\n휴지통으로 이동되며, "⋯ → 휴지통"에서 복원할 수 있습니다.')) return;
     if(site.id === currentSiteId) commitLiveToCurrentSite();
     const proj = projects.find(p => p.id === site.projectId);
     deletedSites.push({
@@ -18118,8 +18222,8 @@
       const del = document.createElement('button');
       del.textContent = '✕';
       del.title = '이 사진 삭제';
-      del.addEventListener('click', ()=>{
-        if(!confirm('이 사진을 삭제할까요? (휴지통을 거치지 않고 바로 지워집니다)')) return;
+      del.addEventListener('click', async ()=>{
+        if(!await psConfirm('이 사진을 삭제할까요? (휴지통을 거치지 않고 바로 지워집니다)')) return;
         const [removed] = m.photos.splice(idx, 1);
         if(removed && removed.photoRef) deleteOrphanedPhotoBlobs([removed]);
         renderCaptureStrip(markerId);
@@ -19748,7 +19852,7 @@
   annoCanvas.addEventListener('pointercancel', annoFinish);
 
   btnAnnoUndo.addEventListener('click', ()=>{ annoShapes.pop(); redrawAnno(); });
-  btnAnnoClear.addEventListener('click', ()=>{ if(confirm('모든 주석을 지울까요?')){ annoShapes = []; redrawAnno(); } });
+  btnAnnoClear.addEventListener('click', async ()=>{ if(await psConfirm('모든 주석을 지울까요?')){ annoShapes = []; redrawAnno(); } });
   closeAnnotate.addEventListener('click', ()=>{ annotateModal.style.display = 'none'; });
   annotateModal.addEventListener('click', (e)=>{ if(e.target===annotateModal) annotateModal.style.display='none'; });
 
@@ -20130,7 +20234,7 @@
     if(psites.length === 0){ alert('이 프로젝트에 시설물이 없습니다.'); return; }
     const photoCountOf = (st)=> (st.markers || []).reduce((a, m) => a + (m.photos || []).length, 0);
     const totalPhotos = psites.reduce((a, st) => a + photoCountOf(st), 0);
-    if(totalPhotos === 0 && !confirm('이 프로젝트에는 사진이 한 장도 없습니다. 조사내용 목록만 압축할까요?')) return;
+    if(totalPhotos === 0 && !await psConfirm('이 프로젝트에는 사진이 한 장도 없습니다. 조사내용 목록만 압축할까요?')) return;
 
     // 파트 나누기: 시설물 단위로 묶되 한 파트의 사진이 너무 많아지지 않게(약 250MB 기준, 사진 장당 1.5MB로 추정)
     const PART_LIMIT_PHOTOS = 160;
@@ -20141,7 +20245,7 @@
       cur.push(st); curPhotos += n;
     });
     if(cur.length) parts.push(cur);
-    if(parts.length > 1 && !confirm('사진이 ' + totalPhotos + '장이라 한 파일로 만들면 너무 커서, 시설물 단위로 ' + parts.length + '개의 ZIP 파일로 나눠서 받습니다.\n각 파일이 만들어질 때마다 [저장/공유]를 눌러 저장하고 [다음]을 누르면 이어집니다.\n진행할까요?')) return;
+    if(parts.length > 1 && !await psConfirm('사진이 ' + totalPhotos + '장이라 한 파일로 만들면 너무 커서, 시설물 단위로 ' + parts.length + '개의 ZIP 파일로 나눠서 받습니다.\n각 파일이 만들어질 때마다 [저장/공유]를 눌러 저장하고 [다음]을 누르면 이어집니다.\n진행할까요?')) return;
 
     const ts = new Date();
     const stamp = ts.getFullYear() + pad2(ts.getMonth()+1) + pad2(ts.getDate());
@@ -21576,7 +21680,7 @@
       const comboCount = Object.keys(groups).reduce((s,t)=> s + Object.keys(groups[t]).length, 0);
       if(comboCount === 0){ alert('시설물종류·시설물형식·부위가 있는 행이 없습니다.'); return; }
 
-      if(!confirm(comboCount + '개 (시설물종류 × 형식) 조합을 이 기기 공용 손상마스터에 전체 교체로 반영합니다.\n이미 진행 중인 프로젝트는 그대로이며, 이 기기에서 새로 만드는 프로젝트부터 적용됩니다.\n계속할까요?')) return;
+      if(!await psConfirm(comboCount + '개 (시설물종류 × 형식) 조합을 이 기기 공용 손상마스터에 전체 교체로 반영합니다.\n이미 진행 중인 프로젝트는 그대로이며, 이 기기에서 새로 만드는 프로젝트부터 적용됩니다.\n계속할까요?')) return;
 
       Object.keys(groups).forEach(type=>{
         Object.keys(groups[type]).forEach(form=>{
@@ -21613,7 +21717,7 @@
       const parsed = raw.map(dmExcelRowToItem).filter(Boolean);
       if(parsed.length === 0){ alert('부위 또는 손상명이 있는 행이 없습니다.'); return; }
 
-      const replace = confirm(
+      const replace = await psConfirm(
         '가져올 항목 ' + parsed.length + '건.\n\n' +
         '[확인] = 전체 교체 (현재 손상마스터를 삭제하고 엑셀 내용으로)\n' +
         '[취소] = 병합 (같은 부위+손상명은 갱신, 없는 항목은 추가)'
@@ -21737,9 +21841,9 @@
     dmFormSel.onchange = loadDmConfig;
   }
   
-  window.closeDamageMaster = function() {
+  window.closeDamageMaster = async function() {
     if (dmIsDirty) {
-      if (!confirm('저장하지 않은 변경사항이 있습니다. 닫으시겠습니까?')) return;
+      if (!await psConfirm('저장하지 않은 변경사항이 있습니다. 닫으시겠습니까?')) return;
     }
     dmPendingForms.clear();
     dmModal.style.display = 'none';
@@ -21996,9 +22100,9 @@
     if(scaleBtn) scaleBtn.addEventListener('click', ()=> openDamageLibrary(item.damageType));
     // v123: 사용 여부 체크 대신 삭제 — 형식별로 라이브러리에서 가져온 손상명이므로, 안 쓰는 손상명은 빼는 것이 맞다.
     const delBtn = card.querySelector('.dm-del-btn');
-    if(delBtn) delBtn.addEventListener('click', ()=>{
+    if(delBtn) delBtn.addEventListener('click', async ()=>{
       const part = (item.component || '').trim();
-      if(!confirm('"' + item.damageType + '"을(를) ' + (part ? '"' + part + '" 부위에서 ' : '') + '삭제할까요?\n(현장에서 이미 입력한 기록은 지워지지 않습니다. 필요하면 "손상명 가져오기"로 다시 담을 수 있습니다.)')) return;
+      if(!await psConfirm('"' + item.damageType + '"을(를) ' + (part ? '"' + part + '" 부위에서 ' : '') + '삭제할까요?\n(현장에서 이미 입력한 기록은 지워지지 않습니다. 필요하면 "손상명 가져오기"로 다시 담을 수 있습니다.)')) return;
       const i = dmCurrentData.indexOf(item);
       if(i < 0) return;
       dmCurrentData.splice(i, 1);
@@ -22249,7 +22353,7 @@
       if(r.custom){
         const del = document.createElement('button'); del.type = 'button'; del.className = 'ghost'; del.textContent = '삭제'; del.style.cssText = 'padding:3px 8px; font-size:12px; color:#d33;';
         del.addEventListener('click', async ()=>{
-          if(!confirm('"' + r.name + '"을(를) 라이브러리에서 삭제할까요?\n(이미 부위에 묶인 항목과 현장 기록은 지워지지 않습니다.)')) return;
+          if(!await psConfirm('"' + r.name + '"을(를) 라이브러리에서 삭제할까요?\n(이미 부위에 묶인 항목과 현장 기록은 지워지지 않습니다.)')) return;
           delete damageLibrary[r.name]; await saveDamageLibrary(); dlcRenderList();
         });
         act.appendChild(del);
@@ -22420,7 +22524,7 @@
     ov.querySelector('#dpSearch').addEventListener('input', draw);
     ov.querySelector('#dpClose').addEventListener('click', ()=> ov.remove());
     ov.querySelector('#dpCancel').addEventListener('click', ()=> ov.remove());
-    ov.querySelector('#dpApply').addEventListener('click', ()=>{
+    ov.querySelector('#dpApply').addEventListener('click', async ()=>{
       const { toAdd, toRemove } = changes();
       const targets = others.filter(o => o.on && o.hasPart);
       if(!toAdd.length && !toRemove.length){ ov.remove(); return; }
@@ -22431,7 +22535,7 @@
       if(plan.length){
         msg += '\n다른 형식 ' + plan.length + '개에도 적용합니다:\n' + plan.map(x => ' · ' + x.o.type + ' / ' + x.o.form + ' — 추가 ' + x.add.length + (x.rem.length ? ', 빼기 ' + x.rem.length : '')).join('\n') + '\n';
       }
-      if(msg){ msg += '\n(현장에서 이미 입력한 기록은 지워지지 않습니다.) 계속할까요?'; if(!confirm(msg)) return; }
+      if(msg){ msg += '\n(현장에서 이미 입력한 기록은 지워지지 않습니다.) 계속할까요?'; if(!await psConfirm(msg)) return; }
       dmCurrentData = dmApplyPickToData(dmCurrentData, partName, toAdd, toRemove);
       plan.forEach(x => {
         const data = dmApplyPickToData(dmLoadFormData(x.o.type, x.o.form), partName, x.add, x.rem);
@@ -22713,7 +22817,7 @@
       mkBtn('파일로 내보내기', ()=> dmDownloadJson({ kind: DM_FILE_KIND, schema: 1, exportedAt: new Date().toISOString(), note: 'v' + v.num + (v.note ? ' ' + v.note : ''), set: v.set }, '손상마스터_v' + v.num + '_' + v.createdAt.slice(0, 10) + '.json'));
       mkBtn('이 버전으로 되돌리기', async ()=>{
         const d = dmDiffSets(cur, v.set);
-        if(!confirm('v' + v.num + '으로 되돌립니다.\n\n현재 → v' + v.num + ': 추가 ' + d.counts.added + ' · 삭제 ' + d.counts.removed + ' · 변경 ' + d.counts.changed + '건\n\n되돌리기 전의 현재 상태는 새 버전으로 자동 보관됩니다.\n(프로젝트 전용 손상마스터와 현장 기록은 바뀌지 않습니다)\n\n계속할까요?')) return;
+        if(!await psConfirm('v' + v.num + '으로 되돌립니다.\n\n현재 → v' + v.num + ': 추가 ' + d.counts.added + ' · 삭제 ' + d.counts.removed + ' · 변경 ' + d.counts.changed + '건\n\n되돌리기 전의 현재 상태는 새 버전으로 자동 보관됩니다.\n(프로젝트 전용 손상마스터와 현장 기록은 바뀌지 않습니다)\n\n계속할까요?')) return;
         const keep = await dmCreateVersion('auto', 'v' + v.num + '으로 되돌리기 직전 (자동 보관)');
         await dmRestoreSet(v.set);
         logActivity('손상마스터 되돌리기', 'v' + v.num + ' 적용 (직전 상태는 v' + keep.num + ' 로 보관)');
@@ -22723,7 +22827,7 @@
       });
       mkBtn('삭제', async ()=>{
         if(dmVersions.length <= 1){ alert('마지막 버전은 지울 수 없습니다.'); return; }
-        if(!confirm('v' + v.num + '을(를) 이력에서 지울까요? (현재 설정은 바뀌지 않습니다)')) return;
+        if(!await psConfirm('v' + v.num + '을(를) 이력에서 지울까요? (현재 설정은 바뀌지 않습니다)')) return;
         dmVersions = dmVersions.filter(x => x.id !== v.id); await saveDmVersions(); dvRender();
       }, true);
       c.appendChild(acts); c.appendChild(out);
@@ -22761,7 +22865,7 @@
     const form = dmFormSel.value;
     if (!type || !form) return;
 
-    if(!confirm('이 기기의 공용 손상마스터로 저장하면, 이 기기에서 앞으로 새로 만드는 프로젝트/시설물부터 이 내용을 기본값으로 가져갑니다.\n다른 사람의 기기나 팀원에게는 전달되지 않습니다(팀 전체 공유는 "🏢 조직 전체에 저장"을 사용하세요).\n계속할까요?')) return;
+    if(!await psConfirm('이 기기의 공용 손상마스터로 저장하면, 이 기기에서 앞으로 새로 만드는 프로젝트/시설물부터 이 내용을 기본값으로 가져갑니다.\n다른 사람의 기기나 팀원에게는 전달되지 않습니다(팀 전체 공유는 "🏢 조직 전체에 저장"을 사용하세요).\n계속할까요?')) return;
 
     if (!globalDamageMaster[type]) globalDamageMaster[type] = {};
     globalDamageMaster[type][form] = JSON.parse(JSON.stringify(dmCurrentData));
@@ -22789,7 +22893,7 @@
     const orgId = proj && proj.organizationId;
     if(!orgId){ alert('이 프로젝트는 조직에 속해있지 않습니다.'); return; }
 
-    if(!confirm('조직(팀) 전체 손상마스터로 저장하면, 같은 조직의 팀원들이 다음에 새 시설물을 만들 때부터 이 내용을 자동으로 받습니다.\n이미 진행 중인 다른 프로젝트는 바뀌지 않습니다.\n계속할까요?')) return;
+    if(!await psConfirm('조직(팀) 전체 손상마스터로 저장하면, 같은 조직의 팀원들이 다음에 새 시설물을 만들 때부터 이 내용을 자동으로 받습니다.\n이미 진행 중인 다른 프로젝트는 바뀌지 않습니다.\n계속할까요?')) return;
 
     const result = await pushOrgDamageMaster(orgId, type, form, JSON.parse(JSON.stringify(dmCurrentData)));
     if(!result.ok){
