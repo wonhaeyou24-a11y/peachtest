@@ -3208,7 +3208,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v117';
+  const PS_BUILD = 'v118';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -18029,7 +18029,7 @@
     ctx.drawImage(video, 0, 0, w, h);
     const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.92);
     const deviceExif = lastGps ? { lat:lastGps.lat, lng:lastGps.lng, altitude:lastGps.altitude, direction:lastGps.heading, speed:lastGps.speed, source:'DEVICE_GPS' } : null;
-    await addPhoto(activeMarkerId, dataUrl, deviceExif);
+    await addPhoto(activeMarkerId, dataUrl, deviceExif, { autoDamage: true });
     renderCaptureStrip(activeMarkerId);
     // addPhoto가 저장까지 끝날 때까지 기다리는 동안(느린 기기에서 몇 초 걸릴 수
     // 있음) 사용자가 촬영창을 닫아버리면 activeMarkerId가 null로 바뀌어 있을 수
@@ -18102,7 +18102,7 @@
       }
       const dataUrl = await fileToDataUrl(file, 1800);
       if(!dataUrl) continue;
-      await addPhoto(activeMarkerId, dataUrl, exif);
+      await addPhoto(activeMarkerId, dataUrl, exif, { autoDamage: true });
     }
     renderCaptureStrip(activeMarkerId);
     // addPhoto가 저장까지 끝날 때까지 기다리는 동안(느린 기기에서 몇 초~십수 초
@@ -18191,7 +18191,9 @@
     return d;
   }
 
-  async function addPhoto(markerId, dataUrl, exif){
+  // v118: 방금 촬영한 사진 번호 — 상세창이 그 사진을 처음 그릴 때 손상 입력칸을 하나 자동으로 열어 준다 (메모리에만 둠, 저장 안 함)
+  const freshPhotoIds = new Set();
+  async function addPhoto(markerId, dataUrl, exif, opts){
     let m = markers.find(x=>x.id===markerId);
     if(!m){
       // 라이브 배열에 없으면 현재 시설물에서 찾아 복구 — 못 찾으면 사진이 조용히
@@ -18244,6 +18246,7 @@
 
     // 2. 사진 객체 추가
     m.photos.push(photoObj);
+    if(opts && opts.autoDamage) freshPhotoIds.add(photoId);
     previewSelMarker = markerId; previewSelIdx = m.photos.length - 1; // 방금 찍은 사진이 바로 편집 대상
     logActivity('사진 추가', '지점 ' + m.num + ' · 사진 ' + m.photos.length + '장째');
 
@@ -19094,6 +19097,12 @@
         saveState();
       });
       damageBox.appendChild(addDamageBtn);
+      // v118: 방금 촬영한 사진을 상세창에서 처음 볼 때, 손상이 하나도 없으면 입력칸을 자동으로 하나 연다 (매번 "+ 손상 추가"를 누르지 않도록).
+      // 조회 전용 계정이거나 이미 손상이 있으면 하지 않고, 사진당 한 번만 한다.
+      if(freshPhotoIds.has(p.id) && idx === previewSelIdx){
+        freshPhotoIds.delete(p.id);
+        if(!p.damages.length && !document.body.classList.contains('viewer-mode')) addDamageBtn.click();
+      }
 
       const note = document.createElement('textarea');
       note.className = 'photo-note';
