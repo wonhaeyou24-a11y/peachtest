@@ -3208,7 +3208,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v116';
+  const PS_BUILD = 'v117';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -5299,6 +5299,68 @@
       }
     }
     return allOk;
+  }
+
+  // ---------- v117: 사진은 화면에 필요할 때만 메모리에 올린다 ----------
+  // 예전엔 시설물을 열면 그 시설물의 사진 원본(base64, 장당 약 2MB)을 전부 메모리에 올려 두었다. 사진이 수백 장이면 600MB 가 넘어
+  // 아이폰이 앱을 강제 종료했다(화면이 하얗게 되며 첫 화면으로 돌아감). 사진 원본은 기기 저장소(photoBlobs)에 그대로 있으므로
+  // 사진이 필요한 화면에서 그때그때 읽어 온다. 저장소에서 읽은 것이 확인된 사진만 메모리에서 비우고, 저장 전 사진은 건드리지 않는다.
+  //  - setImgFromStore: 작은 그림(썸네일 등)용. data URL 을 만들지 않고 저장소의 파일을 blob 주소로 바로 연결한다(메모리 거의 안 씀).
+  //  - ensurePhotoSrc: 크게 보기·주석·다운로드처럼 data URL(p.src)이 꼭 필요한 곳용.
+  //  - hydrateMarkerTemporarily: 내보내기처럼 지점을 하나씩 처리할 때 그 지점 사진만 올렸다가 끝나면 내려놓는다.
+  async function setImgFromStore(img, p){
+    if(!img || !p) return false;
+    if(p.src){ img.src = p.src; return true; }
+    const ref = p.photoRef || p.id;
+    if(!ref) return false;
+    try{
+      const rec = await idbGetPhotoBlob(ref);
+      if(!rec || !rec.blob){
+        // 예전 방식(kv 저장소)으로만 저장된 사진은 불러오면서 새 저장소로 옮긴다. 클라우드에만 있는 사진은 여기서 받지 않고 상세 창을 열 때 받아 온다.
+        if(!p.cloudRef && await ensurePhotoSrc(p)){ img.src = p.src; return true; }
+        return false;
+      }
+      const url = URL.createObjectURL(rec.blob);
+      const done = ()=>{ try{ URL.revokeObjectURL(url); }catch(e){} };
+      img.addEventListener('load', done, { once:true });
+      img.addEventListener('error', done, { once:true });
+      img.src = url;
+      return true;
+    }catch(e){ return false; }
+  }
+  // 기록목록 썸네일: 한꺼번에 수백 개를 읽지 않도록 한 번에 3개씩 차례로 저장소에서 읽어 연결한다(blob 주소라 메모리는 거의 안 쓴다).
+  // 화면에 보이는지에 의존하지 않는다 — 보이는지 판단하는 방식(IntersectionObserver)은 환경에 따라 동작하지 않을 수 있어 사진이 안 뜰 위험이 있다.
+  const _thumbQueue = [];
+  let _thumbActive = 0;
+  function _pumpThumbs(){
+    while(_thumbActive < 3 && _thumbQueue.length){
+      const job = _thumbQueue.shift();
+      _thumbActive++;
+      Promise.resolve().then(job).catch(()=>{}).finally(()=>{ _thumbActive--; _pumpThumbs(); });
+    }
+  }
+  function lazyThumb(img, p, onMissing){
+    if(p && p.src){ img.src = p.src; return; }
+    _thumbQueue.push(()=> setImgFromStore(img, p).then(ok => { if(!ok && onMissing) onMissing(); }));
+    _pumpThumbs();
+  }
+  async function ensurePhotoSrc(p){
+    if(!p) return false;
+    if(p.src) return true;
+    try{ await hydratePhotoBlobs([{ photos:[p] }]); }catch(e){}
+    return !!p.src;
+  }
+  async function photoBlobForExport(p){
+    try{
+      const rec = await idbGetPhotoBlob(p.photoRef || p.id);
+      if(rec && rec.blob) return rec.blob;
+    }catch(e){}
+    return p.src ? dataUrlToBlob(p.src) : null;
+  }
+  async function hydrateMarkerTemporarily(m){
+    const loaded = (m.photos || []).filter(p => !p.src);
+    try{ await hydratePhotoBlobs([m]); }catch(e){}
+    return ()=>{ loaded.forEach(p => { if(p.src && p.blobExtracted && m.id !== activeMarkerId) delete p.src; }); };
   }
 
   async function hydratePhotoBlobs(markersArr){
@@ -9594,15 +9656,9 @@
     refreshStageHeader();
     switchMode(site.mode === 'map' ? 'map' : 'image');
 
-    // 별도 저장소로 분리되어 있던 사진은 여기서 다시 채운다. 화면은 이미 위에서
-    // 그려졌으므로(사진이 없어도 지점/도면은 즉시 보임), 사진만 뒤이어 채워지고
-    // 다 채워지면 한 번 더 그려서 반영한다.
-    const siteIdAtLoadTime = site.id;
-    await hydratePhotoBlobs(markers);
-    if(currentSiteId === siteIdAtLoadTime){
-      renderMarkers();
-      renderLog();
-    }
+    // v117: 예전엔 여기서 이 시설물의 사진 원본을 전부 메모리에 올렸다(수백 장이면 600MB 이상 → 아이폰이 앱을 강제 종료).
+    // 이제는 올리지 않는다. 사진은 기기 저장소(photoBlobs)에 그대로 있고, 사진이 필요한 화면(지점 상세·촬영창 사진 줄·크게 보기·
+    // 주석·내보내기·클라우드 업로드·기록목록 썸네일)에서 그때그때 읽어 온다.
   }
 
   let lastSnapshotAt = 0;
@@ -11568,12 +11624,22 @@
       try{
         if(navigator.onLine && supabaseClient){
           const projSites = sites.filter(s => s.projectId === targetProjId);
+          // v117: 사진이 메모리에 없는 것이 기본이 되었으므로, "이 기기 저장소에 원본이 없는 사진"만 골라 받는다.
+          // 한 지점씩 받고 바로 메모리에서 내려놓아 사진이 많아도 메모리가 늘지 않는다.
           const needHydrate = [];
-          projSites.forEach(s => (s.markers || []).forEach(m => {
-            if((m.photos || []).some(p => !p.src && p.cloudRef)) needHydrate.push(m);
-          }));
+          for(const s of projSites){
+            for(const m of (s.markers || [])){
+              let missing = false;
+              for(const p of (m.photos || [])){
+                if(p.src || !p.cloudRef) continue;
+                let rec = null; try{ rec = await idbGetPhotoBlob(p.photoRef || p.id); }catch(e){}
+                if(!(rec && rec.blob)){ missing = true; break; }
+              }
+              if(missing) needHydrate.push(m);
+            }
+          }
           if(needHydrate.length){
-            await hydratePhotoBlobs(needHydrate);
+            for(const m of needHydrate){ const release = await hydrateMarkerTemporarily(m); release(); }
             renderMarkers();
             if(typeof renderMapMarkers === 'function'){ try{ renderMapMarkers(); }catch(e){} }
             if(typeof renderLog === 'function'){ try{ renderLog(); }catch(e){} }
@@ -17104,10 +17170,10 @@
       tr.appendChild(tdNum);
 
       const tdPhoto = document.createElement('td');
-      if(photos[0] && photos[0].src){
+      if(photos[0] && (photos[0].src || photos[0].photoRef || photos[0].id)){
         const img = document.createElement('img');
         img.className = 'log-table-thumb';
-        img.src = photos[0].src;
+        lazyThumb(img, photos[0], ()=>{ if(img.parentNode === tdPhoto && !tdPhoto.querySelector('.log-table-more')) { img.remove(); if(!tdPhoto.textContent) tdPhoto.textContent = '—'; } });
         img.alt = '지점 ' + m.num;
         tdPhoto.appendChild(img);
         if(photos.length > 1){
@@ -17503,11 +17569,11 @@
     if(hasPhoto){
       thumb = document.createElement('img');
       thumb.className = 'log-thumb';
-      thumb.src = photos[0].src;
+      lazyThumb(thumb, photos[0]);
       thumb.alt = '지점 ' + m.num;
-      thumb.addEventListener('click', (e)=>{
+      thumb.addEventListener('click', async (e)=>{
         e.stopPropagation();
-        openPhotoLightbox(photos[0].src);
+        if(await ensurePhotoSrc(photos[0])) openPhotoLightbox(photos[0].src);   // 크게 볼 때만 원본을 올린다
       });
     } else {
       thumb = document.createElement('div');
@@ -17858,10 +17924,11 @@
       row.className = 'capture-row';
 
       const img = document.createElement('img');
-      img.src = p.src;
+      setImgFromStore(img, p);   // 저장소의 사진을 바로 연결 (사진이 메모리에 없어도 보인다)
       img.alt = '촬영 ' + (idx+1);
       img.style.cursor = 'zoom-in';
-      img.addEventListener('click', ()=>{
+      img.addEventListener('click', async ()=>{
+        for(const x of photos){ await ensurePhotoSrc(x); }   // 크게 볼 때만 이 지점 사진 원본을 올린다
         const srcs = photos.map(x => x.src).filter(Boolean);
         const here = photos.slice(0, idx).filter(x => x.src).length;
         if(p.src) openPhotoLightbox(srcs, here);
@@ -18311,7 +18378,7 @@
           tab.className = 'photo-tab' + (ti === previewSelIdx ? ' active' : '');
           tab.title = (ti + 1) + '번 사진';
           const timg = document.createElement('img');
-          timg.src = tp.src || '';
+          setImgFromStore(timg, tp);
           timg.alt = '';
           tab.appendChild(timg);
           const num = document.createElement('span'); num.className = 'tab-num'; num.textContent = String(ti + 1);
@@ -18377,7 +18444,7 @@
       dl.title = '이 사진 원본 다운로드';
       dl.addEventListener('click', (e)=>{
         e.stopPropagation();
-        downloadDataUrl(p.src, '지점' + m.num + '_' + (idx+1) + '.jpg');
+        ensurePhotoSrc(p).then(ok => { if(ok) downloadDataUrl(p.src, '지점' + m.num + '_' + (idx+1) + '.jpg'); });
       });
 
       const del = document.createElement('button');
@@ -19238,6 +19305,7 @@
     if(!m) return;
     const p = m.photos[photoIndex];
     if(!p) return;
+    if(!p.src){ ensurePhotoSrc(p).then(ok => { if(ok) openAnnotate(markerId, photoIndex); }); return; }   // 메모리에 없으면 저장소에서 읽은 뒤 연다
     annoMarkerId = markerId;
     annoPhotoIndex = photoIndex;
     annoShapes = [];
@@ -19864,17 +19932,22 @@
       }
 
       let summary = '지점별 기록\n============\n\n';
-      markers.slice().sort((a,b)=>a.num-b.num).forEach(m=>{
+      const zipMarkers = markers.slice().sort((a,b)=>a.num-b.num);
+      for(const m of zipMarkers){
         const photos = m.photos || [];
         if(photos.length === 0){
           summary += '지점 ' + m.num + ' : 사진 없음\n';
-          return;
+          continue;
         }
         summary += '지점 ' + m.num + ' : ' + photos.length + '장 (지점' + m.num + ' 폴더 참고)\n';
         const folder = zip.folder('지점' + m.num);
         let noteText = '지점 ' + m.num + ' 조사내용\n====================\n\n' + gpsLine(m) + '\n';
-        photos.forEach((p, idx)=>{
-          folder.file('지점' + m.num + '_' + (idx+1) + '_원본.jpg', dataUrlToBlob(p.src));
+        for(let idx = 0; idx < photos.length; idx++){
+          const p = photos[idx];
+          // v117: 사진이 메모리에 없을 수 있으므로 기기 저장소의 파일을 그대로 담는다(없으면 화면의 데이터 사용)
+          const zipBlob = await photoBlobForExport(p);
+          if(zipBlob){ folder.file('지점' + m.num + '_' + (idx+1) + '_원본.jpg', zipBlob); }
+          else { noteText += '(사진 ' + (idx+1) + ' 원본 파일을 이 기기에서 찾지 못했습니다)\n'; }
           noteText += '사진 ' + (idx+1) + '\n';
           (p.damages||[]).forEach((d, dIdx)=>{
             noteText += '  [손상 ' + (dIdx+1) + '] ' + (d.damageType || '(종류 미지정)') + (d.damageDetail ? ' - '+d.damageDetail : '') + '\n';
@@ -19890,9 +19963,9 @@
             if(d.standardReference) noteText += '    근거 : ' + d.standardReference + '\n';
           });
           noteText += '  비고 : ' + (p.note && p.note.trim() ? p.note : '(작성된 내용 없음)') + '\n\n';
-        });
+        }
         folder.file('조사내용.txt', noteText);
-      });
+      }
       zip.file('기록목록.txt', summary);
 
       psProgress.set(0, '압축하는 중');
@@ -20115,6 +20188,7 @@
           return;
         }
         const cells = [];
+        const releaseMarkerPhotos = await hydrateMarkerTemporarily(m);   // v117: 이 지점 사진만 올렸다가 이 지점이 끝나면 내려놓는다
         for(let i=0; i<photos.length; i++){
           const p = photos[i];
           const ph = await docPhoto(p.src, 260);
@@ -20159,6 +20233,7 @@
             children: cellChildren
           }));
         }
+        releaseMarkerPhotos();   // 이 지점 사진은 문서에 담았으니 메모리에서 내려놓는다
         const rows = [];
         for(let i=0; i<cells.length; i+=2){
           const rowCells = [ cells[i], cells[i+1] || emptyCell() ];

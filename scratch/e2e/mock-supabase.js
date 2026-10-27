@@ -52,7 +52,7 @@
       signInWithPassword: async () => ({ data: { session, user: session.user }, error: null }),
       signUp: noop, signOut: noop, getUser: async () => ({ data: { user: session.user } })
     },
-    storage: { from: () => ({ upload: noop, download: async () => ({ data: null, error: { message: 'none' } }), list: async () => ({ data: [], error: null }), remove: noop, createSignedUrl: async () => ({ data: { signedUrl: '' }, error: null }), getPublicUrl: () => ({ data: { publicUrl: '' } }) }) }
+    storage: { from: () => ({ upload: noop, download: async (pth) => { (window.__mock.downloads = window.__mock.downloads || []).push(pth); const f = (window.__mock.files || {})[pth]; return f ? { data: f, error: null } : { data: null, error: { message: 'none' } }; }, list: async () => ({ data: [], error: null }), remove: noop, createSignedUrl: async () => ({ data: { signedUrl: '' }, error: null }), getPublicUrl: () => ({ data: { publicUrl: '' } }) }) }
   };
   window.supabase = { createClient: () => client };
   window.__mock = { tables, log, session };
