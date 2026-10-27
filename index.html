@@ -1882,6 +1882,30 @@
     width: auto;
     min-width: 68px;
   }
+  /* v119: 터치 기기의 규모 값 칸 — 눌러서 숫자 입력판(휠·칩·±)을 연다 */
+  .measurement-row input.nw-btn{ cursor:pointer; text-align:center; font-weight:700; font-size:15px; caret-color:transparent; }
+  .nw-overlay{ position:fixed; inset:0; z-index:100050; background:rgba(0,0,0,.5); display:flex; align-items:flex-end; justify-content:center; }
+  .nw-sheet{ width:100%; max-width:480px; background:var(--panel, #fff); color:var(--text); border-radius:16px 16px 0 0; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); box-shadow:0 -6px 24px rgba(0,0,0,.3); }
+  .nw-title{ font-size:13px; color:var(--muted); text-align:center; }
+  .nw-value{ font-size:34px; font-weight:800; text-align:center; margin:2px 0 6px; font-variant-numeric:tabular-nums; }
+  .nw-value small{ font-size:16px; font-weight:600; color:var(--muted); margin-left:4px; }
+  .nw-wheels{ position:relative; display:flex; justify-content:center; align-items:center; gap:4px; height:200px; }
+  .nw-wheels::before{ content:''; position:absolute; left:8%; right:8%; top:80px; height:40px; border-top:2px solid var(--accent, #E5A83B); border-bottom:2px solid var(--accent, #E5A83B); pointer-events:none; border-radius:6px; }
+  .nw-wheel{ height:200px; overflow-y:scroll; scroll-snap-type:y mandatory; -webkit-overflow-scrolling:touch; width:92px; text-align:center; scrollbar-width:none; overscroll-behavior:contain; touch-action:pan-y;
+    -webkit-mask-image:linear-gradient(transparent, #000 35%, #000 65%, transparent); mask-image:linear-gradient(transparent, #000 35%, #000 65%, transparent); }
+  .nw-wheel::-webkit-scrollbar{ display:none; }
+  .nw-wheel .nw-pad{ height:80px; }
+  .nw-wheel .nw-item{ height:40px; line-height:40px; font-size:24px; font-weight:700; scroll-snap-align:center; font-variant-numeric:tabular-nums; }
+  .nw-dot{ font-size:30px; font-weight:800; }
+  .nw-chips{ display:flex; flex-wrap:wrap; gap:6px; justify-content:center; margin:8px 0; }
+  .nw-chips button, .nw-step button, .nw-actions button{ min-height:44px; padding:0 14px; border-radius:10px; border:1px solid var(--line); background:var(--panel-2); color:var(--text); font-size:15px; font-weight:700; font-family:inherit; }
+  .nw-step{ display:flex; gap:6px; justify-content:center; margin-bottom:8px; }
+  .nw-step button{ flex:1; max-width:90px; }
+  .nw-actions{ display:flex; gap:8px; }
+  .nw-actions button{ flex:1; }
+  .nw-actions .nw-ok{ flex:2; background:var(--accent, #E5A83B); border-color:var(--accent, #E5A83B); color:#1a1a1a; }
+  .nw-direct{ width:100%; box-sizing:border-box; font-size:22px; text-align:center; padding:10px; margin-bottom:8px; border-radius:10px; border:1px solid var(--line); background:var(--panel-2); color:var(--text); }
+  .damage-copy-btn{ margin-left:6px; }
   .measurement-legacy-note{
     font-size:11px;
     color: var(--muted);
@@ -3208,7 +3232,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v118';
+  const PS_BUILD = 'v119';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -18361,6 +18385,94 @@
     }
   }
 
+  // ---------- v119: 규모 숫자 입력판 (위아래로 돌려 정수·소수 선택 + 자주 쓰는 값 칩 + ±버튼 + 직접 입력) ----------
+  // 값 칸(valInput)을 눌렀을 때만 열리며, 결과는 기존 입력칸에 넣고 기존 commit 경로(change 이벤트)를 그대로 탄다 — 저장 형식은 변하지 않는다.
+  const NW_CHIPS = { 'mm':['0.1','0.2','0.3','0.5','1','2','3','5'], 'cm':['5','10','20','30','50','100'], 'm':['0.5','1','2','3','5','10','20'], '㎡':['0.1','0.5','1','2','5','10'], '㎥':['0.1','0.5','1','2','5'], 'EA':['1','2','3','4','5','10'], '개소':['1','2','3','4','5','10'] };
+  function useNumberSheet(){
+    try{ const f = localStorage.getItem('ps_numsheet'); if(f === '1') return true; if(f === '0') return false; }catch(e){}
+    try{ return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches); }catch(e){ return false; }
+  }
+  function nwLastKey(label, unit){ return 'ps_nw_last_' + label + '_' + unit; }
+  function openNumberSheet(opts){
+    // opts: { title, unit, value, onSet(valueString) }
+    const MAXI = 199;
+    let cur = parseFloat(opts.value);
+    if(!isFinite(cur)){
+      let last = NaN; try{ last = parseFloat(localStorage.getItem(nwLastKey(opts.title, opts.unit))); }catch(e){}
+      cur = isFinite(last) ? last : 0;   // 값이 비어 있으면 같은 항목에 마지막으로 쓴 값에서 시작
+    }
+    cur = Math.max(0, Math.round(cur * 100) / 100);
+    const fmt = v => String(Math.round(v * 100) / 100);
+    const ov = document.createElement('div'); ov.className = 'nw-overlay';
+    const sh = document.createElement('div'); sh.className = 'nw-sheet'; ov.appendChild(sh);
+    const title = document.createElement('div'); title.className = 'nw-title'; title.textContent = opts.title + ' (' + opts.unit + ')';
+    const valEl = document.createElement('div'); valEl.className = 'nw-value';
+    const wheels = document.createElement('div'); wheels.className = 'nw-wheels';
+    function mkWheel(count, label){
+      const w = document.createElement('div'); w.className = 'nw-wheel';
+      const a = document.createElement('div'); a.className = 'nw-pad'; w.appendChild(a);
+      for(let i = 0; i < count; i++){ const it = document.createElement('div'); it.className = 'nw-item'; it.textContent = label(i); w.appendChild(it); }
+      const b = document.createElement('div'); b.className = 'nw-pad'; w.appendChild(b);
+      return w;
+    }
+    const wInt = mkWheel(MAXI + 1, i => String(i));
+    const dot = document.createElement('div'); dot.className = 'nw-dot'; dot.textContent = '.';
+    const wDec = mkWheel(10, i => String(i));
+    wheels.appendChild(wInt); wheels.appendChild(dot); wheels.appendChild(wDec);
+    let programmatic = false, timer = null, poll = null, lastI = -1, lastD = -1;
+    function render(){ valEl.innerHTML = ''; valEl.appendChild(document.createTextNode(fmt(cur))); const u = document.createElement('small'); u.textContent = opts.unit; valEl.appendChild(u); }
+    function syncWheels(){
+      programmatic = true;
+      lastI = Math.min(MAXI, Math.floor(cur + 1e-9));
+      lastD = Math.min(9, Math.round((cur - Math.floor(cur + 1e-9)) * 10));
+      wInt.scrollTop = lastI * 40;
+      wDec.scrollTop = lastD * 40;
+      setTimeout(()=>{ programmatic = false; }, 120);
+    }
+    function readWheels(){
+      if(programmatic) return;
+      const i = Math.max(0, Math.min(MAXI, Math.round(wInt.scrollTop / 40)));
+      const d = Math.max(0, Math.min(9, Math.round(wDec.scrollTop / 40)));
+      if(i === lastI && d === lastD) return;   // 휠 위치가 그대로면 값을 건드리지 않는다 (0.35 같은 값 보호)
+      lastI = i; lastD = d;
+      cur = Math.round((i + d / 10) * 100) / 100; render();
+    }
+    [wInt, wDec].forEach(w => w.addEventListener('scroll', ()=>{ clearTimeout(timer); timer = setTimeout(readWheels, 60); }));
+    poll = setInterval(readWheels, 150);   // 스크롤 이벤트가 오지 않는 환경(일부 웹뷰)에서도 휠 위치를 읽는다
+    const chips = document.createElement('div'); chips.className = 'nw-chips';
+    (NW_CHIPS[opts.unit] || ['1','2','3','5','10']).forEach(c=>{
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = c;
+      b.addEventListener('click', ()=>{ cur = parseFloat(c); render(); syncWheels(); });
+      chips.appendChild(b);
+    });
+    const step = document.createElement('div'); step.className = 'nw-step';
+    [['−1', -1], ['−0.1', -0.1], ['+0.1', 0.1], ['+1', 1]].forEach(([t, dlt])=>{
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = t;
+      b.addEventListener('click', ()=>{ cur = Math.max(0, Math.round((cur + dlt) * 100) / 100); render(); syncWheels(); });
+      step.appendChild(b);
+    });
+    const direct = document.createElement('input'); direct.type = 'number'; direct.step = 'any'; direct.inputMode = 'decimal'; direct.className = 'nw-direct'; direct.style.display = 'none'; direct.placeholder = '숫자를 직접 입력';
+    const actions = document.createElement('div'); actions.className = 'nw-actions';
+    const bClear = document.createElement('button'); bClear.type = 'button'; bClear.textContent = '지움';
+    const bKey = document.createElement('button'); bKey.type = 'button'; bKey.textContent = '직접 입력';
+    const bOk = document.createElement('button'); bOk.type = 'button'; bOk.className = 'nw-ok'; bOk.textContent = '확인';
+    function close(){ clearTimeout(timer); clearInterval(poll); ov.remove(); }
+    bClear.addEventListener('click', ()=>{ opts.onSet(''); close(); });
+    bKey.addEventListener('click', ()=>{ const on = direct.style.display === 'none'; direct.style.display = on ? '' : 'none'; wheels.style.display = on ? 'none' : ''; if(on){ direct.value = fmt(cur); direct.focus(); direct.select(); } });
+    direct.addEventListener('input', ()=>{ const v = parseFloat(direct.value); if(isFinite(v) && v >= 0){ cur = v; render(); } });
+    bOk.addEventListener('click', ()=>{
+      if(direct.style.display !== 'none'){ const v = parseFloat(direct.value); if(isFinite(v) && v >= 0) cur = v; }
+      const out = fmt(cur);
+      try{ localStorage.setItem(nwLastKey(opts.title, opts.unit), out); }catch(e){}
+      opts.onSet(out); close();
+    });
+    ov.addEventListener('click', (e)=>{ if(e.target === ov) close(); });
+    actions.appendChild(bClear); actions.appendChild(bKey); actions.appendChild(bOk);
+    sh.appendChild(title); sh.appendChild(valEl); sh.appendChild(wheels); sh.appendChild(direct); sh.appendChild(chips); sh.appendChild(step); sh.appendChild(actions);
+    document.body.appendChild(ov);
+    render(); syncWheels();
+  }
+
   function renderPreviewGrid(markerId){
     const m = markers.find(x=>x.id===markerId);
     if(!m) return;
@@ -18872,6 +18984,14 @@
             const valInput = document.createElement('input');
             valInput.type = 'number'; valInput.step = 'any'; valInput.value = item.value;
             valInput.placeholder = '값';
+            if(useNumberSheet()){
+              // 터치 기기: 자판을 띄우지 않고, 눌러서 숫자 입력판(휠·칩·±)으로 입력한다
+              valInput.readOnly = true; valInput.inputMode = 'none'; valInput.classList.add('nw-btn'); valInput.placeholder = '눌러서 입력';
+              valInput.addEventListener('click', ()=>{
+                openNumberSheet({ title: rl.value, unit: unitSelect.value, value: valInput.value,
+                  onSet: v => { valInput.value = v; valInput.dispatchEvent(new Event('change', { bubbles: true })); } });
+              });
+            }
             const unitSelect = document.createElement('select');
             fd.units.forEach(u=>{
               const o = document.createElement('option'); o.value = u; o.textContent = u;
@@ -19097,6 +19217,47 @@
         saveState();
       });
       damageBox.appendChild(addDamageBtn);
+      // v119: "직전 손상과 같게" — 구분·구간·부위·손상명·원인·보수방법을 그대로 복사하고 규모 값만 비운다.
+      // 이 사진에 비어 있는 손상(손상명 없음)이 있으면 그 칸을 채우고, 없으면 새로 만든다.
+      const copyDamageBtn = document.createElement('button');
+      copyDamageBtn.type = 'button';
+      copyDamageBtn.className = 'log-btn role-gated damage-copy-btn';
+      copyDamageBtn.textContent = '↺ 직전 손상과 같게';
+      function findPrevDamage(){
+        const own = p.damages.filter(x => x.damageType);
+        if(own.length) return own[own.length - 1];
+        const ps = m.photos || [];
+        for(let pi = ps.indexOf(p) - 1; pi >= 0; pi--){
+          const hit = (ps[pi].damages || []).filter(x => x.damageType);
+          if(hit.length) return hit[hit.length - 1];
+        }
+        for(let mi = markers.indexOf(m) - 1; mi >= 0; mi--){
+          for(let pi = (markers[mi].photos || []).length - 1; pi >= 0; pi--){
+            const hit = (markers[mi].photos[pi].damages || []).filter(x => x.damageType);
+            if(hit.length) return hit[hit.length - 1];
+          }
+        }
+        return null;
+      }
+      copyDamageBtn.addEventListener('click', ()=>{
+        const src = findPrevDamage();
+        if(!src){ alert('복사할 이전 손상이 없습니다.'); return; }
+        let target = p.damages.find(x => !x.damageType);
+        if(!target){
+          target = { id:genId(), damageOrigin:null, existingDamageId:null, component:'', damageType:'', damageDetail:'', measurement:'', cause:'', failureFactor:'', evaluation:'', repairMethod:'', reinforcementMethod:'', investigatorComment:'', standardReference:'', section:'' };
+          p.damages.push(target);
+        }
+        const keepId = target.id;
+        const copy = JSON.parse(JSON.stringify(src));
+        Object.keys(copy).forEach(k => { target[k] = copy[k]; });
+        target.id = keepId; target.existingDamageId = null;
+        target.measurementItems = (copy.measurementItems || []).map(mi => Object.assign({}, mi, { value: '' }));   // 규모 값만 비움
+        target.measurement = '';
+        logActivity('손상기록 복사', '지점 ' + m.num + ' — ' + (target.damageType || ''));
+        renderDamageRecords();
+        saveState();
+      });
+      damageBox.appendChild(copyDamageBtn);
       // v118: 방금 촬영한 사진을 상세창에서 처음 볼 때, 손상이 하나도 없으면 입력칸을 자동으로 하나 연다 (매번 "+ 손상 추가"를 누르지 않도록).
       // 조회 전용 계정이거나 이미 손상이 있으면 하지 않고, 사진당 한 번만 한다.
       if(freshPhotoIds.has(p.id) && idx === previewSelIdx){
