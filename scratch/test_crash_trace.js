@@ -31,7 +31,7 @@ function run(prior) {
     console, JSON, Date, Object
   };
   const keys = html.match(/const PS_CRUMB_KEY = 'ps_last_crumb', PS_CLEAN_KEY = 'ps_clean_exit';/)[0];
-  const src = keys + '\n' + extract(html, 'function psCrumb(') + '\n' + extract(html, 'function psInitCrashTrace(') + '\n psInitCrashTrace(); return { psCrumb };';
+  const src = keys + '\nlet psPendingTraceLogs = [];\n' + extract(html, 'function psFlushTraceLogs(') + '\n' + extract(html, 'function psCrumb(') + '\n' + extract(html, 'function psInitCrashTrace(') + '\n psInitCrashTrace(); return { psCrumb, flush: psFlushTraceLogs, pending: () => psPendingTraceLogs.length };';
   const api = new Function(...Object.keys(scope), src)(...Object.values(scope));
   return { store, logs, listeners, api, scope };
 }
@@ -42,13 +42,15 @@ check('처음 실행: 진단로그 없음, 종료 표시 0', t.logs.length === 0
 // 2) 촬영 중 갑자기 종료 → 다음 실행에서 마지막 동작과 함께 기록
 t.api.psCrumb('촬영 버튼', { mode: 'map', video: '1920x1080', photosOnMarker: 2 });
 t = run(t.store);
+check('진단로그를 불러오기 전에는 기록하지 않고 보관만 함 (불러오기가 앞선 기록을 덮어쓰므로)', t.logs.length === 0 && t.api.pending() === 1);
+t.api.flush();
 check('화면이 켜진 채 끝났으면 "갑자기 종료" 로그 + 마지막 동작(촬영 버튼, 지도모드)', t.logs.length === 1 && /갑자기 종료/.test(t.logs[0].m) && t.logs[0].d.lastCrumb.a === '촬영 버튼' && t.logs[0].d.lastCrumb.mode === 'map' && t.logs[0].d.lastCrumb.video === '1920x1080', JSON.stringify(t.logs[0]));
 // 3) 화면이 숨겨지며 끝남 → "마지막 동작" 로그(갑작스런 종료 표현 없음)
 t = run(t.store);                     // 위에서 다시 켜졌으므로 표시는 0, 마지막 동작은 그대로
 t.listeners['doc:visibilitychange'] && (t.scope.document.visibilityState = 'hidden');
 t.listeners['doc:visibilitychange']();
 check('화면이 숨겨지면 종료 표시 1', t.store.ps_clean_exit === '1');
-t = run(t.store);
+t = run(t.store); t.api.flush();
 check('숨겨진 채 끝난 뒤 시작: "갑자기 종료"라고 하지 않고 마지막 동작만 기록', t.logs.length === 1 && !/갑자기/.test(t.logs[0].m) && t.logs[0].d.cleanExit === '1');
 // 4) 다시 보이면 0, pagehide 는 1
 t.scope.document.visibilityState = 'visible'; t.listeners['doc:visibilitychange']();
@@ -67,5 +69,6 @@ check('localStorage 가 막혀 있어도 오류 없음', ok);
 // 6) 촬영 흐름 연결 (기존 촬영 핸들러·보호 함수는 그대로)
 check('촬영창 열림/닫힘을 관찰하고 메모리 상태를 함께 기록', /new MutationObserver\(\(\)=>\{[\s\S]*?psCrumb\('촬영창 열림'[\s\S]*?diagLogMemorySnapshot\('촬영창 열림/.test(html));
 check('촬영 버튼은 capture 단계 리스너로 기록만 함 (기존 핸들러 유지)', /btnShoot\.addEventListener\('click', \(\)=>\{   \/\/ capture 단계에서 기록만[\s\S]*?\}, true\);/.test(html) && /btnShoot\.addEventListener\('click', async \(\)=>\{\n    if\(!mediaStream\) return;/.test(html));
+check('loadDiagLog 가 기록을 불러온 직후 보관해 둔 종료 기록을 이어서 씀', /if\(Array\.isArray\(saved\)\) diagLogBuffer = saved;\s*\}catch\(e\)\{\}\s*try\{ psFlushTraceLogs\(\); \}catch\(e\)\{\}/.test(html));
 console.log(fail ? `\n실패 ${fail}건` : '\n모두 통과');
 process.exit(fail ? 1 : 0);

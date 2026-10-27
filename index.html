@@ -3208,7 +3208,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v114';
+  const PS_BUILD = 'v115';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -3518,6 +3518,7 @@
       const saved = await storageGet(DIAG_LOG_KEY);
       if(Array.isArray(saved)) diagLogBuffer = saved;
     }catch(e){}
+    try{ psFlushTraceLogs(); }catch(e){}   // 갑작스런 종료 기록은 불러온 기록 뒤에 이어서 쓴다
   }
 
   async function flushDiagLog(){
@@ -3600,6 +3601,11 @@
   // (화면이 하얗게 되며 첫 화면으로 돌아가는 현상). "마지막 동작"을 기기에 적어 두고, 다음 실행 때 앞선 실행이
   // 정상적으로 닫히지 않았으면 진단로그에 남긴다. 기록만 하며 앱 동작에는 영향이 없다.
   const PS_CRUMB_KEY = 'ps_last_crumb', PS_CLEAN_KEY = 'ps_clean_exit';
+  let psPendingTraceLogs = [];
+  function psFlushTraceLogs(){
+    const list = psPendingTraceLogs; psPendingTraceLogs = [];
+    list.forEach(x => { try{ diagLog('lifecycle', x.msg, x.extra); }catch(e){} });
+  }
   function psCrumb(action, extra){
     try{ localStorage.setItem(PS_CRUMB_KEY, JSON.stringify(Object.assign({ t: new Date().toISOString(), a: action }, extra || {}))); }catch(e){}
   }
@@ -3609,10 +3615,12 @@
       const prevCrumbRaw = localStorage.getItem(PS_CRUMB_KEY);
       let prevCrumb = null; try{ prevCrumb = prevCrumbRaw ? JSON.parse(prevCrumbRaw) : null; }catch(e){}
       localStorage.setItem(PS_CLEAN_KEY, '0');
+      // 진단로그는 시작 후 잠시 뒤에 저장된 기록을 불러오면서 그 전에 쓴 기록을 덮어쓴다(v112 에서는 그래서 이 기록이 사라졌다).
+      // 그래서 여기서는 내용만 보관해 두었다가, 불러오기가 끝난 뒤(loadDiagLog) 기록한다.
       if(prevClean === '0'){
-        diagLog('lifecycle', '이전 실행이 화면이 켜진 채 갑자기 종료된 것으로 보임 (하얀 화면 후 다시 시작)', { lastCrumb: prevCrumb });
+        psPendingTraceLogs.push({ msg: '이전 실행이 화면이 켜진 채 갑자기 종료된 것으로 보임 (하얀 화면 후 다시 시작)', extra: { lastCrumb: prevCrumb } });
       } else if(prevCrumb){
-        diagLog('lifecycle', '이전 실행의 마지막 동작', { lastCrumb: prevCrumb, cleanExit: prevClean });
+        psPendingTraceLogs.push({ msg: '이전 실행의 마지막 동작', extra: { lastCrumb: prevCrumb, cleanExit: prevClean } });
       }
     }catch(e){}
     try{
