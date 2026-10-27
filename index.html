@@ -3235,7 +3235,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v122';
+  const PS_BUILD = 'v123';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -21917,10 +21917,10 @@
     card.innerHTML = `
       <div style="display:flex; justify-content:space-between; margin-bottom:10px; opacity:${enabledOpacity}">
         <input type="text" value="${escapeHtml(item.damageType || '')}" onchange="updateDmItem(${index}, 'damageType', this.value)" style="font-size:15px; font-weight:bold; background:transparent; color:var(--text); border:none; border-bottom:1px solid var(--amber);" placeholder="손상명 입력">
-        <label style="display:flex; align-items:center; gap:5px; font-size:12px; cursor:pointer;">
-          <input type="checkbox" ${item.enabled !== false ? 'checked' : ''} onchange="updateDmItem(${index}, 'enabled', this.checked)">
-          사용함
-        </label>
+        ${item.damageType ? `<span style="display:flex; align-items:center; gap:8px; font-size:12px;">
+          ${item.enabled === false ? '<span style="color:var(--muted);">사용 안 함(이전 설정)</span>' : ''}
+          <button type="button" class="ghost dm-del-btn" style="padding:3px 10px; font-size:12px; color:#d33;" title="이 부위에서 이 손상명을 삭제합니다">삭제</button>
+        </span>` : ''}
       </div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; opacity:${enabledOpacity}">
         ${showComponentField ? `
@@ -21947,6 +21947,22 @@
     `;
     const scaleBtn = card.querySelector('.dm-scale-btn');
     if(scaleBtn) scaleBtn.addEventListener('click', ()=> openDamageLibrary(item.damageType));
+    // v123: 사용 여부 체크 대신 삭제 — 형식별로 라이브러리에서 가져온 손상명이므로, 안 쓰는 손상명은 빼는 것이 맞다.
+    const delBtn = card.querySelector('.dm-del-btn');
+    if(delBtn) delBtn.addEventListener('click', ()=>{
+      const part = (item.component || '').trim();
+      if(!confirm('"' + item.damageType + '"을(를) ' + (part ? '"' + part + '" 부위에서 ' : '') + '삭제할까요?\n(현장에서 이미 입력한 기록은 지워지지 않습니다. 필요하면 "손상명 가져오기"로 다시 담을 수 있습니다.)')) return;
+      const i = dmCurrentData.indexOf(item);
+      if(i < 0) return;
+      dmCurrentData.splice(i, 1);
+      // 손상명을 모두 삭제해도 부위는 남도록 빈 자리표시 항목을 둔다 (현장에서 부위만 고르면 상태양호)
+      if(part && !dmCurrentData.some(it => (it.component || '').trim() === part)){
+        dmCurrentData.push({ damageType:'', component: part, cause:'', repairOptions:[], reinforcementOptions:[], enabled:true });
+      }
+      markDmDirty();
+      renderDmList();
+      renderDmPartsList();
+    });
     return card;
   }
 

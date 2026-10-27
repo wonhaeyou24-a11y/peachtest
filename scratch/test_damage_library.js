@@ -37,6 +37,8 @@ check('부위 묶음에서 손상명을 모두 빼도 부위가 남도록 빈 �
 check('상태양호: 부위만 있고 손상명이 없으면 표시(목록·복사·Word)', (html.match(/상태양호/g) || []).length >= 6 && html.includes("d.damageType || (d.component ? '상태양호' : '(손상명 없음)')"));
 check('규모 항목 3개 이상이면 3번째부터 값이 빈 칸은 접음', html.includes('규모 항목 더 보기') && html.includes('fi >= 2 &&'));
 
+check('v123: 손상명 카드의 "사용함" 체크박스 대신 삭제 버튼 (손상명이 있는 카드만, 삭제 전 확인, 부위는 남김)', !/<input type="checkbox" \$\{item\.enabled !== false/.test(html) && html.includes('dm-del-btn') && html.includes("dmCurrentData.splice(i, 1);") && html.includes("손상명을 모두 삭제해도 부위는 남도록"));
+
 // ---------------------------------------------------------------- 실제 함수 실행
 const STANDARD_DB = new Function('return ' + extractConst('const STANDARD_DB = {').replace(/^const STANDARD_DB = /, '').replace(/;$/, ''))();
 const MEASUREMENT_TEMPLATES = new Function('return ' + extractConst('const MEASUREMENT_TEMPLATES = {').replace(/^const MEASUREMENT_TEMPLATES = /, '').replace(/;$/, ''))();
