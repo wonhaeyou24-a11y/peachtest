@@ -2887,7 +2887,10 @@
   <div class="modal" style="max-width:900px; width:95%; height:90vh; display:flex; flex-direction:column; background:var(--panel);">
     <div class="modal-header" style="padding:15px 20px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;">
       <h2 style="margin:0; font-size:18px;">손상마스터 관리</h2>
-      <button class="ghost" onclick="closeDamageMaster()" style="padding:4px 8px;">✕</button>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <button class="primary" id="btnOpenDamageLibrary" onclick="openDamageLibrary()" style="padding:6px 12px;" title="손상명과 규모(폭·길이·너비·깊이·개소 등)를 한 곳에서 관리합니다. 부위별로 이 목록에서 손상명을 가져와 묶습니다.">📚 손상명 라이브러리</button>
+        <button class="ghost" onclick="closeDamageMaster()" style="padding:4px 8px;">✕</button>
+      </div>
     </div>
     <div class="modal-body" style="flex:1; overflow-y:auto; padding:20px;">
       <div style="display:flex; gap:12px; margin-bottom: 10px;">
@@ -3232,7 +3235,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v119';
+  const PS_BUILD = 'v120';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -4997,6 +5000,76 @@
   async function saveGlobalDamageMaster(){
     await storageSet(GLOBAL_DAMAGE_MASTER_KEY, globalDamageMaster);
     await storageSet(GLOBAL_DAMAGE_MASTER_VERSION_KEY, globalDamageMasterVersion);
+    dmLibInvalidate();
+  }
+
+  // ================================================================
+  // v120: 손상명 라이브러리 — 손상명 하나의 "규모 세팅"을 모든 시설물 종류·형식·부위가 공유한다.
+  // 기존 손상마스터(시설물종류×형식×부위별 배열)는 그대로 두고, 읽는 쪽(getMeasurementFields)만 이 라이브러리를 먼저 본다.
+  //  - 기본값: 기준DB·공용/프로젝트/조직 마스터에 있는 같은 이름의 규모 항목을 합집합으로 모은다 (예: 유실 = 너비+길이+깊이+개소).
+  //  - 사용자가 라이브러리 화면에서 바꾼 것(damageLibrary)은 그 이름의 규모를 통째로 대신한다. 새로 등록한 손상명(custom)도 여기 저장된다.
+  //  - 이 기기에만 저장된다(팀 공유 아님). 이미 입력한 현장 자료의 값은 지우지 않는다.
+  // ================================================================
+  let damageLibrary = {};   // damageLibrary[손상명] = { fields:[{label,unit}], custom:true|undefined, defaults:{cause,repairOptions,reinforcementOptions} }
+  const DAMAGE_LIBRARY_KEY = 'point-shot-damage-library';
+  let dmLibCache = null;
+  function dmLibInvalidate(){ dmLibCache = null; }
+  async function loadDamageLibrary(){
+    try{ damageLibrary = (await storageGet(DAMAGE_LIBRARY_KEY)) || {}; }catch(e){ damageLibrary = {}; }
+    dmLibInvalidate();
+  }
+  async function saveDamageLibrary(){
+    await storageSet(DAMAGE_LIBRARY_KEY, damageLibrary);
+    dmLibInvalidate();
+  }
+  // 규모 항목 프리셋 — 칩으로 고른다(복수 선택). 단위는 기본 단위 + 바꿀 수 있는 단위들.
+  const DM_LABEL_PRESETS = [
+    { label:'길이', unit:'m', units:['m','cm','mm'] }, { label:'폭', unit:'mm', units:['mm','cm'] },
+    { label:'너비', unit:'m', units:['m','cm'] }, { label:'깊이', unit:'m', units:['m','cm','mm'] },
+    { label:'높이', unit:'m', units:['m','cm'] }, { label:'면적', unit:'㎡', units:['㎡'] },
+    { label:'개소', unit:'EA', units:['EA'] }, { label:'침하량', unit:'mm', units:['mm','cm'] },
+    { label:'세굴폭', unit:'m', units:['m','cm'] }
+  ];
+  function dmNormLabel(label){ return label === '수량' ? '개소' : label; }   // "수량"과 "개소"는 같은 뜻 — 개소로 통일
+  function dmFieldDef(label, unit, extraUnits){
+    const lab = dmNormLabel(label);
+    const pre = DM_LABEL_PRESETS.find(x => x.label === lab);
+    const def = unit || (pre ? pre.unit : 'EA');
+    const units = Array.from(new Set([def].concat(extraUnits || [], pre ? pre.units : [])));
+    return { type: 'dm:' + lab, label: lab, defaultUnit: def, units };
+  }
+  // 이름 -> { name, fields:[{type,label,defaultUnit,units}], base:(문구 기본값을 가져올 항목), custom, overridden }
+  function dmLibraryEffective(){
+    const now = Date.now();
+    if(dmLibCache && now - dmLibCache.at < 3000) return dmLibCache.map;
+    const map = new Map();
+    const addEntry = (e)=>{
+      if(!e || !e.damageType) return;
+      let r = map.get(e.damageType);
+      if(!r){ r = { name:e.damageType, fields:[], base:null, custom:false, overridden:false }; map.set(e.damageType, r); }
+      const hasText = x => !!(x && (x.cause || (x.repairOptions || []).length));
+      if(!r.base || (!hasText(r.base) && hasText(e))) r.base = e;
+      (e.measurementFields || []).forEach(f=>{
+        const lab = dmNormLabel(f.label);
+        if(!r.fields.some(x => x.label === lab)) r.fields.push(dmFieldDef(lab, f.defaultUnit, f.units));
+      });
+    };
+    const eachDb = db => Object.values(db || {}).forEach(forms => Object.values(forms || {}).forEach(list => (Array.isArray(list) ? list : []).forEach(addEntry)));
+    try{ eachDb(STANDARD_DB); }catch(e){}
+    eachDb(globalDamageMaster);
+    try{ const proj = projects.find(x => x.id === currentProjectId); if(proj) eachDb(proj.damageMaster); }catch(e){}
+    Object.values(orgDamageMasterCache || {}).forEach(byType => Object.values(byType || {}).forEach(forms => Object.values(forms || {}).forEach(ent => {
+      if(ent && Array.isArray(ent.data)) ent.data.forEach(addEntry);
+    })));
+    Object.entries(damageLibrary || {}).forEach(([name, o])=>{
+      let r = map.get(name);
+      if(!r){ r = { name, fields:[], base:null, custom:true, overridden:false }; map.set(name, r); }
+      if(Array.isArray(o.fields)){ r.fields = o.fields.map(f => dmFieldDef(f.label, f.unit)); r.overridden = true; }
+      if(o.custom) r.custom = true;
+      if(o.defaults && !r.base) r.base = o.defaults;
+    });
+    dmLibCache = { at: now, map };
+    return map;
   }
 
   // ================================================================
@@ -5036,6 +5109,7 @@
         if(!orgDamageMasterCache[orgId]) orgDamageMasterCache[orgId] = {};
         if(!orgDamageMasterCache[orgId][type]) orgDamageMasterCache[orgId][type] = {};
         orgDamageMasterCache[orgId][type][form] = { data: data.data, version: data.version };
+        dmLibInvalidate();
         await saveOrgDamageMasterCache();
       }
       return orgDamageMasterCache[orgId] && orgDamageMasterCache[orgId][type] && orgDamageMasterCache[orgId][type][form];
@@ -5063,6 +5137,7 @@
       if(!orgDamageMasterCache[orgId]) orgDamageMasterCache[orgId] = {};
       if(!orgDamageMasterCache[orgId][type]) orgDamageMasterCache[orgId][type] = {};
       orgDamageMasterCache[orgId][type][form] = { data: row.data, version: row.version };
+      dmLibInvalidate();
       await saveOrgDamageMasterCache();
       return { ok:true, version: row.version };
     }catch(e){
@@ -9162,6 +9237,10 @@
   // 시설물 데이터를 다룰 때는 호출부에서 site를 명시적으로 넘긴다.
   function getMeasurementFields(damageType, site){
     site = site || (typeof currentSiteObj === 'function' ? currentSiteObj() : null);
+    // v120: 손상명 라이브러리에 규모가 있으면 그것을 먼저 쓴다 (모든 시설물·부위 공통). 없으면 예전 방식 그대로.
+    if(damageType){
+      try{ const lib = dmLibraryEffective().get(damageType); if(lib && lib.fields.length) return lib.fields; }catch(e){}
+    }
     if(site && site.facilityType && site.facilityForm && damageType){
       const stdList = resolveDamageStandard(site.facilityType, site.facilityForm);
       if(stdList && stdList.length){
@@ -9402,7 +9481,19 @@
     return rows;
   }
 
+  // v120: 예전에 "수량"으로 저장된 규모 값은 "개소"로 옮긴다 (값은 그대로, 이름만 통일).
+  function dmNormalizeMeasurementItems(d){
+    if(!d || !Array.isArray(d.measurementItems)) return;
+    const hasCount = d.measurementItems.some(mi => mi.type === 'dm:개소' && mi.value !== '' && mi.value != null);
+    d.measurementItems = d.measurementItems.filter(mi => {
+      if(mi.type !== 'dm:수량') return true;
+      if(hasCount) return false;   // 이미 개소 값이 있으면 옛 수량 칸은 정리
+      return true;
+    });
+    d.measurementItems.forEach(mi => { if(mi.type === 'dm:수량'){ mi.type = 'dm:개소'; if(mi.label === '수량') mi.label = '개소'; } });
+  }
   function syncMeasurementText(d){
+    dmNormalizeMeasurementItems(d);
     const validTypes = getMeasurementFields(d.damageType).map(fd => fd.type);
     const items = (d.measurementItems || []).filter(mi => validTypes.includes(mi.type) && mi.value !== '' && mi.value != null);
     d.measurement = items.length ? items.map(mi => mi.label + ' ' + mi.value + mi.unit).join(', ') : '';
@@ -17150,7 +17241,7 @@
         });
         const label = document.createElement('span');
         label.className = 'worklist-row-label';
-        label.textContent = (m ? '#' + m.num + ' · ' : '(삭제된 지점) · ') + (d ? (d.damageType || '(손상명 없음)') : '(삭제된 항목)');
+        label.textContent = (m ? '#' + m.num + ' · ' : '(삭제된 지점) · ') + (d ? (d.damageType || (d.component ? '상태양호' : '(손상명 없음)')) : '(삭제된 항목)');
         row.appendChild(cb);
         row.appendChild(label);
         if(m){
@@ -17691,7 +17782,7 @@
     }
     return allDamages.map(d=>{
       const origin = d.damageOrigin === 'NEW' ? '신규' : d.damageOrigin === 'EXISTING' ? '기존' : '-';
-      const type = d.damageType || '(손상명 없음)';
+      const type = d.damageType || (d.component ? '상태양호' : '(손상명 없음)');   // v120: 부위만 있고 손상명이 없으면 상태양호
       const comp = d.component ? ' (' + d.component + ')' : '';
       const meas = d.measurement ? ', ' + d.measurement : '';
       return origin + ' · ' + (d.section || '-') + ' · ' + type + comp + meas;
@@ -18962,8 +19053,10 @@
           measWrap.appendChild(measLab);
 
           if(!d.measurementItems) d.measurementItems = [];
+          dmNormalizeMeasurementItems(d);
           const measFieldDefs = getMeasurementFields(d.damageType, site);
-          measFieldDefs.forEach(fd=>{
+          const hiddenMeasRows = [];   // v120: 항목이 3개 이상이면 3번째부터 값이 비어 있는 칸은 접어 둔다 ("규모 항목 더 보기")
+          measFieldDefs.forEach((fd, fi)=>{
             let item = d.measurementItems.find(mi => mi.type === fd.type);
             if(!item){
               item = { type: fd.type, label: fd.label, value: '', unit: fd.defaultUnit };
@@ -19014,8 +19107,16 @@
             valInput.addEventListener('change', commitMeasurement);
             unitSelect.addEventListener('change', commitMeasurement);
             row.appendChild(rl); row.appendChild(valInput); row.appendChild(unitSelect);
+            if(fi >= 2 && (item.value === '' || item.value == null)){ row.style.display = 'none'; hiddenMeasRows.push(row); }
             measWrap.appendChild(row);
           });
+          if(hiddenMeasRows.length){
+            const moreBtn = document.createElement('button');
+            moreBtn.type = 'button'; moreBtn.className = 'log-btn';
+            moreBtn.textContent = '＋ 규모 항목 더 보기 (' + hiddenMeasRows.length + ')';
+            moreBtn.addEventListener('click', ()=>{ hiddenMeasRows.forEach(r => { r.style.display = ''; }); moreBtn.remove(); });
+            measWrap.appendChild(moreBtn);
+          }
           const hasStructuredValue = d.measurementItems.some(mi => mi.value !== '' && mi.value != null);
           if(!hasStructuredValue && d.measurement){
             const legacyNote = document.createElement('div');
@@ -19023,7 +19124,16 @@
             legacyNote.textContent = '이전 기록: ' + d.measurement;
             measWrap.appendChild(legacyNote);
           }
-          rec.appendChild(measWrap);
+          // v120: 부위를 골랐는데 손상명이 없으면 "상태양호"(손상 없음)로 본다 — 규모 칸 대신 안내만 보여 준다.
+          if(d.component && !d.damageType){
+            const okNote = document.createElement('div');
+            okNote.className = 'measurement-legacy-note';
+            okNote.style.cssText = 'color:var(--ok-text, #2E7D4F); font-weight:700; padding:6px 0;';
+            okNote.textContent = '✓ 상태양호 — 손상명을 고르지 않으면 이 부위는 손상 없음(상태양호)으로 봅니다.';
+            rec.appendChild(okNote);
+          } else {
+            rec.appendChild(measWrap);
+          }
 
           // 구분·구간·부위·손상명·손상규모만 기본 노출하고, 원인·보수방안·보강방안·
           // 점검의견은 앱 모드(현장/사무실)와 무관하게 항상 접혀 있다가 "필요시 작성"
@@ -20548,7 +20658,7 @@
           } else {
             cellKids.push(new Paragraph({ alignment: AlignmentType.CENTER, children:[ new TextRun({ text:'(사진 없음)', italics:true, size:14, color:'999999' }) ], spacing:{ after:60 } }));
           }
-          const nameText = d.component ? (d.damageType || '(손상명 없음)') + ' (' + d.component + ')' : (d.damageType || '(손상명 없음)');
+          const nameText = d.component ? (d.damageType || '상태양호') + ' (' + d.component + ')' : (d.damageType || '(손상명 없음)');   // v120: 부위만 있으면 상태양호
           const statusText = d.measurement ? nameText + ', ' + d.measurement : nameText;
           cellKids.push(new Table({ ...fixedTableOpts([700, 2813, 800]), rows:[
             new TableRow({ children:[ labelCell('현황'), textCell(statusText), numCell(seq) ] }),
@@ -20998,6 +21108,7 @@
   loadOtherCandidates();
   loadDamageUsage();
   loadGlobalDamageMaster();
+  loadDamageLibrary();
   loadOrgDamageMasterCache();
   // ---------- MOBILE UI 명령문 섹션3~5: 모바일 헤더 연동 ----------
   // 클릭은 전부 기존 버튼으로 위임한다(새 로직 없음).
@@ -21100,6 +21211,7 @@
           loadWorkMode(),
           loadDamageUsage(),
           loadGlobalDamageMaster(),
+          loadDamageLibrary(),
           loadOrgDamageMasterCache(),
           loadRoleCache()
         ]);
@@ -21712,7 +21824,12 @@
       toggleBtn.textContent = allEnabled ? '비활성화' : '활성화';
       toggleBtn.addEventListener('click', ()=> toggleDmPartEnabled(part.name));
 
-      right.appendChild(upBtn); right.appendChild(downBtn); right.appendChild(renameBtn); right.appendChild(toggleBtn);
+      const pickBtn = document.createElement('button');
+      pickBtn.type = 'button'; pickBtn.className = 'primary'; pickBtn.textContent = '📚 손상명 가져오기'; pickBtn.style.padding = '4px 10px';
+      pickBtn.title = '라이브러리에서 이 부위에 쓸 손상명을 골라 묶습니다';
+      pickBtn.addEventListener('click', ()=> dmPickFromLibrary(part.name));
+
+      right.appendChild(pickBtn); right.appendChild(upBtn); right.appendChild(downBtn); right.appendChild(renameBtn); right.appendChild(toggleBtn);
       card.appendChild(left); card.appendChild(right);
       box.appendChild(card);
     });
@@ -21791,6 +21908,8 @@
     const causeStr = item.cause || '';
     const repairStr = (item.repairOptions || []).join(', ');
     const measFieldsStr = formatDmMeasurementFieldsText(item.measurementFields);
+    const libEntry = item.damageType ? dmLibraryEffective().get(item.damageType) : null;
+    const libScaleText = libEntry && libEntry.fields.length ? libEntry.fields.map(f => f.label + '(' + f.defaultUnit + ')').join(' · ') : '';
 
     card.innerHTML = `
       <div style="display:flex; justify-content:space-between; margin-bottom:10px; opacity:${enabledOpacity}">
@@ -21811,8 +21930,11 @@
           <input type="text" value="${escapeHtml(causeStr)}" onchange="updateDmItem(${index}, 'cause', this.value)" style="width:100%; background:var(--panel); border:1px solid var(--line); color:var(--text); padding:4px; border-radius:3px;">
         </div>
         <div>
-          <label style="font-size:11px; color:var(--muted);">규모세팅 (라벨:단위, 라벨:단위1/단위2 — 예: 길이:m, 균열폭:mm)</label>
-          <input type="text" value="${escapeHtml(measFieldsStr)}" onchange="updateDmItemMeasurementFields(${index}, this.value)" style="width:100%; background:var(--panel); border:1px solid var(--line); color:var(--text); padding:4px; border-radius:3px;" placeholder="비워두면 손상명으로 자동 추정">
+          <label style="font-size:11px; color:var(--muted);">규모 (손상명 라이브러리 설정 — 한 곳에서 바꾸면 모든 부위에 적용)</label>
+          <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+            <span style="font-size:12px;">${escapeHtml(libScaleText || measFieldsStr || '규모 없음(자동 추정)')}</span>
+            <button type="button" class="ghost dm-scale-btn" style="padding:3px 8px; font-size:12px;">규모 변경</button>
+          </div>
         </div>
         <div style="grid-column: span 2;">
           <label style="font-size:11px; color:var(--muted);">보수방안 (쉼표로 구분)</label>
@@ -21820,6 +21942,8 @@
         </div>
       </div>
     `;
+    const scaleBtn = card.querySelector('.dm-scale-btn');
+    if(scaleBtn) scaleBtn.addEventListener('click', ()=> openDamageLibrary(item.damageType));
     return card;
   }
 
@@ -21932,6 +22056,225 @@
     renderDmPartsList();
   };
   
+  // ================================================================
+  // v120: 손상명 라이브러리 화면 — 손상명을 구분 없이 한곳에 모으고, 규모 항목(폭·길이·너비·깊이·개소…)을 칩으로 복수 선택한다.
+  // ================================================================
+  const dlcState = { filter:'' };
+  function dlcOverlay(id, innerHtml){
+    let ov = document.getElementById(id);
+    if(ov) ov.remove();
+    ov = document.createElement('div');
+    ov.id = id;
+    ov.className = 'modal-backdrop';
+    ov.style.cssText = 'display:flex; z-index:10010;';
+    ov.innerHTML = innerHtml;
+    document.body.appendChild(ov);
+    return ov;
+  }
+  function dlcChipStyle(on){
+    return 'padding:5px 10px; border-radius:14px; font-size:12px; cursor:pointer; border:1px solid ' + (on ? 'var(--amber, #E5A83B)' : 'var(--line)') + '; background:' + (on ? 'var(--amber, #E5A83B)' : 'var(--panel)') + '; color:' + (on ? '#1a1a1a' : 'var(--text)') + '; font-weight:' + (on ? '700' : '400') + ';';
+  }
+  window.openDamageLibrary = function(focusName){
+    const ov = dlcOverlay('damageLibraryModal', `
+      <div class="modal" style="max-width:820px; width:96%; height:90vh; display:flex; flex-direction:column; background:var(--panel);">
+        <div class="modal-header" style="padding:14px 18px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;">
+          <h2 style="margin:0; font-size:17px;">📚 손상명 라이브러리</h2>
+          <button class="ghost" id="dlcClose" style="padding:4px 8px;">✕</button>
+        </div>
+        <div style="padding:10px 18px 0;">
+          <div class="std-ref-note" style="margin-bottom:8px;">손상명을 구분 없이 한곳에 모읍니다. 규모 항목은 여러 개 골라 두고, 현장에서는 필요한 칸만 채우면 됩니다(비워 둔 칸은 기록에 들어가지 않습니다). 여기서 바꾸면 모든 시설물·부위에 적용되며, 이 기기에 자동 저장됩니다.</div>
+          <input type="text" id="dlcSearch" placeholder="손상명 검색" style="width:100%; box-sizing:border-box; padding:8px; background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:4px;">
+          <div id="dlcAdd" style="margin:10px 0; padding:10px; border:1px dashed var(--line); border-radius:6px;"></div>
+        </div>
+        <div id="dlcList" style="flex:1; overflow-y:auto; padding:0 18px 16px; display:flex; flex-direction:column; gap:8px;"></div>
+      </div>`);
+    ov.querySelector('#dlcClose').addEventListener('click', ()=> ov.remove());
+    const search = ov.querySelector('#dlcSearch');
+    search.value = focusName || '';
+    dlcState.filter = focusName || '';
+    search.addEventListener('input', ()=>{ dlcState.filter = search.value.trim(); dlcRenderList(); });
+    dlcRenderAdd(); dlcRenderList();
+  };
+  function dlcFieldsToStore(fields){ return fields.map(f => ({ label:f.label, unit:f.defaultUnit })); }
+  async function dlcSetFields(name, fields){
+    const cur = damageLibrary[name] || {};
+    damageLibrary[name] = Object.assign({}, cur, { fields: dlcFieldsToStore(fields) });
+    await saveDamageLibrary();
+  }
+  function dlcChipsRow(selected, onToggle, onAddCustom){
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex; gap:6px; flex-wrap:wrap; align-items:center;';
+    const labels = DM_LABEL_PRESETS.map(x => x.label);
+    selected.forEach(f => { if(!labels.includes(f.label)) labels.push(f.label); });
+    labels.forEach(lab => {
+      const on = selected.some(f => f.label === lab);
+      const f = selected.find(x => x.label === lab);
+      const pre = DM_LABEL_PRESETS.find(x => x.label === lab);
+      const b = document.createElement('button'); b.type = 'button';
+      b.style.cssText = dlcChipStyle(on);
+      b.textContent = lab + ' ' + (f ? f.defaultUnit : (pre ? pre.unit : ''));
+      b.addEventListener('click', ()=> onToggle(lab));
+      wrap.appendChild(b);
+    });
+    const plus = document.createElement('button'); plus.type = 'button'; plus.textContent = '＋ 직접'; plus.style.cssText = dlcChipStyle(false);
+    plus.addEventListener('click', onAddCustom);
+    wrap.appendChild(plus);
+    return wrap;
+  }
+  function dlcAskCustom(){
+    const t = prompt('규모 항목을 "항목명:단위" 로 입력하세요 (예: 경사각:도, 이격거리:cm)');
+    if(!t || !t.trim()) return null;
+    const idx = t.indexOf(':');
+    const label = dmNormLabel((idx >= 0 ? t.slice(0, idx) : t).trim());
+    const unit = (idx >= 0 ? t.slice(idx + 1) : '').trim() || '개소';
+    if(!label) return null;
+    return dmFieldDef(label, unit);
+  }
+  function dlcRenderAdd(){
+    const box = document.getElementById('dlcAdd'); if(!box) return;
+    box.innerHTML = '';
+    const title = document.createElement('div'); title.style.cssText = 'font-size:13px; font-weight:700; margin-bottom:6px;'; title.textContent = '+ 새 손상명 등록';
+    const name = document.createElement('input'); name.type = 'text'; name.placeholder = '손상명 (예: 배수로 막힘)';
+    name.style.cssText = 'width:100%; box-sizing:border-box; padding:7px; background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:4px; margin-bottom:6px;';
+    let chosen = [];
+    const chipHost = document.createElement('div');
+    function drawChips(){
+      chipHost.innerHTML = '';
+      chipHost.appendChild(dlcChipsRow(chosen, lab => {
+        if(chosen.some(f => f.label === lab)) chosen = chosen.filter(f => f.label !== lab);
+        else chosen.push(dmFieldDef(lab));
+        drawChips();
+      }, ()=>{ const f = dlcAskCustom(); if(f && !chosen.some(x => x.label === f.label)){ chosen.push(f); drawChips(); } }));
+    }
+    drawChips();
+    const add = document.createElement('button'); add.type = 'button'; add.className = 'primary'; add.textContent = '등록'; add.style.cssText = 'margin-top:8px; padding:6px 16px;';
+    add.addEventListener('click', async ()=>{
+      const n = name.value.trim();
+      if(!n){ alert('손상명을 입력하세요.'); return; }
+      if(dmLibraryEffective().has(n)){ alert('이미 있는 손상명입니다. 아래 목록에서 규모를 바꿔 주세요.'); dlcState.filter = n; document.getElementById('dlcSearch').value = n; dlcRenderList(); return; }
+      damageLibrary[n] = { custom:true, fields: dlcFieldsToStore(chosen) };
+      await saveDamageLibrary();
+      logActivity('손상명 라이브러리 등록', n + (chosen.length ? ' — 규모: ' + chosen.map(f => f.label).join(', ') : ''));
+      dlcState.filter = n; document.getElementById('dlcSearch').value = n;
+      dlcRenderAdd(); dlcRenderList();
+    });
+    box.appendChild(title); box.appendChild(name); box.appendChild(chipHost); box.appendChild(add);
+  }
+  function dlcRenderList(){
+    const host = document.getElementById('dlcList'); if(!host) return;
+    host.innerHTML = '';
+    const q = (dlcState.filter || '').toLowerCase();
+    const all = Array.from(dmLibraryEffective().values()).sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+    const rows = all.filter(r => !q || r.name.toLowerCase().includes(q));
+    const cnt = document.createElement('div'); cnt.style.cssText = 'font-size:12px; color:var(--muted);'; cnt.textContent = '손상명 ' + rows.length + '개' + (q ? ' (전체 ' + all.length + '개)' : '');
+    host.appendChild(cnt);
+    rows.forEach(r => {
+      const card = document.createElement('div');
+      card.style.cssText = 'background:var(--panel-2); border:1px solid var(--line); border-radius:6px; padding:10px 12px;';
+      const head = document.createElement('div'); head.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap;';
+      const nm = document.createElement('div'); nm.style.cssText = 'font-weight:700; font-size:14px;';
+      nm.textContent = r.name + (r.custom ? '  · 직접 등록' : '') + (r.overridden && !r.custom ? '  · 수정됨' : '');
+      const act = document.createElement('div'); act.style.cssText = 'display:flex; gap:6px;';
+      if(r.overridden && !r.custom){
+        const rst = document.createElement('button'); rst.type = 'button'; rst.className = 'ghost'; rst.textContent = '기본값으로'; rst.style.cssText = 'padding:3px 8px; font-size:12px;';
+        rst.addEventListener('click', async ()=>{ delete damageLibrary[r.name]; await saveDamageLibrary(); dlcRenderList(); });
+        act.appendChild(rst);
+      }
+      if(r.custom){
+        const del = document.createElement('button'); del.type = 'button'; del.className = 'ghost'; del.textContent = '삭제'; del.style.cssText = 'padding:3px 8px; font-size:12px; color:#d33;';
+        del.addEventListener('click', async ()=>{
+          if(!confirm('"' + r.name + '"을(를) 라이브러리에서 삭제할까요?\n(이미 부위에 묶인 항목과 현장 기록은 지워지지 않습니다.)')) return;
+          delete damageLibrary[r.name]; await saveDamageLibrary(); dlcRenderList();
+        });
+        act.appendChild(del);
+      }
+      head.appendChild(nm); head.appendChild(act);
+      card.appendChild(head);
+      card.appendChild(dlcChipsRow(r.fields, async (lab) => {
+        let next;
+        if(r.fields.some(f => f.label === lab)) next = r.fields.filter(f => f.label !== lab);
+        else next = r.fields.concat([dmFieldDef(lab)]);
+        await dlcSetFields(r.name, next); dlcRenderList();
+      }, async ()=>{
+        const f = dlcAskCustom(); if(!f) return;
+        if(r.fields.some(x => x.label === f.label)) return;
+        await dlcSetFields(r.name, r.fields.concat([f])); dlcRenderList();
+      }));
+      if(!r.fields.length){
+        const none = document.createElement('div'); none.style.cssText = 'font-size:11px; color:var(--muted); margin-top:4px;'; none.textContent = '규모 항목 없음 — 현장에서는 손상명으로 자동 추정한 칸이 나옵니다.'; card.appendChild(none);
+      }
+      host.appendChild(card);
+    });
+    if(!rows.length){ const e = document.createElement('div'); e.style.cssText = 'color:var(--muted); font-size:13px; padding:12px 0;'; e.textContent = '검색 결과가 없습니다. 위에서 새 손상명으로 등록할 수 있습니다.'; host.appendChild(e); }
+  }
+
+  // 부위 묶기: 라이브러리에서 이 부위에 쓸 손상명을 골라 담는다 (체크 해제하면 이 부위에서 뺀다).
+  window.dmPickFromLibrary = function(partName){
+    const lib = Array.from(dmLibraryEffective().values()).sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+    const have = new Set((dmCurrentData || []).filter(it => (it.component || '').trim() === partName && it.damageType).map(it => it.damageType));
+    const chosen = new Set(have);
+    const ov = dlcOverlay('dmPickModal', `
+      <div class="modal" style="max-width:640px; width:96%; height:86vh; display:flex; flex-direction:column; background:var(--panel);">
+        <div class="modal-header" style="padding:14px 18px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;">
+          <h2 style="margin:0; font-size:16px;">📚 "${escapeHtml(partName)}" 에 묶을 손상명</h2>
+          <button class="ghost" id="dpClose" style="padding:4px 8px;">✕</button>
+        </div>
+        <div style="padding:10px 18px 0;">
+          <div class="std-ref-note" style="margin-bottom:8px;">체크한 손상명이 이 부위의 현장 손상명 칩이 됩니다. 새로 담는 손상명은 라이브러리의 규모와 기존 원인·보수 문구를 함께 가져옵니다. 손상명이 하나도 없는 부위는 현장에서 "상태양호"로 봅니다.</div>
+          <input type="text" id="dpSearch" placeholder="손상명 검색" style="width:100%; box-sizing:border-box; padding:8px; background:var(--panel-2); color:var(--text); border:1px solid var(--line); border-radius:4px;">
+        </div>
+        <div id="dpList" style="flex:1; overflow-y:auto; padding:10px 18px; display:flex; flex-direction:column; gap:4px;"></div>
+        <div style="padding:12px 18px; border-top:1px solid var(--line); display:flex; gap:8px; justify-content:flex-end; align-items:center;">
+          <span id="dpCount" style="margin-right:auto; font-size:12px; color:var(--muted);"></span>
+          <button class="ghost" id="dpCancel">취소</button>
+          <button class="primary" id="dpApply">적용</button>
+        </div>
+      </div>`);
+    const listHost = ov.querySelector('#dpList');
+    function draw(){
+      const q = ov.querySelector('#dpSearch').value.trim().toLowerCase();
+      listHost.innerHTML = '';
+      lib.filter(r => !q || r.name.toLowerCase().includes(q)).forEach(r => {
+        const row = document.createElement('label');
+        row.style.cssText = 'display:flex; gap:10px; align-items:center; padding:8px 6px; border-bottom:1px solid var(--line); cursor:pointer;';
+        const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = chosen.has(r.name);
+        cb.addEventListener('change', ()=>{ if(cb.checked) chosen.add(r.name); else chosen.delete(r.name); count(); });
+        const t = document.createElement('div'); t.style.cssText = 'flex:1;';
+        t.innerHTML = '<div style="font-size:14px; font-weight:600;">' + escapeHtml(r.name) + '</div><div style="font-size:11px; color:var(--muted);">' + escapeHtml(r.fields.length ? r.fields.map(f => f.label + '(' + f.defaultUnit + ')').join(' · ') : '규모 없음') + '</div>';
+        row.appendChild(cb); row.appendChild(t); listHost.appendChild(row);
+      });
+    }
+    function count(){ ov.querySelector('#dpCount').textContent = '선택 ' + chosen.size + '개'; }
+    ov.querySelector('#dpSearch').addEventListener('input', draw);
+    ov.querySelector('#dpClose').addEventListener('click', ()=> ov.remove());
+    ov.querySelector('#dpCancel').addEventListener('click', ()=> ov.remove());
+    ov.querySelector('#dpApply').addEventListener('click', ()=>{
+      const toAdd = Array.from(chosen).filter(n => !have.has(n));
+      const toRemove = Array.from(have).filter(n => !chosen.has(n));
+      if(toRemove.length && !confirm('이 부위에서 손상명 ' + toRemove.length + '개를 뺍니다:\n' + toRemove.join(', ') + '\n(현장에서 이미 입력한 기록은 지워지지 않습니다.) 계속할까요?')) return;
+      if(toRemove.length){
+        dmCurrentData = dmCurrentData.filter(it => !((it.component || '').trim() === partName && toRemove.includes(it.damageType)));
+      }
+      toAdd.forEach(n => {
+        const r = dmLibraryEffective().get(n);
+        const b = (r && r.base) || {};
+        dmCurrentData.push({
+          damageType: n, component: partName, cause: b.cause || '', investigationItems: b.investigationItems || '',
+          repairOptions: (b.repairOptions || []).slice(), reinforcementOptions: (b.reinforcementOptions || []).slice(),
+          sourcePage: b.sourcePage || '', measurementFields: r ? JSON.parse(JSON.stringify(r.fields)) : [], enabled: true
+        });
+      });
+      // 손상명을 모두 뺀 부위도 부위 자체는 남도록 빈 자리표시 항목을 둔다 (현장에서 부위만 고르면 상태양호)
+      if(!dmCurrentData.some(it => (it.component || '').trim() === partName)){
+        dmCurrentData.push({ damageType:'', component: partName, cause:'', repairOptions:[], reinforcementOptions:[], enabled:true });
+      }
+      if(toAdd.length || toRemove.length) markDmDirty();
+      ov.remove();
+      renderDmList(); renderDmPartsList();
+    });
+    draw(); count();
+  };
+
   window.saveDamageMaster = async function() {
     const type = dmTypeSel.value;
     const form = dmFormSel.value;
@@ -21942,6 +22285,7 @@
     if (!proj.damageMaster[type]) proj.damageMaster[type] = {};
     
     proj.damageMaster[type][form] = JSON.parse(JSON.stringify(dmCurrentData));
+    dmLibInvalidate();
     
     await saveState();
     logActivity('손상마스터 저장(프로젝트 전용)', '프로젝트 ' + proj.name + ' - ' + type + ' / ' + form + ' 기준 변경');
