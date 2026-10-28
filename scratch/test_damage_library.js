@@ -140,6 +140,9 @@ check('부위에 담을 때 고친 기본 문구가 들어감 (원인·보수)',
 check('v127: 라이브러리 화면 — 수정 창(이름·규모 복수 선택·단위·순서·기본 문구)과 저장 시 한 번만 쓰기', ['function dlcOpenEditor(', 'function dlcScaleEditor(', 'function dlcRenameCustom(', 'id="deSave"', 'if(busy) return;', '눌러도 저장하지 않으므로 연속으로 눌러도 빠지지 않는다'].every(k => html.includes(k)));
 check('v127: 칩을 누를 때마다 저장하던 예전 방식 제거 (dlcSetFields·dlcChipsRow 없음)', !html.includes('dlcSetFields') && !html.includes('dlcChipsRow'));
 check('v127: 터치 칸 40px 안팎 (버튼 min-height 40/38px)', html.includes("const DLC_BTN = 'min-height:40px;") && html.includes('min-height:40px; padding:8px 14px; font-size:14px;'));
+check('v128: 라이브러리 창은 전체 화면 (width/height 100%, 둥근 모서리 없음)이고 설명 문장 상자가 없음', html.includes('max-width:none; width:100%; height:100%; max-height:none; border-radius:0;') && !/damageLibraryModal[\s\S]{0,1800}std-ref-note/.test(html.slice(html.indexOf("window.openDamageLibrary = function"), html.indexOf("window.openDamageLibrary = function") + 2600)));
+check('v128: 검색·새 손상명 버튼·닫기가 한 줄 머리글에, 새 손상명 등록 상자는 접혀 있다가 버튼으로 펼침 (등록하면 다시 접음)', html.includes('id="dlcAddToggle"') && html.includes('id="dlcAdd" style="display:none;') && html.includes("ab.style.display = 'none';   // 등록하면 상자를 접어 목록 공간을 돌려준다"));
+check('v128: 목록은 남는 공간 전부(flex:1; min-height:0)를 쓰고 넓은 화면에서는 여러 열(grid auto-fill)', html.includes('id="dlcList" style="flex:1; min-height:0; overflow-y:auto;') && html.includes('grid-template-columns:repeat(auto-fill, minmax(340px, 1fr))'));
 
 console.log(fail ? `\n실패 ${fail}건` : '\n모두 통과');
 process.exit(fail ? 1 : 0);
