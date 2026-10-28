@@ -128,5 +128,18 @@ const stt = t.dmSetStats(ckSet);
 check('통계: 손상명 수·항목 수·형식 수', stt.entries === 4 && stt.forms === 2 && stt.library === 1 && stt.names === 4, JSON.stringify(stt));
 check('v125: 버전 저장·되돌리기·파일 내보내기/가져오기 화면 요소', ['window.openDmVersions', 'btnOpenDmVersions', 'dmCreateVersion', 'dmRestoreSet', 'kind !== DM_FILE_KIND', '정리 전 상태 (자동 보관)', '되돌리기 직전 (자동 보관)'].every(k => html.includes(k)));
 
+// ---- v127: 라이브러리 수정 (기본 문구 덮어쓰기·불안정 수정) ----
+t = build({ library: { '균열': { defaults: { cause: '내가 고친 원인', repairOptions: ['A보수', 'B보수'], reinforcementOptions: [] } }, '유실': { fields: [{ label: '너비', unit: 'cm' }], defaults: { cause: '유실 원인' } }, '내이름': { custom: true, fields: [], defaults: { cause: '신규 원인' } } } });
+const le = t.dmLibraryEffective();
+check('기본 문구: 라이브러리에서 고친 값이 기준DB 기본 문구보다 우선', le.get('균열').base.cause === '내가 고친 원인' && le.get('균열').base.repairOptions.join() === 'A보수,B보수');
+check('기본 문구만 고쳐도 규모(기준값)는 그대로 (균열 = 폭+길이)', le.get('균열').fields.map(f => f.label).sort().join('+') === '길이+폭', le.get('균열').fields.map(f => f.label).join('+'));
+check('직접 등록 항목의 기본 문구도 base 로 쓰임', le.get('내이름').base.cause === '신규 원인');
+check('규모 단위 수정(유실 너비 cm)이 현장 입력 규모에 반영', t.getMeasurementFields('유실', null).length === 1 && t.getMeasurementFields('유실', null)[0].defaultUnit === 'cm');
+const nb = t.dmApplyPickToData([], '전면부', ['균열', '내이름'], []);
+check('부위에 담을 때 고친 기본 문구가 들어감 (원인·보수)', nb.find(x => x.damageType === '균열').cause === '내가 고친 원인' && nb.find(x => x.damageType === '균열').repairOptions.join() === 'A보수,B보수' && nb.find(x => x.damageType === '내이름').cause === '신규 원인');
+check('v127: 라이브러리 화면 — 수정 창(이름·규모 복수 선택·단위·순서·기본 문구)과 저장 시 한 번만 쓰기', ['function dlcOpenEditor(', 'function dlcScaleEditor(', 'function dlcRenameCustom(', 'id="deSave"', 'if(busy) return;', '눌러도 저장하지 않으므로 연속으로 눌러도 빠지지 않는다'].every(k => html.includes(k)));
+check('v127: 칩을 누를 때마다 저장하던 예전 방식 제거 (dlcSetFields·dlcChipsRow 없음)', !html.includes('dlcSetFields') && !html.includes('dlcChipsRow'));
+check('v127: 터치 칸 40px 안팎 (버튼 min-height 40/38px)', html.includes("const DLC_BTN = 'min-height:40px;") && html.includes('min-height:40px; padding:8px 14px; font-size:14px;'));
+
 console.log(fail ? `\n실패 ${fail}건` : '\n모두 통과');
 process.exit(fail ? 1 : 0);

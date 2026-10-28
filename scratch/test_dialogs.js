@@ -27,7 +27,10 @@ const constLine = n => { const i = html.indexOf('const ' + n + ' = '); if (i < 0
 // ---------------------------------------------------------------- 정적 확인
 check('PS_BUILD v126 이상', /const PS_BUILD = 'v(12[6-9]|1[3-9]\d)'/.test(html));
 check('confirm 호출이 모두 psConfirm(답을 기다리는 꾸밈 확인창)으로 바뀜 — 남은 기본 confirm 호출 0곳', (html.match(/(^|[^\w$.])confirm\(/gm) || []).length === 0);
-check('psConfirm 호출 48곳은 모두 await 와 함께 (정의·안내 문구 외에 await 없는 호출 없음)', (html.match(/await psConfirm\(/g) || []).length === 48 && (html.match(/(^|[^\w$.])(?<!await )psConfirm\(/gm) || []).filter(x => true).length <= 3);
+{
+  const all = (html.match(/psConfirm\(/g) || []).length, aw = (html.match(/await psConfirm\(/g) || []).length;
+  check('psConfirm 호출은 모두 await 와 함께 (처음 바꾼 48곳 이상, 정의·안내 문구 외에 await 없는 호출 없음)', aw >= 48 && all - aw <= 3, `전체 ${all} / await ${aw}`);
+}
 check('alert 는 꾸밈 창으로 대신하고 기다리지 않음(순서대로 한 줄씩)', html.includes('window.alert = function(msg){ psAlert(msg); };'));
 check('시험·자동화가 window.confirm 을 바꿔 끼우면 그것을 그대로 씀', html.includes('if(window.confirm !== psNativeConfirm) return Promise.resolve(window.confirm(msg));'));
 check('위험한 확인창은 "취소"에 기본 포커스, Esc 는 취소', html.includes("(conf && level === 'danger' && cancelBtn ? cancelBtn : okBtn).focus()") && html.includes("e.key === 'Escape'"));
