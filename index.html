@@ -207,7 +207,11 @@
       height: 100% !important;
       height: 100dvh !important;
       overflow: hidden !important;
+      /* v129: 기록목록 머리와 작업창 사이 같은 빈 곳을 누르고 끌면 화면 전체가 딸려 움직이던 문제 —
+         스크롤할 것이 없는 곳의 끌기가 바깥(브라우저 화면)으로 넘어가지 않게 막는다 */
+      overscroll-behavior: none !important;
     }
+    .side-head, .view-switcher, .stage-head { touch-action: none; }
 
     .layout {
       height: calc(100dvh - 84px - env(safe-area-inset-top)) !important;
@@ -3260,7 +3264,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v128';
+  const PS_BUILD = 'v129';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -18208,8 +18212,11 @@
       addDamageBtn.textContent = dCount ? ('＋ 손상 추가 (' + dCount + '개)') : '＋ 손상 추가';
       addDamageBtn.title = '이 사진에 손상 추가';
       addDamageBtn.addEventListener('click', ()=>{
+        const damagesBefore = (p.damages || []).length;
         closeCaptureModal();
         openPreview(markerId, idx);
+        // v129: 방금 찍은 사진이면 상세창이 열리면서 입력칸을 이미 하나 열었다 — 여기서 또 열면 손상이 두 개가 된다
+        if((p.damages || []).length > damagesBefore) return;
         // 여기서 바로 손상 선택 폼까지 열어준다 — 예전엔 지점 상세화면으로 넘어간
         // 뒤 "+ 손상 추가"를 한 번 더 눌러야 실제 구분/구간/부위/손상명 선택 UI가
         // 나타나서, 같은 버튼을 두 번 눌러야 하는 불편이 있었다.
@@ -18284,7 +18291,16 @@
       psCrumb('촬영 버튼', { mode: currentMode, video: video.videoWidth + 'x' + video.videoHeight, photosOnMarker: am && am.photos ? am.photos.length : 0 });
     }, true);
   }catch(e){}
-  btnDoneCapture.addEventListener('click', closeCaptureModal);
+  // v129: "촬영 완료"를 누르면 방금 찍은 사진의 상세창이 바로 열리고 손상 입력칸이 하나 열려 있다 (사진마다 "＋ 손상 추가"를 따로 누르던 단계를 없앰).
+  // 이번에 새로 찍은 사진이 없으면(사진첩 보기만 했거나 예전 사진만 있을 때) 예전처럼 그냥 닫는다.
+  btnDoneCapture.addEventListener('click', ()=>{
+    const mid = activeMarkerId;
+    const m = markers.find(x=>x.id===mid);
+    let idx = -1;
+    if(m && m.photos){ for(let i = m.photos.length - 1; i >= 0; i--){ if(freshPhotoIds.has(m.photos[i].id)){ idx = i; break; } } }
+    closeCaptureModal();
+    if(idx >= 0 && mid && !document.body.classList.contains('viewer-mode')) openPreview(mid, idx);
+  });
   captureModal.addEventListener('click', (e)=>{ if(e.target === captureModal) closeCaptureModal(); });
 
   btnShoot.addEventListener('click', async ()=>{
@@ -18295,6 +18311,7 @@
     const ctx = captureCanvas.getContext('2d');
     ctx.drawImage(video, 0, 0, w, h);
     const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.92);
+    captureCanvas.width = captureCanvas.height = 0;   // v129: 촬영 프레임 캔버스 메모리를 바로 돌려줌 (다음 촬영 때 다시 크기를 잡는다)
     const deviceExif = lastGps ? { lat:lastGps.lat, lng:lastGps.lng, altitude:lastGps.altitude, direction:lastGps.heading, speed:lastGps.speed, source:'DEVICE_GPS' } : null;
     await addPhoto(activeMarkerId, dataUrl, deviceExif, { autoDamage: true });
     renderCaptureStrip(activeMarkerId);
@@ -18441,6 +18458,8 @@
           if(brightness < 45) warnings.push('너무 어두움');
           if(brightness > 225) warnings.push('노출 과다');
 
+          c.width = c.height = 0; hc.width = hc.height = 0;   // v129: 캔버스 메모리를 바로 돌려줌
+          img.onload = null; img.src = '';                    // 큰 사진을 디코딩한 채로 붙들고 있지 않게
           resolve({ blurVariance: Math.round(variance), brightness: Math.round(brightness), warnings, hash });
         }catch(e){
           resolve({ blurVariance:null, brightness:null, warnings:[], hash:null });
@@ -18546,6 +18565,15 @@
 
     if(!blobOk || !pointOk || !stateOk){
       setSaveIndicator('pending_retry');
+    } else {
+      // v129: 저장이 끝난 사진은 지금 촬영 중인 지점 것만 메모리에 두고 나머지는 내려놓는다 (화면에는 저장소에서 다시 읽어 보여 준다).
+      // 한 시설물에서 사진을 수십 장 이어서 찍으면 사진 원본이 계속 쌓여 휴대폰이 앱을 강제로 끄는(하얀 화면) 원인이 될 수 있다.
+      try{
+        (markers || []).forEach(mm => {
+          if(mm.id === markerId) return;
+          (mm.photos || []).forEach(ph => { if(ph.blobExtracted && ph.src) delete ph.src; });
+        });
+      }catch(e){}
     }
   }
 
@@ -19543,6 +19571,31 @@
     });
     updatePreviewQuickBar(m);
   }
+
+  // v129: 모바일 한 화면 고정 — 스크롤 영역(기록 목록, 창 안의 목록 등)이 아닌 빈 곳을 한 손가락으로 끌 때
+  // 브라우저 화면 전체가 딸려 움직이는 것을 막는다. 입력칸·슬라이더, 두 손가락 확대, 지도·도면·사진 크게 보기는 그대로 둔다.
+  (function installNoPageDragGuard(){
+    try{
+      const mq = window.matchMedia('(max-width: 880px)');
+      const scrollableAncestor = (el)=>{
+        for(; el && el !== document.body && el !== document.documentElement; el = el.parentElement){
+          const cs = getComputedStyle(el);
+          if((cs.overflowY === 'auto' || cs.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 1) return true;
+          if((cs.overflowX === 'auto' || cs.overflowX === 'scroll') && el.scrollWidth > el.clientWidth + 1) return true;
+        }
+        return false;
+      };
+      document.addEventListener('touchmove', (e)=>{
+        if(!mq.matches || e.defaultPrevented || !e.cancelable) return;
+        if(e.touches && e.touches.length !== 1) return;      // 두 손가락(확대/축소)은 건드리지 않음
+        const t = e.target;
+        if(!t || !t.closest) return;
+        if(t.closest('input, textarea, select, [contenteditable="true"], #photoLightbox, .stage, #stage, .leaflet-container, canvas')) return;
+        if(scrollableAncestor(t)) return;
+        e.preventDefault();
+      }, { passive: false });
+    }catch(e){}
+  })();
 
   // ---------- 지점 상세 하단 고정 빠른 줄 ----------
   function updatePreviewQuickBar(m){
