@@ -9,7 +9,7 @@ const sw = fs.readFileSync(path.join(__dirname, '..', 'service-worker.js'), 'utf
 let fail = 0;
 const check = (n, ok, d) => { console.log(`[${ok ? 'PASS' : 'FAIL'}] ${n}${d ? ' - ' + d : ''}`); if (!ok) fail++; };
 
-check('PS_BUILD v129 이상 + 서비스워커 캐시 이름 갱신', /const PS_BUILD = 'v(129|1[3-9]\d)'/.test(html) && /point-shot-v129/.test(sw));
+check('PS_BUILD v129 이상 + 서비스워커 캐시 이름 갱신', /const PS_BUILD = 'v(129|1[3-9]\d)'/.test(html) && /point-shot-v(129|1[3-9]\d)/.test(sw));
 
 // (3) 촬영 직후 손상 입력
 check('"촬영 완료"는 새로 찍은 사진이 있을 때 그 사진의 상세창을 연다 (freshPhotoIds 로 판단, 조회전용 제외)',

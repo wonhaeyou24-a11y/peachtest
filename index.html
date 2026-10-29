@@ -2588,6 +2588,7 @@
     <div class="modal-foot">
       <button class="ghost" id="btnMoveMarker">위치 이동</button>
       <button class="ghost" id="btnAddMorePhotos">사진 추가 촬영</button>
+      <button class="ghost" id="btnPickGallery" style="display:none;">🖼 사진첩</button>
       <button class="danger role-gated" id="btnDeleteMarker">지점 삭제</button>
       <button class="primary" id="btnSaveClosePreview">✓ 저장하고 닫기</button>
     </div>
@@ -3264,7 +3265,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v129';
+  const PS_BUILD = 'v130';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -16458,7 +16459,7 @@
     updateCounts();
 
     // 3. 사용자 제스처가 살아있는 동일한 동기 실행 흐름에서 openCapture 즉시 시작
-    openCapture(marker.id);
+    openCapture(marker.id, { justCreated: true });
 
     // 4. 그와 별개로 IndexedDB Durable 저장 및 전체 snapshot 저장을 비동기로 진행
     (async ()=>{
@@ -18132,7 +18133,53 @@
     runCameraStartSequence();
   });
 
-  async function openCapture(markerId){
+  // v130: 휴대폰(iPhone·iPad·Android)은 촬영창을 거치지 않는다 — 지점을 찍거나 "사진 촬영"을 누르면 바로 카메라 앱이 열리고,
+  // 찍고 돌아오면 손상내용 창이 입력칸이 열린 채로 뜬다. 추가 촬영·사진첩 선택·지점 삭제는 손상내용 창 안의 버튼으로 한다.
+  // PC 는 예전 촬영창(실시간 카메라 미리보기)을 그대로 쓴다.
+  function useDirectCameraFlow(){
+    try{
+      const ua = navigator.userAgent || '';
+      return /iPhone|iPad|iPod|Android/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    }catch(e){ return false; }
+  }
+  let directCapture = null;   // { markerId, justCreated, fromPreview } — 카메라 앱을 열어 둔 동안의 상태
+
+  // 카메라를 취소했을 때: 방금 만든 빈 지점이면 지우고(되돌리기와 같은 처리), 상세창에서 온 거면 상세창으로 돌아간다
+  async function discardEmptyNewMarker(markerId){
+    const m = markers.find(x => x.id === markerId);
+    if(!m) return;
+    if(m.photos && m.photos.length) return;          // 사진이 있으면 절대 지우지 않는다
+    markers = markers.filter(x => x.id !== markerId);
+    if(lastPointAction && lastPointAction.type === 'create' && lastPointAction.markerId === markerId) lastPointAction = null;
+    if(activeMarkerId === markerId) activeMarkerId = null;
+    if(m.num != null && m.num === nextNum - 1) nextNum--;   // 방금 만든 번호가 가장 마지막 번호였으면 번호를 되돌려 빈 번호가 생기지 않게
+    try{ await idbDeleteInspectionPoint(markerId, true); }catch(e){}
+    try{ queueMarkerDeleteSync(m); }catch(e){}
+    logActivity('촬영 취소', '지점 ' + m.num + ' — 사진 없이 취소해 빈 지점을 지움');
+    renderMarkers(); renderMapMarkers(); renderLog(); updateCounts();
+    saveState();
+  }
+  function handleDirectCancel(){
+    const dc = directCapture;
+    if(!dc) return;
+    directCapture = null;
+    pendingNativeCapture = false;
+    const m = markers.find(x => x.id === dc.markerId);
+    if(dc.justCreated && m && !(m.photos && m.photos.length)){ discardEmptyNewMarker(dc.markerId); return; }
+    if(dc.fromPreview && m){ openPreview(dc.markerId); return; }
+    activeMarkerId = null;
+    try{ renderMarkers(); renderMapMarkers(); renderLog(); }catch(e){}
+  }
+  // 사진을 받은 뒤: 방금 찍은(새로 받은) 마지막 사진의 손상내용 창을 연다 (v118/v129 자동 입력칸)
+  function openDetailAfterCapture(markerId){
+    const m = markers.find(x => x.id === markerId);
+    if(!m){ activeMarkerId = null; return; }
+    let idx = -1;
+    for(let i = (m.photos || []).length - 1; i >= 0; i--){ if(freshPhotoIds.has(m.photos[i].id)){ idx = i; break; } }
+    if(idx >= 0) openPreview(markerId, idx); else openPreview(markerId);
+  }
+
+  async function openCapture(markerId, opts){
     activeMarkerId = markerId;
     let m = markers.find(x=>x.id===markerId);
     // 방어: 라이브 markers 에 없으면 현재 시설물 배열에서 찾아 라이브에 복구한다
@@ -18148,6 +18195,12 @@
     if(!m){
       try{ diagLog('save', '사진 촬영 열기 실패: 지점을 찾을 수 없음', { markerId, liveCount: markers.length }); }catch(e){}
       alert('지점 정보를 찾을 수 없어 촬영을 열 수 없습니다. 목록에서 지점을 다시 선택해주세요.');
+      return;
+    }
+    if(useDirectCameraFlow()){
+      directCapture = { markerId, justCreated: !!(opts && opts.justCreated), fromPreview: !!(opts && opts.fromPreview) };
+      pendingNativeCapture = true;
+      nativeCameraInput.click();   // 사용자의 터치 안(동기 구간)에서 바로 카메라 앱을 연다
       return;
     }
     captureTitle.textContent = '지점 ' + m.num + ' · 사진 촬영';
@@ -18351,6 +18404,13 @@
   // change가 안 왔다면 "취소한 것"으로 보고 자동으로 버튼 상태를 원래대로 되돌린다.
   window.addEventListener('focus', ()=>{
     if(!pendingNativeCapture) return;
+    if(directCapture){
+      // v130: 카메라 앱에서 돌아왔는데 사진이 안 왔다 → 취소로 본다 (사진이 들어오는 중이면 files 가 차 있어 취소가 아님)
+      setTimeout(()=>{
+        if(pendingNativeCapture && directCapture && !(nativeCameraInput.files && nativeCameraInput.files.length)) handleDirectCancel();
+      }, 1800);
+      return;
+    }
     setTimeout(()=>{
       if(pendingNativeCapture && captureModal.style.display === 'flex'){
         pendingNativeCapture = false;
@@ -18364,7 +18424,8 @@
   });
 
   async function handleCapturedFiles(files){
-    if(files.length === 0 || !activeMarkerId) return;
+    if(files.length === 0){ if(directCapture) handleDirectCancel(); return; }   // v130: 카메라 앱에서 사진 없이 돌아옴
+    if(!activeMarkerId) return;
     for(const file of files){
       let exif = null;
       // EXIF는 파일 맨 앞부분(수십KB)에만 있다 — 12MP 원본 전체(수MB)를 ArrayBuffer로
@@ -18388,6 +18449,13 @@
       if(!dataUrl) continue;
       await addPhoto(activeMarkerId, dataUrl, exif, { autoDamage: true });
     }
+    // v130: 휴대폰은 촬영창이 없다 — 사진을 받았으면 바로 손상내용 창으로 (입력칸이 열린 채)
+    if(directCapture || (useDirectCameraFlow() && captureModal.style.display !== 'flex')){
+      const mid = directCapture ? directCapture.markerId : activeMarkerId;
+      directCapture = null;
+      openDetailAfterCapture(mid);
+      return;
+    }
     renderCaptureStrip(activeMarkerId);
     // addPhoto가 저장까지 끝날 때까지 기다리는 동안(느린 기기에서 몇 초~십수 초
     // 걸릴 수 있음) 사용자가 촬영창을 닫아버리면 activeMarkerId가 null로 바뀌어
@@ -18407,6 +18475,7 @@
     nativeCameraInput.click();
   });
 
+  nativeCameraInput.addEventListener('cancel', ()=>{ if(directCapture) handleDirectCancel(); });   // 카메라 앱을 취소하면 (지원하는 브라우저에서)
   nativeCameraInput.addEventListener('change', async (e)=>{
     pendingNativeCapture = false;
     await handleCapturedFiles(Array.from(e.target.files || []));
@@ -19722,8 +19791,17 @@
 
   btnAddMorePhotos.addEventListener('click', ()=>{
     previewModal.style.display = 'none';
-    openCapture(activeMarkerId);
+    openCapture(activeMarkerId, { fromPreview: true });
   });
+  // 휴대폰에서만 보이는 "사진첩" 버튼: 촬영창의 "사진첩에서 선택"을 상세창으로 옮긴 것
+  const btnPickGallery = document.getElementById('btnPickGallery');
+  if(btnPickGallery){
+    if(useDirectCameraFlow()) btnPickGallery.style.display = '';
+    btnPickGallery.addEventListener('click', ()=>{
+      if(!activeMarkerId) return;
+      fallbackFileInput.click();
+    });
+  }
 
   btnDeleteMarker.addEventListener('click', ()=>{
     if(activeMarkerId) deleteMarker(activeMarkerId);
