@@ -3325,7 +3325,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v138';
+  const PS_BUILD = 'v139';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -17011,13 +17011,13 @@
   (function(){
     const btn = document.getElementById('zoomCalib');
     if(!btn) return;
-    btn.addEventListener('click', ()=>{
+    btn.addEventListener('click', async ()=>{
       if(calibMode){ cancelMoveMode(); return; }
       const dr = currentDrawingObj();
       if(dr && calibUsable(dr.calib)){
         const rng = fmtStationM(dr.calib.p1.m) + 'm ~ ' + fmtStationM(dr.calib.p2.m) + 'm';
-        if(confirm('이 도면은 눈금이 맞춰져 있습니다 (' + rng + ').\n\n[확인] 눈금을 다시 맞춘다\n[취소] 다른 선택')){ startCalibration(); return; }
-        if(confirm('눈금 보정을 해제할까요?\n(자동 위치(m)가 사라집니다. 직접 입력한 위치는 그대로입니다.)')){
+        if(await psConfirm('이 도면은 눈금이 맞춰져 있습니다 (' + rng + ').\n\n[확인] 눈금을 다시 맞춘다\n[취소] 다른 선택')){ startCalibration(); return; }
+        if(await psConfirm('눈금 보정을 해제할까요?\n(자동 위치(m)가 사라집니다. 직접 입력한 위치는 그대로입니다.)')){
           dr.calib = { off: true, setAt: new Date().toISOString() };
           logActivity('도면 눈금 보정 해제', dr.name || '도면');
           updateCalibButton();
