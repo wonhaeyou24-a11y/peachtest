@@ -3313,7 +3313,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v133';
+  const PS_BUILD = 'v134';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -17792,7 +17792,10 @@
 
     const typeEl = document.createElement('span');
     typeEl.className = 'lim-type';
-    typeEl.textContent = (rep && rep.damageType) || (photos.length ? '손상 미입력' : '미촬영');
+    // 손상명을 "직접입력"으로 고른 손상(저장값 '기타')은 "기타" 대신 직접 적은 이름을 보여 준다 (아직 안 적었으면 "직접입력")
+    typeEl.textContent = (rep && rep.damageType === '기타')
+      ? ((rep.damageDetail && String(rep.damageDetail).trim()) || '직접입력')
+      : ((rep && rep.damageType) || (photos.length ? '손상 미입력' : '미촬영'));
 
     const timeEl = document.createElement('span');
     timeEl.className = 'lim-time';
@@ -19635,7 +19638,9 @@
             btn.type = 'button';
             const isFrequent = idx < 3 && (damageTypeUsageCounts[t]||0) > 0 && t !== '기타';
             btn.className = 'damage-type-btn' + (d.damageType === t ? ' active' : '') + (isFrequent ? ' star' : '');
-            btn.textContent = t;
+            // 화면에는 "직접입력"으로 보여 주되, 저장되는 값은 예전과 같은 '기타' 그대로다
+            // (보고서·내보내기·데스크가 '기타'를 기준으로 동작하므로 값은 바꾸지 않는다).
+            btn.textContent = (t === '기타') ? '직접입력' : t;
             btn.addEventListener('click', ()=> selectDamageType(t));
             scrollRow.appendChild(btn);
           });
@@ -19654,7 +19659,7 @@
             const lab = document.createElement('label'); lab.textContent = '손상명 직접입력';
             const inp = document.createElement('input'); inp.type = 'text'; inp.value = d.damageDetail || '';
             inp.placeholder = '손상명을 직접 입력하세요';
-            inp.addEventListener('change', ()=>{ d.damageDetail = inp.value; recordOtherCandidate(inp.value); saveState(); });
+            inp.addEventListener('change', ()=>{ d.damageDetail = inp.value; recordOtherCandidate(inp.value); scheduleRecordListRefresh(); saveState(); });
             otherWrap.appendChild(lab); otherWrap.appendChild(inp);
             rec.appendChild(otherWrap);
           }
