@@ -15,12 +15,14 @@
 <link rel="icon" href="./icons/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-<script src="https://unpkg.com/docx@8.0.4/build/index.js"></script>
-<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- 외부 라이브러리: 정확한 버전으로 고정하고 무결성(SRI) 검사를 건다. CDN 파일이 바뀌거나 변조되면 로드가 거부된다.
+     버전을 올릴 때는 service-worker.js 의 VENDOR_ASSETS 주소와 아래 integrity 값을 함께 바꿀 것(sha384 base64). -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/docx@8.0.4/build/index.js" integrity="sha384-xzNG4wBBQCiwlqbmHwZ/l2XY786AIBVu9741HHbxJIT479x3TRihocOSZmHVIKNx" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" integrity="sha384-/1qUCSGwTur9vjf/z9lmu/eCUYbpOTgSjmpbMQZ1/CtX2v/WcAIKqRv+U1DUCG6e" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H" crossorigin="anonymous">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH" crossorigin="anonymous"></script>
 <style>
   :root{
     /* 야외 현장 가독성을 위한 고대비 Light UI. 변수 이름(--navy 등)은 기존 코드 전체에서
@@ -3323,7 +3325,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v136';
+  const PS_BUILD = 'v137';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -9163,7 +9165,10 @@
       const viewBtn = document.createElement('button');
       viewBtn.textContent = '열기';
       viewBtn.addEventListener('click', ()=>{
+        // 데이터 주소에 따옴표·꺾쇠·공백이 섞여 있으면(파일 정보가 손상됐거나 조작된 경우) 새 창 HTML 에 그대로 끼워 넣지 않는다
+        if(typeof doc.dataUrl !== 'string' || !/^data:[^"'<>\s]+$/.test(doc.dataUrl)){ alert('이 참고자료는 열 수 없습니다 (파일 정보가 올바르지 않습니다).'); return; }
         const w = window.open('');
+        if(!w) return;   // 팝업 차단 시 예전에는 w 가 null 이라 오류가 났다
         if(doc.mimeType === 'application/pdf'){
           w.document.write('<iframe src="' + doc.dataUrl + '" style="width:100%;height:100vh;border:none;"></iframe>');
         } else {
@@ -15530,7 +15535,8 @@
 
   async function ensureXlsxLoaded(){
     if(typeof XLSX !== 'undefined') return true;
-    try{ await loadScriptOnce('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'); }
+    // SheetJS 0.20.3 (이전 0.18.5 는 엑셀 읽기에서 프로토타입 오염·ReDoS 취약점이 알려져 있다). npm 에는 수정판이 없어 SheetJS 공식 배포처에서 받는다.
+    try{ await loadScriptOnce('https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js', 'sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT'); }
     catch(e){ console.warn('Excel 라이브러리 로드 실패', e); }
     return typeof XLSX !== 'undefined';
   }
@@ -20975,10 +20981,12 @@
   });
 
   // ---------- Word(.docx) export — 한글(HWP) 프로그램에서 '열기'로 바로 열림 ----------
-  function loadScriptOnce(src){
+  // integrity(선택): 주면 SRI 검사를 걸어 로드한다 (파일이 달라지면 거부). CDN 서버가 CORS 를 허용해야 해서 crossorigin 도 같이 건다.
+  function loadScriptOnce(src, integrity){
     return new Promise((resolve, reject)=>{
       const s = document.createElement('script');
       s.src = src;
+      if(integrity){ s.integrity = integrity; s.crossOrigin = 'anonymous'; }
       s.onload = ()=> resolve();
       s.onerror = ()=> reject(new Error('load failed: ' + src));
       document.head.appendChild(s);
@@ -20990,7 +20998,7 @@
     if(!baseImageSrc && markers.length === 0){ alert('내보낼 기록이 없습니다.'); return; }
     if(typeof docx === 'undefined'){
       try{
-        await loadScriptOnce('https://cdn.jsdelivr.net/npm/docx@8.0.4/build/index.js');
+        await loadScriptOnce('https://cdn.jsdelivr.net/npm/docx@8.0.4/build/index.js', 'sha384-xzNG4wBBQCiwlqbmHwZ/l2XY786AIBVu9741HHbxJIT479x3TRihocOSZmHVIKNx');
       }catch(e){ /* 다음 확인 단계에서 최종 실패 처리 */ }
     }
     if(typeof docx === 'undefined'){
@@ -21662,7 +21670,7 @@
 
   async function ensureDocxLoaded(){
     if(typeof docx !== 'undefined') return true;
-    try{ await loadScriptOnce('https://cdn.jsdelivr.net/npm/docx@8.0.4/build/index.js'); }catch(e){}
+    try{ await loadScriptOnce('https://cdn.jsdelivr.net/npm/docx@8.0.4/build/index.js', 'sha384-xzNG4wBBQCiwlqbmHwZ/l2XY786AIBVu9741HHbxJIT479x3TRihocOSZmHVIKNx'); }catch(e){}
     return typeof docx !== 'undefined';
   }
 
