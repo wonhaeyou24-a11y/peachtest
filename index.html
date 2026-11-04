@@ -942,6 +942,13 @@
     font-family:'JetBrains Mono', monospace;
     flex-shrink:0;
   }
+  .log-item-mobile .lim-time.pos{
+    color: #1565C0;
+    font-weight: 700;
+    font-size: 12px;
+    max-width: 22vw;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
   .log-item-mobile .lim-chev{
     color: var(--amber-text);
     background: var(--amber-dim);
@@ -3316,7 +3323,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v135';
+  const PS_BUILD = 'v136';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -16878,6 +16885,25 @@
     }catch(e){ return ''; }
   }
 
+  // 손상 하나의 "위치" 글자 — 손상현황 표와 같은 우선순위: ① 직접 입력 ② 연결한 기존손상의 위치 ③ 도면 눈금 자동 계산
+  function damagePositionText(m, d, site){
+    try{
+      const manual = d && d.drawingPosition ? String(d.drawingPosition).trim() : '';
+      if(manual) return manual;
+      if(d && d.existingDamageId && site){
+        const ed = (site.existingDamages || []).find(x => x.id === d.existingDamageId);
+        if(ed && ed.drawingPosition) return String(ed.drawingPosition).trim();
+      }
+      return markerStationText(m, site);
+    }catch(e){ return ''; }
+  }
+  // 숫자·범위만 있으면 뒤에 m 를 붙여 보여 준다 (64 → 64m, 64~72 → 64~72m)
+  function positionDisplayText(s){
+    s = String(s || '').trim();
+    if(!s) return '';
+    return /^[\d.~\-;,\s]+$/.test(s) ? s + 'm' : s;
+  }
+
   function currentDrawingObj(){ return (drawings || []).find(d => d.id === currentDrawingId) || null; }
   function fmtStationM(v){ return String(Math.round(v * 100) / 100); }
 
@@ -16970,6 +16996,7 @@
     updateCalibButton();
     const onThis = markers.filter(mk => mk.xPct != null && mk.drawingId === currentDrawingId);
     logActivity('도면 눈금 보정', (dr.name || '도면') + ' · ' + fmtStationM(p1.m) + 'm ~ ' + fmtStationM(p2.m) + 'm');
+    renderLog();   // 기록 목록의 위치 표시를 바로 갱신
     saveState();
     const sample = onThis.length ? ('\n예) 지점 ' + onThis[0].num + ' → ' + (markerStationText(onThis[0], currentSiteObj()) || '(눈금 범위 밖)') + 'm') : '';
     alert('눈금을 맞췄습니다 (' + fmtStationM(p1.m) + 'm ~ ' + fmtStationM(p2.m) + 'm).\n이 도면의 지점 ' + onThis.length + '개의 위치(m)가 자동으로 계산됩니다.' + sample);
@@ -16988,6 +17015,7 @@
           dr.calib = { off: true, setAt: new Date().toISOString() };
           logActivity('도면 눈금 보정 해제', dr.name || '도면');
           updateCalibButton();
+          renderLog();
           saveState();
         }
         return;
@@ -17687,7 +17715,8 @@
     const table = document.createElement('table');
     table.className = 'log-table';
     const thead = document.createElement('thead');
-    thead.innerHTML = '<tr><th>#</th><th>사진</th><th>부위</th><th>손상명</th><th>규모</th><th>원인</th><th></th></tr>';
+    thead.innerHTML = '<tr><th>#</th><th>사진</th><th>부위</th><th>손상명</th><th>위치</th><th>규모</th><th>원인</th><th></th></tr>';
+    const _tblSite = currentSiteObj();
     table.appendChild(thead);
     const tbody = document.createElement('tbody');
 
@@ -17733,6 +17762,12 @@
       const tdType = document.createElement('td');
       tdType.textContent = allDamages.map(d=>d.damageType).filter(Boolean).join(', ') || (photos.length ? '손상 미입력' : '미촬영');
       tr.appendChild(tdType);
+
+      const tdPos = document.createElement('td');
+      const posList = Array.from(new Set(allDamages.map(d => damagePositionText(m, d, _tblSite)).filter(Boolean)));
+      if(posList.length === 0){ const st = markerStationText(m, _tblSite); if(st) posList.push(st); }
+      tdPos.textContent = posList.map(positionDisplayText).join(', ') || '-';
+      tr.appendChild(tdPos);
 
       const tdMeas = document.createElement('td');
       tdMeas.textContent = allDamages.map(d=>d.measurement).filter(Boolean).join(', ') || '-';
@@ -17803,7 +17838,17 @@
     const timeEl = document.createElement('span');
     timeEl.className = 'lim-time';
     const t = m.createdAt ? new Date(m.createdAt) : null;
-    timeEl.textContent = t ? t.toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit'}) : '';
+    const timeTxt = t ? t.toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit'}) : '';
+    // 위치(m)가 있으면 시간 자리에 위치를 보여 준다 (한 줄 행이라 칸이 없다). 시간은 칸을 길게 누르면(title)·상세창에서 본다.
+    const _listSite = currentSiteObj();
+    const posTxt = positionDisplayText(rep ? damagePositionText(m, rep, _listSite) : markerStationText(m, _listSite));
+    if(posTxt){
+      timeEl.textContent = posTxt;
+      timeEl.classList.add('pos');
+      timeEl.title = '위치 ' + posTxt + (timeTxt ? ' · 촬영 ' + timeTxt : '');
+    } else {
+      timeEl.textContent = timeTxt;
+    }
 
     const chevEl = document.createElement('button');
     chevEl.type = 'button';
