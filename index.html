@@ -211,7 +211,10 @@
          스크롤할 것이 없는 곳의 끌기가 바깥(브라우저 화면)으로 넘어가지 않게 막는다 */
       overscroll-behavior: none !important;
     }
-    .side-head, .view-switcher, .stage-head { touch-action: none; }
+    .side-head, .stage-head { touch-action: none; }
+    /* 모드 탭 + 도면 탭 줄은 도면이 여러 장이면 가로로 넘치므로 옆으로 미는 것(pan-x)은 허용한다.
+       예전에는 이 줄도 none 이라서 뒤쪽 도면 탭으로 넘어갈 수 없었다. 세로로 끌어 화면 전체가 딸려 움직이는 것은 계속 막힌다. */
+    .view-switcher { touch-action: pan-x; }
 
     .layout {
       height: calc(100dvh - 84px - env(safe-area-inset-top)) !important;
@@ -3313,7 +3316,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v134';
+  const PS_BUILD = 'v135';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
