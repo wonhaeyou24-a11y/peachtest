@@ -3277,7 +3277,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v131';
+  const PS_BUILD = 'v132';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -9484,6 +9484,13 @@
 
   // 자유텍스트 규모 문자열에서 damageType이 쓰는 항목들(type별로)의 {value, unit}을 뽑는다.
   // 매칭 못 찾은 항목은 결과에 없다(억지로 0 등을 채우지 않는다).
+  // 손상마스터(손상명 라이브러리) 항목은 type 이 'dm:길이' 처럼 별도라 위 MEASUREMENT_TYPE_ALIASES 에 없다.
+  // 그래서 외관분석프로그램이 내보내는 표기("L=4.1m", "A=12㎡", "3EA")를 읽지 못해, 기존손상 규모가 항목별로 안 나뉘었다.
+  // 이름이 뜻하는 영문 한 글자 표기를 추가로 읽는다 (반드시 = 또는 : 가 붙은 경우만, 앞에 영문자가 없을 때만).
+  const DM_LABEL_LETTERS = { '길이':['L'], '연장':['L'], '면적':['A'], '깊이':['D'], '체적':['V'], '부피':['V'] };
+  // 기존손상 연결 목록 정렬용 (구간 이름의 숫자를 숫자 크기로 비교: 2구간 < 10구간). 한 번만 만든다.
+  const EX_LINK_COLLATOR = (function(){ try{ return new Intl.Collator('ko', { numeric: true }); }catch(e){ return { compare: (a, b)=> a < b ? -1 : a > b ? 1 : 0 }; } })();
+
   function parseMeasurementText(text, damageType, site){
     const out = {};
     if(!text) return out;
@@ -9497,6 +9504,19 @@
         if(m){
           out[fd.type] = { value: parseFloat(m[1]), unit: (m[2] || fd.defaultUnit || '').trim(), label: fd.label };
           break;
+        }
+      }
+      // 위에서 못 읽은 손상마스터 항목만 추가 표기로 한 번 더 시도 (이미 읽힌 항목의 결과는 그대로)
+      if(!out[fd.type] && String(fd.type || '').indexOf('dm:') === 0){
+        const letters = DM_LABEL_LETTERS[fd.label] || [];
+        for(const letter of letters){
+          const re2 = new RegExp('(?:^|[^A-Za-z])' + letter + '\\s*[=:]\\s*(-?\\d+(?:\\.\\d+)?)\\s*([a-zA-Z가-힣㎡㎥%]*)');
+          const m2 = String(text).match(re2);
+          if(m2){ out[fd.type] = { value: parseFloat(m2[1]), unit: (m2[2] || fd.defaultUnit || '').trim(), label: fd.label }; break; }
+        }
+        if(!out[fd.type] && fd.label === '개소'){
+          const m3 = String(text).match(/(-?\d+(?:\.\d+)?)\s*(?:EA|개소|개)(?![A-Za-z가-힣])/);
+          if(m3) out[fd.type] = { value: parseFloat(m3[1]), unit: fd.defaultUnit || 'EA', label: fd.label };
         }
       }
     });
@@ -9589,7 +9609,7 @@
             ? (detailedCmp.some(r => r.delta > 0) ? '증가' : detailedCmp.some(r => r.delta < 0) ? '감소' : (detailedCmp.every(r => r.delta === 0) ? '동일' : '미확인'))
             : (cmp.unavailable ? '미확인' : (cmp.delta > 0 ? '증가' : cmp.delta < 0 ? '감소' : '동일'));
           rows.push({
-            '구분':'기존', '구간': d.section || ed.section || m.section || '', '부위별': d.part || ed.part || '', '위치': ed.drawingPosition || '',
+            '구분':'기존', '구간': d.section || ed.section || m.section || '', '부위별': d.part || ed.part || d.component || '', '위치': d.drawingPosition || ed.drawingPosition || '',
             '손상명': ed.damageName || d.damageType || '', '조사지점': '지점 ' + m.num,
             '기존규모': ed.measurement || '', '현재규모': d.measurement || '',
             '증감치수': cmp.unavailable ? '' : (cmp.delta > 0 ? '+' : '') + cmp.delta.toFixed(2),
@@ -9611,7 +9631,9 @@
           if(d.damageOrigin !== 'NEW') return;
           countedDamageIds.add(d.id);
           rows.push({
-            '구분':'신규', '구간': d.section || m.section || '', '부위별': d.part || '', '위치':'',
+            // 화면의 "부위" 선택값은 d.component 에 저장되고 d.part 는 따로라서, 예전엔 신규손상의 부위별이 늘 빈칸이었다.
+            // 위치는 손상 입력창의 "위치(m)" 칸(d.drawingPosition)에서 온다.
+            '구분':'신규', '구간': d.section || m.section || '', '부위별': d.part || d.component || '', '위치': d.drawingPosition || '',
             '손상명': d.damageType || '', '조사지점': '지점 ' + m.num,
             '기존규모':'', '현재규모': d.measurement || '',
             '증감치수':'', '증감률':'', '증감상세':'', '증감여부':'신규',
@@ -9631,7 +9653,7 @@
           if(countedDamageIds.has(d.id)) return;
           if(!d.damageType && !d.measurement && !d.cause) return;
           rows.push({
-            '구분':'미분류', '구간': d.section || m.section || '', '부위별': d.part || '', '위치':'',
+            '구분':'미분류', '구간': d.section || m.section || '', '부위별': d.part || d.component || '', '위치': d.drawingPosition || '',
             '손상명': d.damageType || '(손상명 미입력)', '조사지점': '지점 ' + m.num,
             '기존규모':'', '현재규모': d.measurement || '',
             '증감치수':'', '증감률':'', '증감상세':'', '증감여부':'미분류(신규/기존 구분 필요)',
@@ -9660,6 +9682,34 @@
     const validTypes = getMeasurementFields(d.damageType).map(fd => fd.type);
     const items = (d.measurementItems || []).filter(mi => validTypes.includes(mi.type) && mi.value !== '' && mi.value != null);
     d.measurement = items.length ? items.map(mi => mi.label + ' ' + mi.value + mi.unit).join(', ') : '';
+  }
+
+  // 규모 글자("폭 0.3mm, L=4.1m")를 읽어 measurementItems(항목칸: 폭·길이…)에 채운다.
+  // 기존손상을 연결하면 규모 "글자"만 복사되고 항목칸은 비어 있어서, 항목 하나만 고치면
+  // syncMeasurementText 가 글자를 항목들로 다시 만들면서 나머지 값이 사라졌다. 그걸 막기 위한 것이다.
+  //  - 이미 값이 있는 칸은 덮어쓰지 않는다 (조사자가 잰 값 보존).
+  //  - 읽지 못한 항목, 단위가 선택지에 없는 항목은 추측하지 않고 건너뛴다.
+  //  - d.measurement(글자) 자체는 여기서 바꾸지 않는다.
+  function seedMeasurementItemsFromText(d, text, site){
+    if(!d || !text) return 0;
+    let parsed;
+    try{ parsed = parseMeasurementText(text, d.damageType, site); }catch(e){ return 0; }
+    if(!Array.isArray(d.measurementItems)) d.measurementItems = [];
+    let n = 0;
+    getMeasurementFields(d.damageType, site).forEach(fd=>{
+      const pv = parsed[fd.type];
+      if(!pv || typeof pv.value !== 'number' || isNaN(pv.value)) return;
+      const units = Array.isArray(fd.units) && fd.units.length ? fd.units : [fd.defaultUnit];
+      const unit = pv.unit ? pv.unit : fd.defaultUnit;
+      if(!units.includes(unit)) return;
+      let item = d.measurementItems.find(mi => mi.type === fd.type);
+      if(item && item.value !== '' && item.value != null) return;
+      if(!item){ item = { type: fd.type, label: fd.label, value: '', unit: fd.defaultUnit }; d.measurementItems.push(item); }
+      item.value = String(pv.value);
+      item.unit = unit;
+      n++;
+    });
+    return n;
   }
 
   function normalizePhotos(m){
@@ -17529,7 +17579,8 @@
     numEl.textContent = m.num;
 
     const originEl = document.createElement('span');
-    const isNew = rep ? rep.damageOrigin === 'NEW' : null;
+    // 신규/기존을 아직 안 고른 손상은 "기존"이 아니라 "—"로 보여 준다 (예전엔 NEW가 아니면 전부 "기존"으로 보였다)
+    const isNew = rep ? (rep.damageOrigin === 'NEW' ? true : rep.damageOrigin === 'EXISTING' ? false : null) : null;
     originEl.className = 'lim-origin' + (isNew === true ? ' new' : isNew === false ? ' existing' : ' none');
     originEl.textContent = isNew === true ? '신규' : isNew === false ? '기존' : '—';
 
@@ -19067,6 +19118,31 @@
           sectionWrap.appendChild(sectionRow);
           rec.appendChild(sectionWrap);
 
+          // ---- 위치(m): 도면(노선) 위에서 이 손상이 몇 m 지점인지 ----
+          // 손상현황표의 "위치" 칸, 데스크의 도면 작도용 파일(야장)로 이어진다. 비워 둬도 된다.
+          // 기존손상을 연결한 경우에는 기존손상 쪽 위치가 우선 쓰이므로 안내만 보여 준다.
+          const posWrap = document.createElement('div');
+          posWrap.className = 'damage-field';
+          const posLab = document.createElement('label'); posLab.textContent = '위치(m)';
+          const posInput = document.createElement('input');
+          posInput.type = 'text'; posInput.inputMode = 'decimal'; posInput.autocomplete = 'off';
+          posInput.value = d.drawingPosition || '';
+          const posLinked = (d.damageOrigin === 'EXISTING' && d.existingDamageId)
+            ? (site.existingDamages || []).find(ed => ed.id === d.existingDamageId) : null;
+          posInput.placeholder = (posLinked && posLinked.drawingPosition)
+            ? ('기존손상 위치 ' + posLinked.drawingPosition + 'm 사용 (다르면 입력)')
+            : '예: 64  (시점에서 몇 m, 범위는 64~72)';
+          posInput.addEventListener('change', ()=>{
+            d.drawingPosition = posInput.value.trim();
+            scheduleRecordListRefresh();
+            saveState();
+          });
+          posWrap.appendChild(posLab);
+          posWrap.appendChild(posInput);
+          rec.appendChild(posWrap);
+
+          let refreshCompare = null;   // 아래 "기존 vs 현재 비교" 패널을 다시 그리는 함수 (기존손상을 연결한 경우에만 생김)
+
           // 기존손상을 선택하면, 이 시설물의 ExistingDamage 목록에서 어떤 기록과
           // 연결되는지 고를 수 있다. 연결하는 순간 그 기존손상의 내용(부위·손상명·
           // 규모·원인·보수방안)을 이번 조사 손상기록에 그대로 복사해 채워 넣고,
@@ -19084,10 +19160,36 @@
             emptyOpt.textContent = '연결 안 함';
             linkSelect.appendChild(emptyOpt);
             const visibleExisting = (site.existingDamages || []).filter(ed => !ed.isDeleted);
-            visibleExisting.forEach(ed=>{
+            // 현장에서 어떤 기존손상인지 알아볼 수 있도록 번호·구간·위치·규모를 같이 보여 주고,
+            // 같은 구간·가까운 위치 순으로 늘어놓는다. 이미 다른 손상기록이 연결한 것은 ✓ 로 표시한다.
+            // (선택값은 예전과 똑같이 ed.id 이므로 저장되는 내용은 달라지지 않는다.)
+            const linkedElsewhere = new Set();
+            try{
+              (markers || []).forEach(mk => (mk.photos || []).forEach(ph => (ph.damages || []).forEach(dd => {
+                if(dd !== d && dd.existingDamageId) linkedElsewhere.add(dd.existingDamageId);
+              })));
+            }catch(e){}
+            const edPosNum = ed => { const mm = String(ed.drawingPosition || '').match(/-?\d+(?:\.\d+)?/); return mm ? parseFloat(mm[0]) : Infinity; };
+            const edPosTxt = ed => {
+              const s = String(ed.drawingPosition || '').trim();
+              if(!s) return '';
+              return /^[\d.~\-;,\s]+$/.test(s) ? s + 'm' : s;
+            };
+            // 정렬 키는 항목마다 한 번만 계산한다 (비교할 때마다 정규식·한글 정렬 설정을 새로 만들면 기존손상이 수백 건일 때 느려진다)
+            const sortedExisting = visibleExisting
+              .map((ed, i)=>({ ed, i, same: (d.section && ed.section === d.section) ? 0 : 1, sec: String(ed.section || ''), pos: edPosNum(ed) }))
+              .sort((a, b)=> (a.same - b.same) || EX_LINK_COLLATOR.compare(a.sec, b.sec) || (a.pos === b.pos ? 0 : (a.pos < b.pos ? -1 : 1)) || (a.i - b.i))
+              .map(x => x.ed);
+            sortedExisting.forEach(ed=>{
               const opt = document.createElement('option');
               opt.value = ed.id;
-              opt.textContent = ed.id + ' · ' + (ed.section ? ed.section + ' · ' : '') + (ed.damageName || '(손상명 없음)');
+              opt.textContent = [
+                (linkedElsewhere.has(ed.id) ? '✓ ' : '') + (ed.externalId || ed.id),
+                ed.section,
+                edPosTxt(ed),
+                ed.damageName || '(손상명 없음)',
+                ed.measurement ? String(ed.measurement).slice(0, 22) : ''
+              ].filter(Boolean).join(' · ');
               if(d.existingDamageId === ed.id) opt.selected = true;
               linkSelect.appendChild(opt);
             });
@@ -19110,6 +19212,19 @@
                 if(linked.measurement) d.measurement = linked.measurement;
                 if(linked.cause) d.cause = linked.cause;
                 if(linked.repairMethod) d.repairMethod = linked.repairMethod;
+                // 부위: 기존손상의 "부위별"(예: 전면부)을 이 시설물의 부위 선택지와 맞춰 보고 같은 것이 있을 때만 채운다.
+                // (손상명이 그 부위에 등록돼 있지 않으면 손상명 버튼이 숨겨지므로 그런 경우는 채우지 않는다.)
+                if(!d.component && linked.part){
+                  const normPart = s => String(s || '').replace(/[\s·・\-]/g, '');
+                  const want = normPart(linked.part);
+                  const mapped = usingStandard ? (partOptions.find(o => normPart(o) === want) || '') : String(linked.part).trim();
+                  const pairOk = !usingStandard || !d.damageType || stdList.some(x => x.damageType === d.damageType && x.component === mapped);
+                  if(mapped && pairOk) d.component = mapped;
+                }
+                // 규모: 기존 규모 글자(예: "폭 0.3mm, L=4.1m")를 항목칸(폭·길이…)에도 채운다.
+                // 항목칸이 비어 있으면 값 하나만 고쳤을 때 나머지 항목이 사라지고 증감이 잘못 계산되던 문제를 막는다.
+                // 이미 조사자가 잰 값이 있는 칸은 건드리지 않는다.
+                if(linked.measurement) seedMeasurementItemsFromText(d, linked.measurement, site);
               }
               logActivity('기존손상 연결', '지점 ' + m.num + ' 손상기록 ↔ ' + (linked ? (linked.id + ' ' + linked.damageName) : '연결 해제'));
               renderDamageRecords();
@@ -19117,6 +19232,12 @@
             });
             linkWrap.appendChild(linkLab);
             linkWrap.appendChild(linkSelect);
+            if(visibleExisting.some(ed => linkedElsewhere.has(ed.id))){
+              const linkNote = document.createElement('div');
+              linkNote.className = 'std-ref-note';
+              linkNote.textContent = '✓ 표시는 이미 다른 지점에서 연결한 기존손상입니다.';
+              linkWrap.appendChild(linkNote);
+            }
             rec.appendChild(linkWrap);
 
             // ---- 기존 vs 현재 비교 (명령문 47~49번) ----
@@ -19133,31 +19254,53 @@
 
               const cmpRow = document.createElement('div');
               cmpRow.style.cssText = 'font-size:12px; color:var(--text); line-height:1.6;';
-              const oldMeasureTxt = linkedExisting.measurement || '(기록 없음)';
-              const newMeasureTxt = d.measurement || '(기록 없음)';
-              const cmp = compareMeasurements(linkedExisting.measurement, d.measurement);
-              let cmpResultTxt;
-              if(cmp.unavailable){
-                cmpResultTxt = '계산불가';
-              } else {
-                const sign = cmp.delta > 0 ? '+' : '';
-                cmpResultTxt = sign + cmp.delta.toFixed(2) + ' (' + sign + cmp.percent.toFixed(1) + '%)';
-              }
-              cmpRow.innerHTML =
-                '기존(' + (linkedExisting.surveyYear ? linkedExisting.surveyYear + '년' : '연도미상') + '): ' + escapeHtml(oldMeasureTxt) + '<br>' +
-                '현재: ' + escapeHtml(newMeasureTxt) + '<br>' +
-                '증감: ' + escapeHtml(cmpResultTxt);
               cmpWrap.appendChild(cmpRow);
 
               const statusLab = document.createElement('label');
               statusLab.style.cssText = 'display:block; margin-top:6px; font-size:12px;';
-              let autoHint = '';
-              if(!cmp.unavailable && !d.changeStatus){
-                if(cmp.delta > 0) autoHint = ' (참고: 규모가 늘어난 것으로 계산됨 — 증가로 볼지 검토해주세요)';
-                else if(cmp.delta < 0) autoHint = ' (참고: 규모가 줄어든 것으로 계산됨 — 감소/보수됨 중 검토해주세요)';
-                else autoHint = ' (참고: 규모 변화 없음으로 계산됨)';
-              }
-              statusLab.textContent = '변화상태' + autoHint;
+
+              // 비교 내용을 (다시) 그린다. 처음 한 번만 그리면 규모를 입력해도 화면이 옛 값 그대로라서,
+              // 규모 칸을 고칠 때마다(refreshCompare) 글자만 갱신한다 — 입력창을 통째로 다시 그리지 않는다.
+              const paintCompare = ()=>{
+                const oldMeasureTxt = linkedExisting.measurement || '(기록 없음)';
+                const newMeasureTxt = d.measurement || '(기록 없음)';
+                const cmp = compareMeasurements(linkedExisting.measurement, d.measurement);
+                let cmpResultTxt;
+                if(cmp.unavailable){
+                  cmpResultTxt = '계산불가';
+                } else {
+                  const sign = cmp.delta > 0 ? '+' : '';
+                  cmpResultTxt = sign + cmp.delta.toFixed(2) + ' (' + sign + cmp.percent.toFixed(1) + '%)';
+                }
+                // 항목(폭·길이…)별 비교: 내보내기 표의 증감상세와 같은 계산이다. 첫 숫자만 보는 위 증감은 참고용.
+                const detailed = (d.measurementItems && d.measurementItems.length)
+                  ? compareMeasurementsDetailed(linkedExisting.measurement, d.measurementItems, d.damageType || linkedExisting.damageName, site)
+                  : [];
+                const detailTxt = formatMeasurementDetail(detailed);
+                cmpRow.innerHTML =
+                  '기존(' + (linkedExisting.surveyYear ? linkedExisting.surveyYear + '년' : '연도미상') + '): ' + escapeHtml(oldMeasureTxt) + '<br>' +
+                  '현재: ' + escapeHtml(newMeasureTxt) + '<br>' +
+                  '증감: ' + escapeHtml(cmpResultTxt) +
+                  (detailTxt ? '<br>항목별: ' + escapeHtml(detailTxt) : '');
+                let autoHint = '';
+                if(!d.changeStatus){
+                  if(detailed.length){
+                    // 항목별 비교가 되면 그 결과를 따른다 (폭만 보고 "변화 없음/증가"로 단정하지 않는다)
+                    if(detailed.some(r => r.delta > 0)) autoHint = ' (참고: 규모가 늘어난 것으로 계산됨 — 증가로 볼지 검토해주세요)';
+                    else if(detailed.some(r => r.delta < 0)) autoHint = ' (참고: 규모가 줄어든 것으로 계산됨 — 감소/보수됨 중 검토해주세요)';
+                    else if(detailed.every(r => r.delta === 0)) autoHint = ' (참고: 규모 변화 없음으로 계산됨)';
+                  } else if(!cmp.unavailable){
+                    if(cmp.delta > 0) autoHint = ' (참고: 규모가 늘어난 것으로 계산됨 — 증가로 볼지 검토해주세요)';
+                    else if(cmp.delta < 0) autoHint = ' (참고: 규모가 줄어든 것으로 계산됨 — 감소/보수됨 중 검토해주세요)';
+                    else autoHint = ' (참고: 규모 변화 없음으로 계산됨)';
+                  }
+                }
+                const hintTxt = '변화상태' + autoHint;
+                if(statusLab.firstChild && statusLab.firstChild.nodeType === 3) statusLab.firstChild.nodeValue = hintTxt;
+                else statusLab.textContent = hintTxt;
+              };
+              paintCompare();
+              refreshCompare = paintCompare;
               const statusSelect = document.createElement('select');
               statusSelect.style.cssText = 'width:100%; margin-top:2px; background:var(--panel); border:1px solid var(--line); border-radius:4px; color:var(--text); font-family:inherit; font-size:13px; padding:6px 8px;';
               ['미확인','동일','증가','감소','보수됨','소실','기타'].forEach(opt=>{
@@ -19354,15 +19497,25 @@
             });
             function commitMeasurement(){
               const oldText = d.measurement || '';
+              // 예전 방식으로 연결된 기존손상(규모 글자만 복사되고 항목칸은 전부 빈 기록)은,
+              // 첫 수정 때 글자를 항목칸에 먼저 옮겨 둔다. 그러지 않으면 방금 고친 항목만 남고 나머지 값이 사라진다.
+              // (항목에 값이 하나라도 있으면 이미 항목 방식이므로 건드리지 않는다 — 값을 지우는 동작도 그대로 된다.)
+              let reseeded = false;
+              if(d.existingDamageId && oldText && !d.measurementItems.some(mi => mi.value !== '' && mi.value != null)){
+                reseeded = seedMeasurementItemsFromText(d, oldText, site) > 0;
+              }
               item.label = rl.value;
               item.value = valInput.value;
               item.unit = unitSelect.value;
               syncMeasurementText(d);
+              if(refreshCompare) refreshCompare();
               if(oldText !== (d.measurement||'')){
                 logActivity('손상규모/조사값 수정', '지점 ' + m.num + ' — "' + (oldText || '(빈값)') + '" → "' + (d.measurement||'(빈값)') + '"');
                 renderLog();
               }
               saveState();
+              // 방금 다른 항목칸(길이 등)을 채웠으면 화면의 칸도 같이 보이도록 입력창을 한 번 다시 그린다
+              if(reseeded) renderDamageRecords();
             }
             rl.addEventListener('change', commitMeasurement);
             valInput.addEventListener('change', commitMeasurement);
