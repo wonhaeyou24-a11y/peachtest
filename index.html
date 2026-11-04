@@ -702,6 +702,41 @@
     border: 1px solid rgba(242, 169, 59, 0.35);
   }
 
+  .zoom-controls #zoomCalib{
+    font-size: 11px;
+    font-weight: 700;
+    padding: 6px 8px;
+    white-space: nowrap;
+  }
+  .zoom-controls #zoomCalib.on{
+    background: #1565C0;
+    color: #fff;
+    border-color: #1565C0;
+  }
+  /* 도면 눈금 보정 기준점 표시 — 확대해도 같은 크기로 보이도록 applyTransform 이 --zinv(=1/확대배율)를 넣어 준다 */
+  .calib-mark{
+    position: absolute;
+    transform: translate(-50%, -100%) scale(var(--zinv, 1));
+    transform-origin: 50% 100%;
+    pointer-events: none;
+    z-index: 7;
+    background: #1565C0;
+    color: #fff;
+    font: 700 11px/1 sans-serif;
+    padding: 3px 5px;
+    border-radius: 4px;
+    white-space: nowrap;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.45);
+  }
+  .calib-mark::after{
+    content: '';
+    position: absolute;
+    left: 50%; bottom: -5px;
+    transform: translateX(-50%);
+    border: 3px solid transparent;
+    border-top: 5px solid #1565C0;
+  }
+
   .zoom-label{
     font-family: 'JetBrains Mono', monospace;
     font-size: 11px;
@@ -2494,6 +2529,7 @@
       <span class="zoom-label" id="zoomLabel">100%</span>
       <button id="zoomIn" aria-label="확대">＋</button>
       <button id="zoomFit">맞춤</button>
+      <button id="zoomCalib" title="도면의 눈금(예: 0m, 100m) 두 곳을 눌러 지점의 위치(m)를 자동으로 계산합니다">📏 눈금</button>
     </div>
     <div class="map-stage" id="mapStage" style="display:none;">
       <div id="mapView"></div>
@@ -3277,7 +3313,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v132';
+  const PS_BUILD = 'v133';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -3623,6 +3659,8 @@
   let markers = [];          // {id, num, xPct, yPct, drawingId | lat, lng, photos: [{src, note}, ...], createdAt, gps}
   let drawings = [];         // [{id, name, type, order, imageSrc, description, createdAt}] — 시설물 하나의 다중 도면
   let currentDrawingId = null;
+  let calibMode = null;        // 도면 눈금 보정 진행 중: { step:1|2, drawingId, p1:{x,y,m} } — 아니면 null
+  let calibShowUntil = 0;      // 보정 직후 기준점 표시를 보여 줄 마감 시각(ms)
   let nextNum = 1;
   let activeMarkerId = null;
   // PC 편의: 방금 한 지점 찍기/삭제만 Ctrl+Z로 되돌릴 수 있게(1단계만 기억 —
@@ -9609,7 +9647,7 @@
             ? (detailedCmp.some(r => r.delta > 0) ? '증가' : detailedCmp.some(r => r.delta < 0) ? '감소' : (detailedCmp.every(r => r.delta === 0) ? '동일' : '미확인'))
             : (cmp.unavailable ? '미확인' : (cmp.delta > 0 ? '증가' : cmp.delta < 0 ? '감소' : '동일'));
           rows.push({
-            '구분':'기존', '구간': d.section || ed.section || m.section || '', '부위별': d.part || ed.part || d.component || '', '위치': d.drawingPosition || ed.drawingPosition || '',
+            '구분':'기존', '구간': d.section || ed.section || m.section || '', '부위별': d.part || ed.part || d.component || '', '위치': d.drawingPosition || ed.drawingPosition || markerStationText(m, site),
             '손상명': ed.damageName || d.damageType || '', '조사지점': '지점 ' + m.num,
             '기존규모': ed.measurement || '', '현재규모': d.measurement || '',
             '증감치수': cmp.unavailable ? '' : (cmp.delta > 0 ? '+' : '') + cmp.delta.toFixed(2),
@@ -9633,7 +9671,7 @@
           rows.push({
             // 화면의 "부위" 선택값은 d.component 에 저장되고 d.part 는 따로라서, 예전엔 신규손상의 부위별이 늘 빈칸이었다.
             // 위치는 손상 입력창의 "위치(m)" 칸(d.drawingPosition)에서 온다.
-            '구분':'신규', '구간': d.section || m.section || '', '부위별': d.part || d.component || '', '위치': d.drawingPosition || '',
+            '구분':'신규', '구간': d.section || m.section || '', '부위별': d.part || d.component || '', '위치': d.drawingPosition || markerStationText(m, site),
             '손상명': d.damageType || '', '조사지점': '지점 ' + m.num,
             '기존규모':'', '현재규모': d.measurement || '',
             '증감치수':'', '증감률':'', '증감상세':'', '증감여부':'신규',
@@ -9653,7 +9691,7 @@
           if(countedDamageIds.has(d.id)) return;
           if(!d.damageType && !d.measurement && !d.cause) return;
           rows.push({
-            '구분':'미분류', '구간': d.section || m.section || '', '부위별': d.part || d.component || '', '위치': d.drawingPosition || '',
+            '구분':'미분류', '구간': d.section || m.section || '', '부위별': d.part || d.component || '', '위치': d.drawingPosition || markerStationText(m, site),
             '손상명': d.damageType || '(손상명 미입력)', '조사지점': '지점 ' + m.num,
             '기존규모':'', '현재규모': d.measurement || '',
             '증감치수':'', '증감률':'', '증감상세':'', '증감여부':'미분류(신규/기존 구분 필요)',
@@ -10539,8 +10577,10 @@
       //   (ps_facilities.data.drawings)로만 동기화된다. 그래서 "도면이 추가/교체/이미지
       //   변경"되면 시설물을 다시 큐에 넣어야 blob이 올라간다 — 도면의 id·이름·이미지
       //   길이만 지문에 넣는다(전체 base64 는 안 넣어서 지문 계산이 가볍다).
+      // 눈금 보정값(calib)이 있는 도면만 그 값을 지문에 더한다 — 보정이 없는 기존 도면의 지문은 예전과 똑같아서
+      // 업데이트만으로 모든 시설물이 다시 올라가는 일은 없고, 보정을 하거나 바꾸면 그때만 올라간다.
       copy.__drawingsFingerprint = (site.drawings || [])
-        .map(d => (d && d.id ? (d.id + '~' + (d.name || '') + '~' + ((d.imageSrc || d.svgData || d.svg || '').length)) : ''))
+        .map(d => (d && d.id ? (d.id + '~' + (d.name || '') + '~' + ((d.imageSrc || d.svgData || d.svg || '').length) + (d.calib ? '~c' + JSON.stringify(d.calib) : '')) : ''))
         .join('|');
       return JSON.stringify(copy);
     }catch(e){
@@ -11180,7 +11220,7 @@
           //   "본문이 달라졌다"고 판단해 blob을 다시 올려야 한다. 전체 base64 대신
           //   id·이름·이미지길이 지문만 비교에 넣는다.
           c.__drawingsFingerprint = (Array.isArray(o && o.drawings) ? o.drawings : [])
-            .map(d => (d && d.id ? (d.id + '~' + (d.name || '') + '~' + ((d.imageSrc || d.svgData || d.svg || '').length)) : ''))
+            .map(d => (d && d.id ? (d.id + '~' + (d.name || '') + '~' + ((d.imageSrc || d.svgData || d.svg || '').length) + (d.calib ? '~c' + JSON.stringify(d.calib) : '')) : ''))
             .join('|');
           return c;
         };
@@ -11624,6 +11664,10 @@
             if(!existing.imageSrc && rImg){ existing.imageSrc = rImg; changed = true; }
             if(typeof rd.revision === 'number' && rd.revision > (existing.revision || 1)){ existing.revision = rd.revision; changed = true; }
             if(!existing.name && rd.name){ existing.name = rd.name; changed = true; }
+            // 눈금 보정값: 이 기기에 없거나 클라우드 쪽이 더 최근에 맞춘 것이면 받아온다 (다른 기기에서 보정한 값 공유)
+            if(rd.calib && (!existing.calib || String(rd.calib.setAt || '') > String(existing.calib.setAt || ''))){
+              existing.calib = rd.calib; changed = true;
+            }
           }
         });
         return { drawings: local, changed };
@@ -16292,6 +16336,7 @@
     const frame = document.getElementById('imgFrame');
     if(!frame) return;
     frame.style.transform = 'translate(' + zTx + 'px,' + zTy + 'px) scale(' + zScale + ')';
+    frame.style.setProperty('--zinv', String(1 / (zScale || 1)));   // 눈금 보정 기준점 표시(.calib-mark) 크기 보정용
     zoomLabel.textContent = Math.round(zScale * 100) + '%';
     updateMarkerScale();
   }
@@ -16703,6 +16748,7 @@
     movingMarkerId = null;
     awaitingMapAssign = null;
     moveBanner.style.display = 'none';
+    if(calibMode){ calibMode = null; try{ renderCalibMarks(); updateCalibButton(); }catch(e){} }   // 같은 [취소] 버튼으로 눈금 보정도 취소
   }
 
   btnCancelMove.addEventListener('click', cancelMoveMode);
@@ -16793,7 +16839,162 @@
     continueNoGpsResolution();
   }
 
+  // ================================================================
+  // 도면 눈금 보정 → 지점의 위치(m) 자동 계산
+  // 도면(외관조사망도)에는 0m, 20m … 같은 눈금이 있다. 눈금 두 곳을 눌러 그 값(m)을 알려 주면,
+  // 도면 위 어느 지점이든 두 기준점을 잇는 선 위로 투영해서 위치(m)를 계산한다.
+  //  - 보정값은 도면(drawing.calib)에만 저장하고, 지점에는 저장하지 않는다 (필요할 때 계산한다).
+  //    그래서 보정을 나중에 하거나 다시 해도 이미 찍은 지점에 그대로 적용되고, 지점 저장·동기화 경로는 바뀌지 않는다.
+  //  - 좌표에 도면의 가로/세로 비율(ar)을 곱해서 계산하므로 가로·세로·비스듬한 눈금 모두 맞는다.
+  //  - 해제는 calib 를 지우지 않고 { off:true } 로 바꾼다 (지우면 클라우드의 옛 값이 다시 되살아난다).
+  // 데스크(peachshot-desktop/db/db.js)의 calibStation 과 같은 공식이다. 고치면 양쪽을 같이 고칠 것.
+  // ================================================================
+  function calibUsable(calib){ return !!(calib && !calib.off && calib.p1 && calib.p2); }
+
+  function calibStationOf(calib, xPct, yPct){
+    if(!calibUsable(calib) || xPct == null || yPct == null) return null;
+    const ar = calib.ar > 0 ? calib.ar : 1;
+    const ax = calib.p1.x / 100 * ar, ay = calib.p1.y / 100;
+    const bx = calib.p2.x / 100 * ar, by = calib.p2.y / 100;
+    const vx = bx - ax, vy = by - ay, len2 = vx * vx + vy * vy;
+    if(!(len2 > 0)) return null;
+    const t = ((xPct / 100 * ar - ax) * vx + (yPct / 100 - ay) * vy) / len2;
+    const v = calib.p1.m + t * (calib.p2.m - calib.p1.m);
+    return isFinite(v) ? v : null;
+  }
+
+  // 지점이 놓인 도면에 보정값이 있으면 위치(m)를 정수 글자로 돌려준다. 없으면 ''.
+  function markerStationText(m, site){
+    try{
+      if(!m || m.xPct == null || m.yPct == null || !site) return '';
+      const dr = (site.drawings || []).find(x => x.id === m.drawingId);
+      if(!dr || !calibUsable(dr.calib)) return '';
+      const v = calibStationOf(dr.calib, m.xPct, m.yPct);
+      if(v == null || v < -1) return '';   // 0m 눈금보다 한참 앞은 의미 없는 값이라 비운다
+      return String(Math.max(0, Math.round(v)));
+    }catch(e){ return ''; }
+  }
+
+  function currentDrawingObj(){ return (drawings || []).find(d => d.id === currentDrawingId) || null; }
+  function fmtStationM(v){ return String(Math.round(v * 100) / 100); }
+
+  function updateCalibButton(){
+    const btn = document.getElementById('zoomCalib');
+    if(!btn) return;
+    const dr = currentDrawingObj();
+    const on = !!(dr && calibUsable(dr.calib));
+    btn.classList.toggle('on', on || !!calibMode);
+    btn.textContent = calibMode ? '✕ 취소' : (on ? '📏 눈금 ✓' : '📏 눈금');
+    btn.title = on
+      ? ('눈금 보정됨: ' + fmtStationM(dr.calib.p1.m) + 'm ~ ' + fmtStationM(dr.calib.p2.m) + 'm (누르면 다시 맞추기·해제)')
+      : '도면의 눈금(예: 0m, 100m) 두 곳을 눌러 지점의 위치(m)를 자동으로 계산합니다';
+  }
+
+  // 기준점 표시: 보정하는 동안, 그리고 보정을 마친 직후 몇 초 동안만 보여 준다
+  function renderCalibMarks(){
+    const frame = document.getElementById('imgFrame');
+    if(!frame) return;
+    frame.querySelectorAll('.calib-mark').forEach(el => el.remove());
+    const pts = [];
+    if(calibMode && calibMode.drawingId === currentDrawingId && calibMode.p1) pts.push(calibMode.p1);
+    else if(!calibMode && Date.now() < calibShowUntil){
+      const dr = currentDrawingObj();
+      if(dr && calibUsable(dr.calib)) pts.push(dr.calib.p1, dr.calib.p2);
+    }
+    pts.forEach(p=>{
+      const el = document.createElement('div');
+      el.className = 'calib-mark';
+      el.style.left = p.x + '%';
+      el.style.top = p.y + '%';
+      el.textContent = fmtStationM(p.m) + 'm';
+      frame.appendChild(el);
+    });
+  }
+
+  function startCalibration(){
+    if(currentMode !== 'image' || !baseImageSrc || !currentDrawingId){ alert('먼저 도면 모드에서 눈금을 맞출 도면을 선택해 주세요.'); return; }
+    if(movingMarkerId) cancelMoveMode();
+    calibMode = { step: 1, drawingId: currentDrawingId, p1: null };
+    moveBannerText.textContent = '① 도면의 눈금 한 곳을 정확히 눌러 주세요 (확대하면 더 정확합니다)';
+    moveBanner.style.display = 'flex';
+    renderCalibMarks();
+    updateCalibButton();
+  }
+
+  function handleCalibTap(e){
+    if(!calibMode) return;
+    if(calibMode.drawingId !== currentDrawingId){
+      cancelMoveMode();
+      alert('도면이 바뀌어서 눈금 보정을 취소했습니다. 다시 시작해 주세요.');
+      return;
+    }
+    if(!frameW || !frameH) return;
+    const rect = stage.getBoundingClientRect();
+    const localX = (e.clientX - rect.left - zTx) / zScale;
+    const localY = (e.clientY - rect.top - zTy) / zScale;
+    if(localX < 0 || localY < 0 || localX > frameW || localY > frameH) return;
+    const x = (localX / frameW) * 100, y = (localY / frameH) * 100;
+    const stepNo = calibMode.step;
+    const raw = prompt(stepNo === 1
+      ? '방금 누른 눈금은 몇 m입니까?\n(숫자만 입력, 예: 0 또는 20)'
+      : '방금 누른 두 번째 눈금은 몇 m입니까?\n(숫자만 입력, 예: 100)', stepNo === 1 ? '0' : '');
+    if(raw === null) return;   // 입력 취소: 같은 단계에서 다시 눌러 볼 수 있다
+    const v = parseFloat(String(raw).replace(/[mM\s]/g, '').replace(',', '.'));
+    if(!isFinite(v)){ alert('숫자로 입력해 주세요. 예: 0, 20, 100'); return; }
+
+    if(stepNo === 1){
+      calibMode.p1 = { x, y, m: v };
+      calibMode.step = 2;
+      moveBannerText.textContent = '② 멀리 떨어진 다른 눈금 한 곳을 눌러 주세요 (두 눈금이 멀수록 정확합니다)';
+      renderCalibMarks();
+      return;
+    }
+
+    const p1 = calibMode.p1, p2 = { x, y, m: v };
+    const ar = frameW / frameH;
+    if(v === p1.m){ alert('두 눈금의 값이 같습니다. 서로 다른 눈금(예: 0m와 100m)을 눌러 주세요.'); return; }
+    const dist = Math.hypot((p2.x - p1.x) / 100 * ar, (p2.y - p1.y) / 100);
+    if(dist < 0.1 * ar){ alert('두 눈금이 너무 가깝습니다. 서로 멀리 떨어진 눈금을 눌러 주세요.'); return; }
+
+    const dr = currentDrawingObj();
+    if(!dr){ cancelMoveMode(); return; }
+    dr.calib = { p1, p2, ar: Math.round(ar * 10000) / 10000, setAt: new Date().toISOString() };
+    calibMode = null;
+    moveBanner.style.display = 'none';
+    calibShowUntil = Date.now() + 6000;
+    setTimeout(()=>{ try{ renderCalibMarks(); }catch(err){} }, 6100);
+    renderCalibMarks();
+    updateCalibButton();
+    const onThis = markers.filter(mk => mk.xPct != null && mk.drawingId === currentDrawingId);
+    logActivity('도면 눈금 보정', (dr.name || '도면') + ' · ' + fmtStationM(p1.m) + 'm ~ ' + fmtStationM(p2.m) + 'm');
+    saveState();
+    const sample = onThis.length ? ('\n예) 지점 ' + onThis[0].num + ' → ' + (markerStationText(onThis[0], currentSiteObj()) || '(눈금 범위 밖)') + 'm') : '';
+    alert('눈금을 맞췄습니다 (' + fmtStationM(p1.m) + 'm ~ ' + fmtStationM(p2.m) + 'm).\n이 도면의 지점 ' + onThis.length + '개의 위치(m)가 자동으로 계산됩니다.' + sample);
+  }
+
+  (function(){
+    const btn = document.getElementById('zoomCalib');
+    if(!btn) return;
+    btn.addEventListener('click', ()=>{
+      if(calibMode){ cancelMoveMode(); return; }
+      const dr = currentDrawingObj();
+      if(dr && calibUsable(dr.calib)){
+        const rng = fmtStationM(dr.calib.p1.m) + 'm ~ ' + fmtStationM(dr.calib.p2.m) + 'm';
+        if(confirm('이 도면은 눈금이 맞춰져 있습니다 (' + rng + ').\n\n[확인] 눈금을 다시 맞춘다\n[취소] 다른 선택')){ startCalibration(); return; }
+        if(confirm('눈금 보정을 해제할까요?\n(자동 위치(m)가 사라집니다. 직접 입력한 위치는 그대로입니다.)')){
+          dr.calib = { off: true, setAt: new Date().toISOString() };
+          logActivity('도면 눈금 보정 해제', dr.name || '도면');
+          updateCalibButton();
+          saveState();
+        }
+        return;
+      }
+      startCalibration();
+    });
+  })();
+
   function handleTap(target, e){
+    if(calibMode){ handleCalibTap(e); return; }   // 도면 눈금 보정 중에는 지점을 만들지 않고 기준점으로만 쓴다
     const markerEl = target && target.closest ? target.closest('.marker') : null;
     if(markerEl && !movingMarkerId){
       const m = markers.find(x => x.id === markerEl.dataset.id);
@@ -17060,6 +17261,7 @@
   // 도면별로 조사점을 분리해서 관리한다.
   // ================================================================
   function renderDrawingTabs(){
+    try{ updateCalibButton(); }catch(e){}   // 도면이 바뀌면 "📏 눈금" 버튼 표시(보정됨 ✓)도 같이 갱신
     if(currentMode !== 'image'){
       drawingTabs.style.display = 'none';
       drawingTabs.innerHTML = '';
@@ -18879,7 +19081,8 @@
   function renderPreviewGrid(markerId){
     const m = markers.find(x=>x.id===markerId);
     if(!m) return;
-    previewTitle.textContent = '지점 ' + m.num + ' · 사진 ' + (m.photos ? m.photos.length : 0) + '장 · 위치신뢰도 ' + computeLocationTrust(m) + (m.address ? ' · ' + m.address : '');
+    const _stationTxt = markerStationText(m, currentSiteObj());   // 도면 눈금 보정이 있으면 "위치 64m"를 같이 보여 준다
+    previewTitle.textContent = '지점 ' + m.num + ' · 사진 ' + (m.photos ? m.photos.length : 0) + '장 · 위치신뢰도 ' + computeLocationTrust(m) + (_stationTxt ? ' · 위치 ' + _stationTxt + 'm' : '') + (m.address ? ' · ' + m.address : '');
     previewGrid.innerHTML = '';
     // 선택된 사진 번호 보정 + 사진 선택 줄(2장 이상일 때)
     if(previewSelMarker !== markerId){ previewSelMarker = markerId; previewSelIdx = 0; }
@@ -19129,9 +19332,17 @@
           posInput.value = d.drawingPosition || '';
           const posLinked = (d.damageOrigin === 'EXISTING' && d.existingDamageId)
             ? (site.existingDamages || []).find(ed => ed.id === d.existingDamageId) : null;
+          // 도면 눈금 보정이 되어 있으면 지점을 찍은 자리에서 위치(m)가 자동으로 계산된다 (직접 입력하면 그 값이 우선)
+          const posAuto = markerStationText(m, site);
+          if(posAuto){
+            const autoTag = document.createElement('span');
+            autoTag.style.cssText = 'font-weight:400; color:var(--muted); margin-left:6px;';
+            autoTag.textContent = '도면 눈금 자동 ' + posAuto + 'm';
+            posLab.appendChild(autoTag);
+          }
           posInput.placeholder = (posLinked && posLinked.drawingPosition)
             ? ('기존손상 위치 ' + posLinked.drawingPosition + 'm 사용 (다르면 입력)')
-            : '예: 64  (시점에서 몇 m, 범위는 64~72)';
+            : (posAuto ? ('자동 ' + posAuto + 'm 사용 (다르면 입력)') : '예: 64  (시점에서 몇 m, 범위는 64~72)');
           posInput.addEventListener('change', ()=>{
             d.drawingPosition = posInput.value.trim();
             scheduleRecordListRefresh();
