@@ -3325,7 +3325,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v137';
+  const PS_BUILD = 'v138';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -14415,7 +14415,7 @@
         // photoRef(다른 기기의 로컬 저장소를 가리키던 값)는 의미가 없어 제거한다.
         // 이렇게 하면 다음 저장 때 이 기기에서 자연스럽게 다시 분리 저장된다.
         site.markers.forEach(m=>{
-          (m.photos||[]).forEach(p=>{ if(p.photoRef && p.src) delete p.photoRef; });
+          (m.photos||[]).forEach(p=>{ if(p.photoRef && p.src) delete p.photoRef; if(p.src && typeof p.src==='string' && p.src.startsWith('data:')) delete p.blobExtracted; });
         });
         return site;
       });
@@ -16294,7 +16294,7 @@
         }
         site.markers.forEach(normalizePhotos);
         site.markers.forEach(m=>{
-          (m.photos||[]).forEach(p=>{ if(p.photoRef && p.src) delete p.photoRef; });
+          (m.photos||[]).forEach(p=>{ if(p.photoRef && p.src) delete p.photoRef; if(p.src && typeof p.src==='string' && p.src.startsWith('data:')) delete p.blobExtracted; });
         });
         sites.push(site);
         loadSite(site);
