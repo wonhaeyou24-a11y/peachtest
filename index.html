@@ -3325,7 +3325,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v149';
+  const PS_BUILD = 'v150';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -6587,18 +6587,18 @@
 
   // ---------- 보안 조직 초대(Secure Organization Invitation) 시스템 (RPC 연동) ----------
   // 래퍼 함수: 기존 inviteOrganizationMember() 호환용 (호출부를 깨뜨리지 않고 secure RPC로 연결)
-  async function inviteOrganizationMember(organizationId, email, role = 'Inspector', expiresHours = 72){
+  async function inviteOrganizationMember(organizationId, email, role = 'Inspector', expiresHours = 24){
     return createOrganizationInvitation(organizationId, role, expiresHours, email);
   }
 
-  async function createOrganizationInvitation(organizationId, role = 'Inspector', expiresHours = 72, targetEmail = ''){
+  async function createOrganizationInvitation(organizationId, role = 'Inspector', expiresHours = 24, targetEmail = ''){
     if(!supabaseClient || !supabaseSession) return { ok:false, reason:'로그인이 필요합니다.' };
 
     // DB 허용 역할 검증 (Member 제거, Inspector/Admin/Reviewer/Reporter/Viewer만 허용)
     const validRoles = ['Inspector', 'Admin', 'Reviewer', 'Reporter', 'Viewer'];
     const chosenRole = validRoles.includes(role) ? role : 'Inspector';
     const cleanEmail = (targetEmail || '').trim() || null;
-    const hours = parseInt(expiresHours, 10) || 72;
+    const hours = parseInt(expiresHours, 10) || 24;
 
     try{
       const { data, error } = await supabaseClient.rpc('create_org_invitation', {
@@ -8160,7 +8160,13 @@
         memberSec.appendChild(memberListDiv);
         orgBox.appendChild(memberSec);
 
-        fetchOrganizationMembers(org.id).then(members=>{
+        // 관리자에게는 팀원별 "마지막 로그인 · 사용 기기 수"도 보여 준다(계정을 여러 사람이 나눠 쓰는지 가늠하는 용도).
+        // 서버 함수(list_org_member_activity)가 없거나 실패하면 그냥 생략한다.
+        const fetchActivity = isManager
+          ? supabaseClient.rpc('list_org_member_activity', { p_organization_id: org.id }).then(r => (r && !r.error && Array.isArray(r.data)) ? r.data : []).catch(()=>[])
+          : Promise.resolve([]);
+        Promise.all([fetchOrganizationMembers(org.id), fetchActivity]).then(([members, acts])=>{
+          const actByUser = new Map((acts || []).map(a => [a.user_id, a]));
           memberListDiv.innerHTML = '';
           if(members.length === 0){
             memberListDiv.innerHTML = '<div class="hint">등록된 팀원이 없습니다.</div>';
@@ -8172,6 +8178,18 @@
             mRow.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:3px 0; border-bottom:1px dashed var(--line);';
             const mInfo = document.createElement('span');
             mInfo.innerHTML = escapeHtml(m.email || '익명') + ' · <strong>' + escapeHtml(m.role) + '</strong>' + (m.status === 'invited' ? ' <span style="color:#f39c12;">(초대중)</span>' : '');
+            const act = actByUser.get(m.user_id);
+            if(act){
+              const fmt = (iso)=>{ try{ const d = new Date(iso); return (d.getMonth()+1) + '/' + d.getDate() + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0'); }catch(e){ return ''; } };
+              const dev30 = act.devices_30d || 0;
+              const warn = dev30 >= 3;
+              const line = document.createElement('div');
+              line.style.cssText = 'font-size:11px; margin-top:1px; color:' + (warn ? '#e67e22' : 'var(--sub)') + ';';
+              line.textContent = '마지막 로그인 ' + (act.last_sign_in_at ? fmt(act.last_sign_in_at) : '기록 없음') +
+                ' · 최근 30일 기기 ' + dev30 + '대' + (act.devices_total > dev30 ? ' (전체 ' + act.devices_total + '대)' : '') +
+                (warn ? ' ⚠ 기기가 많습니다 — 계정을 여러 명이 쓰는지 확인하세요' : '');
+              mInfo.appendChild(line);
+            }
             mRow.appendChild(mInfo);
 
             if(isManager && m.user_id !== supabaseSession.user.id){
@@ -8225,9 +8243,9 @@
 
           const expSel = document.createElement('select');
           expSel.style.cssText = roleSel.style.cssText;
-          [{h:72, l:'72시간 유효 (기본)'}, {h:24, l:'24시간 유효 (1일)'}, {h:168, l:'168시간 유효 (7일)'}].forEach(item => {
+          [{h:24, l:'24시간 유효 (기본)'}, {h:72, l:'72시간 유효 (3일)'}, {h:168, l:'168시간 유효 (7일)'}].forEach(item => {
             const o = document.createElement('option'); o.value = item.h; o.textContent = item.l;
-            if(item.h === 72) o.selected = true;
+            if(item.h === 24) o.selected = true;
             expSel.appendChild(o);
           });
 
