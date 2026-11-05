@@ -2483,15 +2483,20 @@
 #trashModal .audit-row > div{ flex:none; margin-left:auto; }
 #trashModal h3{ min-width:0; }
 
+@media (max-width: 879px){ #btnDashboardQuick{ display:none !important; } }
 /* PC: 상단 줄에서 쓰지 않는 버튼 숨김 + 기록목록 머리 정리 */
 @media (min-width: 880px){
   #btnResetImage, #btnToggleExplorer, #btnToggleWideMode{ display:none !important; }
-  .side-head{ flex-wrap:wrap; align-items:center; gap:6px 8px; letter-spacing:0; }
+  /* 탐색기에 같은 기능이 있어 겹치는 상단 버튼, 그리고 PC에서 쓰지 않는 기록목록 필터(🔍) */
+  #btnProjectSwitch, #btnNewSite, #btnSiteList, #btnToggleLogFilter{ display:none !important; }
+  #btnDashboardQuick{ margin-left:6px; white-space:nowrap; }
+  #btnToggleInspector{ order:3 !important; margin-left:0; }   /* 접기(▶) 버튼은 제목 줄 오른쪽 끝으로 */
+  .side-head{ flex-wrap:wrap; align-items:center; justify-content:flex-start; gap:6px 8px; letter-spacing:0; }
   .side-head > span:first-child{ display:contents !important; }   /* 안쪽 style=display:flex 보다 우선 */
   .side-head .side-title{ order:1; white-space:nowrap; font-size:13px; font-weight:700; color:var(--text); flex:1 1 auto; }
   .side-head #sideCount{ order:2; white-space:nowrap; flex:none; font-size:12px; }
-  .side-head::before{ content:''; order:3; flex:0 0 100%; height:0; }
-  .side-head .icon-btn{ order:4; white-space:nowrap; padding:4px 10px !important; font-size:12px !important; border-radius:999px; line-height:1.3; }
+  .side-head::before{ content:''; order:4; flex:0 0 100%; height:0; }
+  .side-head .icon-btn{ order:5; white-space:nowrap; padding:4px 10px !important; font-size:12px !important; border-radius:999px; line-height:1.3; }
 }
 </style>
 </head>
@@ -2522,10 +2527,10 @@
       </div>
     </div>
     <button class="ghost icon-btn" id="btnMore" title="내보내기 · 백업">⋯</button>
+    <button class="ghost office-only" id="btnDashboardQuick" title="프로젝트 현황 대시보드" style="display:none;">📊 대시보드</button>
   </div>
   <div class="actions">
     <button class="ghost" id="btnWorkMode" style="display:none;">📍</button>
-    <button class="ghost office-only" id="btnDashboardQuick" title="프로젝트 현황 대시보드" style="display:none;">📊 대시보드</button>
     <button class="ghost" id="btnProjectSwitch" title="프로젝트 전환 · 관리">📁 프로젝트</button>
     <button class="primary" id="btnNewSite" title="새 시설물 추가">＋ 시설물</button>
     <button class="ghost" id="btnSiteList" title="저장된 시설물 목록 보기">시설물 목록</button>
@@ -3473,7 +3478,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v153';
+  const PS_BUILD = 'v154';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -13867,14 +13872,15 @@
       projRow.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 10px; margin-bottom:10px; background:var(--panel-2); border:1px solid var(--line); border-radius:6px;';
       const projLabel = document.createElement('div');
       projLabel.style.cssText = 'font-size:12px; color:var(--muted); font-family:JetBrains Mono, monospace;';
-      projLabel.textContent = '📁 프로젝트';
+      projLabel.textContent = '현재 프로젝트';
       const projName = document.createElement('div');
       projName.style.cssText = 'font-weight:700; font-size:14px;';
       projName.textContent = curProject ? curProject.name : (projects.length === 0 ? '프로젝트 없음' : DEFAULT_PROJECT_NAME);
       const projSwitchBtn = document.createElement('button');
       projSwitchBtn.className = 'ghost';
-      projSwitchBtn.style.cssText = 'padding:4px 8px; font-size:11px;';
-      projSwitchBtn.textContent = '전환';
+      projSwitchBtn.style.cssText = 'padding:6px 10px; font-size:12px; white-space:nowrap; flex:none;';
+      projSwitchBtn.title = '프로젝트 전환 · 새 프로젝트 · 백업 불러오기';
+      projSwitchBtn.textContent = '📁 프로젝트';
       projSwitchBtn.addEventListener('click', ()=>{ renderProjectList(); projectModal.style.display = 'flex'; });
       const projTop = document.createElement('div');
       projTop.appendChild(projLabel);
