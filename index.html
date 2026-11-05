@@ -2483,7 +2483,11 @@
 #trashModal .audit-row > div{ flex:none; margin-left:auto; }
 #trashModal h3{ min-width:0; }
 
-@media (max-width: 879px){ #btnDashboardQuick{ display:none !important; } }
+@media (max-width: 879px){ #btnDashboardQuick, #btnAccountChip{ display:none !important; } }
+#btnAccountChip{ display:inline-flex; flex-direction:column; align-items:flex-start; justify-content:center; line-height:1.3; padding:5px 12px; font-size:12px; max-width:300px; text-align:left; }
+#btnAccountChip .ac-line{ display:block; max-width:276px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#btnAccountChip .ac-org{ font-weight:700; }
+#btnAccountChip .ac-mail{ color:var(--sub); font-size:11px; }
 /* PC: 상단 줄에서 쓰지 않는 버튼 숨김 + 기록목록 머리 정리 */
 @media (min-width: 880px){
   #btnResetImage, #btnToggleExplorer, #btnToggleWideMode{ display:none !important; }
@@ -2530,6 +2534,7 @@
     <button class="ghost office-only" id="btnDashboardQuick" title="프로젝트 현황 대시보드" style="display:none;">📊 대시보드</button>
   </div>
   <div class="actions">
+    <button class="ghost" id="btnAccountChip" type="button" title="로그인 · 조직 · 팀원 관리 (눌러서 열기)"></button>
     <button class="ghost" id="btnWorkMode" style="display:none;">📍</button>
     <button class="ghost" id="btnProjectSwitch" title="프로젝트 전환 · 관리">📁 프로젝트</button>
     <button class="primary" id="btnNewSite" title="새 시설물 추가">＋ 시설물</button>
@@ -3478,7 +3483,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v154';
+  const PS_BUILD = 'v155';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -5666,6 +5671,7 @@
     const org = p && p.organizationId ? myOrganizations.find(o => o.id === p.organizationId) : null;
     const orgPrefix = org ? ('[' + org.name + '] ') : '';
     projectLabel.textContent = '📁 ' + orgPrefix + (p ? p.name : (projects.length === 0 ? '프로젝트 없음' : DEFAULT_PROJECT_NAME)) + ' ▾';
+    try{ if(typeof refreshAccountChip === 'function') refreshAccountChip(); }catch(e){}
   }
 
   // ================================================================
@@ -7981,7 +7987,33 @@
     return box;
   }
 
+  // PC 상단 오른쪽: 지금 로그인한 이메일과 작업 중인 조직을 보여 주고, 누르면 클라우드 동기화(로그인·조직) 창을 연다.
+  function refreshAccountChip(){
+    const chip = document.getElementById('btnAccountChip');
+    if(!chip) return;
+    chip.innerHTML = '';
+    const line = (cls, text)=>{ const d = document.createElement('span'); d.className = 'ac-line ' + cls; d.textContent = text; chip.appendChild(d); };
+    if(!supabaseSession || !supabaseSession.user){
+      line('ac-org', '☁️ 로그인 / 팀 동기화');
+      line('ac-mail', '로그인하지 않음 (이 기기에만 저장)');
+      return;
+    }
+    const org = (myOrganizations || []).find(o => o.id === activeOrganizationId);
+    const role = org ? (myRoleByOrg[org.id] === 'Owner' ? 'Admin' : (myRoleByOrg[org.id] || '')) : '';
+    line('ac-org', org ? ('🏢 ' + org.name + (role ? ' · ' + role : '')) : '📁 개인 조사 (조직 없음)');
+    line('ac-mail', '👤 ' + (supabaseSession.user.email || ''));
+    chip.title = (org ? '조직: ' + org.name + '\n' : '') + '계정: ' + (supabaseSession.user.email || '') + '\n눌러서 로그인 · 조직 · 팀원 관리 열기';
+  }
+  (function(){
+    const chip = document.getElementById('btnAccountChip');
+    if(chip) chip.addEventListener('click', ()=>{
+      renderCloudSyncBody();
+      cloudSyncModal.style.display = 'flex';   // 더보기 메뉴를 거치지 않고 바로 연다(닫을 때 더보기가 튀어나오지 않게)
+    });
+  })();
+
   function renderCloudSyncBody(){
+    try{ refreshAccountChip(); }catch(e){}
     if(!cloudSyncBody) return;
     cloudSyncBody.innerHTML = '';
 
