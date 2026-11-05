@@ -2464,6 +2464,21 @@
 .pc-only-hint{display:none; margin-top:8px; font-size:12px; color:var(--sub);}
 @media (min-width: 880px){ .pc-only-hint{display:block;} }
 
+/* 로그인 필수 화면 */
+.psg{ position:fixed; inset:0; z-index:100100; background:var(--navy); display:flex; align-items:center; justify-content:center; padding:16px; overflow:auto; }
+.psg-card{ width:min(400px,100%); background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:24px 22px; box-shadow:0 8px 30px rgba(17,17,17,0.12); color:var(--text); }
+.psg-brand{ display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+.psg-brand img{ width:44px; height:44px; border-radius:10px; }
+.psg-brand h1{ margin:0; font-size:22px; }
+.psg-sub{ font-size:13px; color:var(--muted); line-height:1.5; margin:6px 0 14px; }
+.psg-invite{ background:rgba(255,107,53,0.12); border:1px solid var(--amber); border-radius:8px; padding:10px 12px; font-size:13px; line-height:1.5; margin-bottom:12px; }
+.psg-card input{ width:100%; box-sizing:border-box; background:var(--panel-2); border:1px solid var(--line); border-radius:8px; color:var(--text); font-family:inherit; font-size:14px; padding:11px 12px; margin-bottom:8px; }
+.psg-btns{ display:flex; flex-direction:column; gap:8px; margin-top:4px; }
+.psg-btns button{ width:100%; padding:11px 12px; font-size:14px; }
+.psg-status{ min-height:18px; font-size:12.5px; line-height:1.45; margin-top:10px; color:var(--muted); }
+.psg-status.err{ color:var(--danger); font-weight:600; }
+.psg-note{ font-size:11.5px; color:var(--muted); line-height:1.5; margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
+
 /* 시설물 목록(탐색기) 위쪽 도구줄 */
 .site-tools{margin-bottom:10px;}
 .site-tools .site-search-input{margin-bottom:8px;}
@@ -3485,7 +3500,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v157';
+  const PS_BUILD = 'v158';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -6472,33 +6487,196 @@
     }
   }
 
+  // ───────── 로그인 필수 ─────────
+  // 로그인하지 않으면 앱을 쓸 수 없다. 가입은 팀장이 보낸 초대 링크로만 안내한다.
+  // 인터넷이 없는 현장에서 막히지 않도록: 이 기기에서 이미 로그인한 적이 있으면(마지막 로그인 기록) 오프라인일 때는 그대로 쓸 수 있고,
+  // 인터넷이 다시 연결되어 로그인이 확인되지 않으면 그때 로그인 화면이 나온다. (자료는 이 기기에 그대로 남아 있다.)
+  const PS_LAST_LOGIN_KEY = 'point-shot-last-login';
+  let psAuthChecked = false;
+  let psGate = null;
+  function psReadLastLogin(){ try{ const o = JSON.parse(localStorage.getItem(PS_LAST_LOGIN_KEY) || 'null'); return (o && o.id) ? o : null; }catch(e){ return null; } }
+  function psRememberLogin(){ try{ const u = supabaseSession && supabaseSession.user; if(u) localStorage.setItem(PS_LAST_LOGIN_KEY, JSON.stringify({ id: u.id, email: u.email || '', at: Date.now() })); }catch(e){} }
+  function psForgetLogin(){ try{ localStorage.removeItem(PS_LAST_LOGIN_KEY); }catch(e){} }
+
+  function psGateBuild(){
+    if(psGate) return psGate;
+    const el = document.createElement('div');
+    el.className = 'psg';
+    el.id = 'psLoginGate';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    el.innerHTML =
+      '<div class="psg-card">' +
+        '<div class="psg-brand"><img src="./icons/icon-192.png" alt=""><h1>PeachShot</h1></div>' +
+        '<div class="psg-sub" id="psgSub">로그인을 확인하는 중…</div>' +
+        '<div class="psg-invite" id="psgInvite" style="display:none;"></div>' +
+        '<div id="psgForm" style="display:none;">' +
+          '<input id="psgEmail" type="email" autocomplete="username" placeholder="이메일 주소" inputmode="email">' +
+          '<input id="psgPw" type="password" autocomplete="current-password" placeholder="비밀번호 (6자 이상)">' +
+          '<div class="psg-btns">' +
+            '<button type="button" class="primary" id="psgLogin">로그인</button>' +
+            '<button type="button" class="ghost" id="psgSignup" style="display:none;">초대받은 이메일로 회원가입</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="psg-status" id="psgStatus"></div>' +
+        '<div class="psg-note" id="psgNote" style="display:none;">계정이 없으면 팀장에게 <b>초대 링크</b>를 받아, 그 링크를 열어 초대받은 이메일로 회원가입하세요.</div>' +
+      '</div>';
+    document.body.appendChild(el);
+    const $ = (id)=> el.querySelector('#' + id);
+    psGate = { el, sub:$('psgSub'), invite:$('psgInvite'), form:$('psgForm'), email:$('psgEmail'), pw:$('psgPw'), login:$('psgLogin'), signup:$('psgSignup'), status:$('psgStatus'), note:$('psgNote') };
+
+    const say = (msg, isErr)=>{ psGate.status.textContent = msg || ''; psGate.status.classList.toggle('err', !!isErr); };
+    const friendly = (m)=>{
+      m = String(m || '');
+      if(/invalid login credentials/i.test(m)) return '이메일 또는 비밀번호가 맞지 않습니다.';
+      if(/email not confirmed/i.test(m)) return '이메일 인증이 아직 끝나지 않았습니다. 받은 인증 메일의 링크를 눌러 주세요.';
+      if(/already registered|already been registered|user already/i.test(m)) return '이미 가입된 이메일입니다. 비밀번호로 로그인해 주세요.';
+      if(/password should be at least|weak/i.test(m)) return '비밀번호는 6자 이상으로 입력해 주세요.';
+      if(/rate limit|too many/i.test(m)) return '시도가 너무 많습니다. 잠시 뒤에 다시 해 주세요.';
+      if(/fetch|network|failed to/i.test(m)) return '인터넷 연결을 확인해 주세요.';
+      return m || '알 수 없는 오류';
+    };
+    const checkInviteEmail = (email)=>{
+      const info = window._pendingInviteInfo;
+      if(info && info.target_email && email !== String(info.target_email).toLowerCase().trim()){
+        say('초대받은 이메일(' + info.target_email + ')과 다른 이메일입니다. 초대받은 이메일로 해 주세요.', true);
+        return false;
+      }
+      return true;
+    };
+    const doLogin = async ()=>{
+      if(!supabaseClient) initSupabaseClient();
+      if(!supabaseClient){ say('인터넷 연결을 확인해 주세요.', true); return; }
+      const email = psGate.email.value.trim().toLowerCase();
+      if(!email || !psGate.pw.value){ say('이메일과 비밀번호를 입력해 주세요.', true); return; }
+      // (초대받은 이메일 일치 검사는 회원가입에만 한다 — 이미 계정이 있는 사람은 어떤 계정으로든 로그인할 수 있어야 한다)
+      psGate.login.disabled = true; say('로그인 중…');
+      try{
+        const { error } = await supabaseClient.auth.signInWithPassword({ email, password: psGate.pw.value });
+        if(error) say(friendly(error.message), true); else say('');
+      }catch(e){ say(friendly(e && e.message), true); }
+      psGate.login.disabled = false;
+    };
+    const doSignup = async ()=>{
+      if(!supabaseClient) initSupabaseClient();
+      if(!supabaseClient){ say('인터넷 연결을 확인해 주세요.', true); return; }
+      const tok = getPendingInvite();
+      if(!tok){ say('회원가입은 팀장에게 받은 초대 링크로만 할 수 있습니다. 초대 링크를 열어 주세요.', true); return; }
+      const email = psGate.email.value.trim().toLowerCase();
+      if(!email || !psGate.pw.value){ say('이메일과 비밀번호를 입력해 주세요.', true); return; }
+      if(psGate.pw.value.length < 6){ say('비밀번호는 6자 이상으로 입력해 주세요.', true); return; }
+      if(!checkInviteEmail(email)) return;
+      psGate.signup.disabled = true; say('가입 처리 중…');
+      try{
+        const { error } = await supabaseClient.auth.signUp({ email, password: psGate.pw.value, options: { data: { invite_token: tok } } });
+        if(error) say(friendly(error.message), true);
+        else say('가입 완료! 인증 메일이 왔다면 메일의 링크로 인증한 뒤, 이 화면에서 로그인하면 자동으로 조직에 가입됩니다.');
+      }catch(e){ say(friendly(e && e.message), true); }
+      psGate.signup.disabled = false;
+    };
+    psGate.login.addEventListener('click', doLogin);
+    psGate.signup.addEventListener('click', doSignup);
+    el.addEventListener('keydown', (e)=>{ if(e.key === 'Enter' && e.target && e.target.tagName === 'INPUT'){ e.preventDefault(); doLogin(); } });
+    return psGate;
+  }
+
+  function psGateSetInert(on){
+    try{
+      Array.from(document.body.children).forEach(c=>{
+        if(c === psGate.el || c.tagName === 'SCRIPT' || c.tagName === 'STYLE' || c.tagName === 'LINK' || (c.classList && c.classList.contains('psd-overlay'))) return;
+        c.inert = on;
+      });
+    }catch(e){}
+  }
+
+  // 초대 링크로 들어온 경우: 어느 조직에서 초대했는지 보여 주고, 이메일을 채워 둔다 + 회원가입 버튼을 보인다
+  function psGateSetInvite(info){
+    const g = psGateBuild();
+    if(info){
+      g.invite.style.display = '';
+      g.invite.innerHTML = '✉️ <b>팀 초대 링크 확인 완료</b><br><b>' + escapeHtml(info.orgName || '조직') + '</b>에서 <b>' + escapeHtml(info.role || 'Inspector') + '</b> 권한으로 초대했습니다.' +
+        (info.targetEmail ? '<br>초대받은 이메일: <b>' + escapeHtml(info.targetEmail) + '</b>' : '') +
+        (info.expiresAt ? '<br><span style="font-size:11px;color:var(--muted);">만료: ' + escapeHtml(new Date(info.expiresAt).toLocaleString('ko-KR')) + '</span>' : '');
+      if(info.targetEmail) g.email.value = info.targetEmail;   // 초대받은 이메일이 우선
+      g.signup.style.display = '';
+      g.note.style.display = 'none';
+    }else{
+      g.invite.style.display = 'none';
+      g.signup.style.display = getPendingInvite() ? '' : 'none';
+      g.note.style.display = getPendingInvite() ? 'none' : '';
+    }
+  }
+
+  function updateLoginGate(){
+    const g = psGateBuild();
+    const show = (mode)=>{
+      g.el.style.display = 'flex';
+      psGateSetInert(true);
+      if(mode === 'checking'){
+        g.sub.textContent = '로그인을 확인하는 중…'; g.form.style.display = 'none'; g.note.style.display = 'none';
+      }else{
+        g.sub.textContent = mode === 'nonet'
+          ? '인터넷에 연결된 뒤 로그인해 주세요. (처음 한 번은 인터넷이 필요합니다)'
+          : '팀 초대를 받은 계정으로 로그인해야 사용할 수 있습니다.';
+        g.form.style.display = '';
+        psGateSetInvite(window._pendingInviteInfo && getPendingInvite() ? {
+          orgName: window._pendingInviteInfo.organization_name, role: window._pendingInviteInfo.role,
+          targetEmail: window._pendingInviteInfo.target_email, expiresAt: window._pendingInviteInfo.expires_at } : null);
+        const last = psReadLastLogin();
+        if(last && last.email && !g.email.value) g.email.value = last.email;
+      }
+    };
+    const hide = ()=>{ g.el.style.display = 'none'; psGateSetInert(false); };
+    if(!psAuthChecked){ show('checking'); return; }
+    if(supabaseSession && supabaseSession.user){
+      psRememberLogin();
+      if(g.el.style.display !== 'none'){ g.pw.value = ''; g.status.textContent = ''; hide(); try{ renderCloudSyncBody(); }catch(e){} }
+      return;
+    }
+    // 로그인 정보가 없는데: 이 기기에서 로그인한 적이 있고 지금 인터넷이 없으면 그대로 쓰게 둔다
+    if(psReadLastLogin() && !navigator.onLine){ hide(); return; }
+    show(navigator.onLine ? 'login' : 'nonet');
+  }
+  window.addEventListener('online', ()=>{
+    if(!supabaseClient){ try{ initSupabaseClient(); }catch(e){} return; }
+    supabaseClient.auth.getSession().then(({ data })=>{ supabaseSession = (data && data.session) || null; updateLoginGate(); }).catch(()=>{});
+  });
+  window.addEventListener('offline', ()=>{ try{ updateLoginGate(); }catch(e){} });
+
   function initSupabaseClient(){
     if(typeof supabase === 'undefined'){
       console.warn('Supabase 라이브러리를 아직 불러오지 못했습니다.');
+      psAuthChecked = true; try{ updateLoginGate(); }catch(e){}
       return false;
     }
-    if(!supabaseUrl || !supabaseAnonKey) return false;
+    if(!supabaseUrl || !supabaseAnonKey){ psAuthChecked = true; try{ updateLoginGate(); }catch(e){} return false; }
     try{
       supabaseClient = supabase.createClient(supabaseUrl, supabaseAnonKey, {
         auth: { persistSession: true, autoRefreshToken: true }
       });
       supabaseClient.auth.getSession().then(({ data })=>{
         supabaseSession = data && data.session;
+        psAuthChecked = true;
         if(supabaseSession) onSignedIn();
-        else{ checkAndProcessPendingInvite(); maybePromptFirstRunLogin(); }
+        else{ checkAndProcessPendingInvite(); /* 처음 실행 안내는 로그인 화면이 대신한다 */ }
+        updateLoginGate();
         renderCloudSyncBody();
-      });
+      }).catch(()=>{ psAuthChecked = true; try{ updateLoginGate(); }catch(e){} });
       supabaseClient.auth.onAuthStateChange((_event, session)=>{
         const wasSignedIn = !!supabaseSession;
         supabaseSession = session;
+        psAuthChecked = true;
         if(session && !wasSignedIn){
           onSignedIn();
         }
         if(!session){
           myOrganizations = [];
         }
+        updateLoginGate();
         renderCloudSyncBody();
       });
+      // 응답이 없어도 로그인 확인 화면에서 멈추지 않게 한다
+      setTimeout(()=>{ if(!psAuthChecked){ psAuthChecked = true; try{ updateLoginGate(); }catch(e){} } }, 6000);
       return true;
     }catch(e){
       console.warn('Supabase 클라이언트 초기화 실패', e);
@@ -7186,6 +7364,9 @@
   }
 
   function showInvitationWelcomeModal(orgName, role, expiresAt, targetEmail){
+    // 로그인 화면이 앱을 덮고 있으므로 그 안에 초대 안내를 보여 준다
+    try{ psGateSetInvite({ orgName, role, expiresAt, targetEmail }); updateLoginGate(); }catch(e){}
+    if(psGate && psGate.el.style.display !== 'none') return;
     renderCloudSyncBody();
     cloudSyncModal.style.display = 'flex';
     setTimeout(()=>{
@@ -8601,6 +8782,7 @@
   }
 
   async function cloudSignOut(){
+    psForgetLogin();
     if(supabaseClient) await supabaseClient.auth.signOut();
     renderCloudSyncBody();
   }
@@ -23016,6 +23198,7 @@
   })();
 
   async function initPeachShotApp(){
+    try{ updateLoginGate(); }catch(e){ console.warn('로그인 화면 준비 실패', e); }   // 로그인이 확인될 때까지 앱을 가린다
     // 1. IndexedDB 연결 및 영구 저장소 활성화
     try{
       await openIDB();
