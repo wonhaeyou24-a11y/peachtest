@@ -3325,7 +3325,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v148';
+  const PS_BUILD = 'v149';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -6371,6 +6371,67 @@
     }catch(e){ console.warn('첫 실행 로그인 안내 실패(무시)', e); }
   }
 
+  // ---------- 나에게 온 초대 (이미 가입된 계정이 링크 없이 수락) ----------
+  // 서버(list_my_pending_invitations)가 "내 이메일로 온 미사용 초대"를 알려 준다. 계정이 초대보다 먼저 만들어진 경우에만 보인다.
+  const DECLINED_INVITES_KEY = 'point-shot-declined-invites';
+  function getDeclinedInvites(){ try{ return JSON.parse(localStorage.getItem(DECLINED_INVITES_KEY) || '[]'); }catch(e){ return []; } }
+  function addDeclinedInvite(id){ try{ const a = getDeclinedInvites(); if(!a.includes(id)){ a.push(id); localStorage.setItem(DECLINED_INVITES_KEY, JSON.stringify(a.slice(-50))); } }catch(e){} }
+
+  let _pendInvCache = { at: 0, data: [] };   // 창이 다시 그려질 때마다 서버를 부르지 않도록 15초간 기억
+  async function fetchMyPendingInvitations(){
+    if(!supabaseClient || !supabaseSession) return [];
+    if(Date.now() - _pendInvCache.at < 15000) return _pendInvCache.data;
+    try{
+      const { data, error } = await supabaseClient.rpc('list_my_pending_invitations');
+      if(error) return [];   // 서버 함수가 없거나 권한 문제면 조용히 넘어간다
+      _pendInvCache = { at: Date.now(), data: Array.isArray(data) ? data : [] };
+      return _pendInvCache.data;
+    }catch(e){ return []; }
+  }
+
+  async function acceptMyPendingInvitation(inv){
+    try{
+      const { data, error } = await supabaseClient.rpc('accept_my_invitation', { p_invitation_id: inv.invitation_id });
+      if(error){
+        const m = String(error.message || '');
+        let reason = m;
+        if(m.includes('expired')) reason = '만료된 초대입니다.';
+        else if(m.includes('revoked')) reason = '취소된 초대입니다.';
+        else if(m.includes('already been used')) reason = '이미 사용된 초대입니다.';
+        else if(m.includes('already an active')) reason = '이미 이 조직의 팀원입니다.';
+        else if(m.includes('does not match')) reason = '초대받은 이메일과 로그인 계정이 다릅니다.';
+        else if(m.includes('invitation link')) reason = '이 초대는 초대 링크로 수락해야 합니다.';
+        return { ok:false, reason };
+      }
+      _pendInvCache.at = 0;
+      const row = Array.isArray(data) ? data[0] : data;
+      return { ok:true, organization_id: row && row.organization_id, organization_name: row && row.organization_name, role: row && row.role };
+    }catch(e){ return { ok:false, reason:(e && e.message) || String(e) }; }
+  }
+
+  async function afterJoinedOrganization(res){
+    if(res.organization_id) setActiveOrganization(res.organization_id);
+    await loadMyOrganizations();
+    try{ await loadState(); }catch(e){}
+    renderCloudSyncBody();
+    try{ renderProjectList(); }catch(e){}
+    alert('🎉 ' + (res.organization_name || '조직') + '에 가입되었습니다!\n역할: ' + (res.role || 'Inspector'));
+  }
+
+  // 로그인 직후 한 번: 아직 정하지 않은 초대가 있으면 "수락할까요?"로 묻는다. 거절한 초대는 다시 묻지 않는다(더보기 → 클라우드 동기화에서 언제든 수락 가능).
+  async function offerPendingInvitations(){
+    try{
+      const list = (await fetchMyPendingInvitations()).filter(inv => !getDeclinedInvites().includes(inv.invitation_id));
+      for(const inv of list){
+        const ok = await psConfirm('"' + (inv.organization_name || '조직') + '" 조직에서 ' + (inv.role || 'Inspector') + ' 역할로 초대했습니다.\n\n수락하고 조직에 가입할까요?');
+        if(!ok){ addDeclinedInvite(inv.invitation_id); continue; }
+        const res = await acceptMyPendingInvitation(inv);
+        if(res.ok) await afterJoinedOrganization(res);
+        else alert('초대 수락 실패: ' + res.reason);
+      }
+    }catch(e){ console.warn('받은 초대 확인 실패(무시)', e); }
+  }
+
   async function onSignedIn(){
     try{
       const u = supabaseSession.user;
@@ -6379,6 +6440,7 @@
     await activateMyInvites();
     await loadMyOrganizations();
     await checkAndProcessPendingInvite();
+    await offerPendingInvitations();
   }
 
   // ---------- 조직(Organization) 및 멤버십(Member) 관리 ----------
@@ -7898,6 +7960,37 @@
         }finally{
           btn.disabled = false; btn.textContent = old;
         }
+      });
+      // 나에게 온 초대 목록 — 링크 없이 바로 수락(거절했거나 나중에 하려던 초대도 여기서 수락할 수 있다)
+      const pendBox = document.createElement('div');
+      pendBox.style.cssText = 'margin-bottom:8px;';
+      det.appendChild(pendBox);
+      fetchMyPendingInvitations().then(list=>{
+        if(!list.length) return;
+        det.open = true;
+        const t = document.createElement('div');
+        t.style.cssText = 'font-size:12px; font-weight:600; margin:6px 0 4px; color:var(--accent);';
+        t.textContent = '📨 나에게 온 초대';
+        pendBox.appendChild(t);
+        list.forEach(inv=>{
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 0; border-bottom:1px dashed var(--line); font-size:12px;';
+          const info = document.createElement('span');
+          info.innerHTML = '<strong>' + escapeHtml(inv.organization_name || '조직') + '</strong> · ' + escapeHtml(inv.role || 'Inspector') +
+            (inv.expires_at ? ' <span style="color:var(--sub);">(~' + escapeHtml(new Date(inv.expires_at).toLocaleDateString('ko-KR')) + ')</span>' : '');
+          const ab = document.createElement('button');
+          ab.className = 'primary'; ab.style.cssText = 'padding:4px 10px; font-size:12px; white-space:nowrap;';
+          ab.textContent = '수락';
+          ab.addEventListener('click', async ()=>{
+            if(ab.disabled) return;
+            ab.disabled = true; ab.textContent = '가입 중…';
+            const res = await acceptMyPendingInvitation(inv);
+            if(res.ok) await afterJoinedOrganization(res);
+            else{ alert('초대 수락 실패: ' + res.reason); ab.disabled = false; ab.textContent = '수락'; }
+          });
+          row.appendChild(info); row.appendChild(ab);
+          pendBox.appendChild(row);
+        });
       });
       det.appendChild(hint); det.appendChild(inp); det.appendChild(btn);
       cloudSyncBody.appendChild(det);
