@@ -3500,7 +3500,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v160';
+  const PS_BUILD = 'v161';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -6945,7 +6945,7 @@
     if(!supabaseClient || !supabaseSession) return { ok:false, reason:'로그인이 필요합니다.' };
 
     // DB 허용 역할 검증 (Member 제거, Inspector/Admin/Reviewer/Reporter/Viewer만 허용)
-    const validRoles = ['Inspector', 'Admin', 'Reviewer', 'Reporter', 'Viewer'];
+    const validRoles = ['Inspector', 'Reviewer', 'Reporter', 'Viewer'];   // Admin 으로는 초대하지 않는다(조직 만든 사람만 관리자)
     const chosenRole = validRoles.includes(role) ? role : 'Inspector';
     const cleanEmail = (targetEmail || '').trim() || null;
     const hours = parseInt(expiresHours, 10) || 24;
@@ -8595,7 +8595,8 @@
         });
 
         // 초대 링크 생성 및 초대 내역 (Owner / Admin 전용)
-        if(isManager){
+        // 초대 링크는 조직을 만든 사람(소유자)만 만든다
+        if(isManager && org.owner_user_id && supabaseSession && org.owner_user_id === supabaseSession.user.id){
           const inviteCard = document.createElement('div');
           inviteCard.style.cssText = 'margin-top:10px; padding-top:8px; border-top:1px solid var(--line);';
           
@@ -8614,7 +8615,7 @@
 
           const roleSel = document.createElement('select');
           roleSel.style.cssText = 'background:var(--panel); border:1px solid var(--line); border-radius:4px; color:var(--text); font-family:inherit; font-size:12px; padding:4px 6px;';
-          ['Inspector', 'Admin', 'Reviewer', 'Reporter', 'Viewer'].forEach(r => {
+          ['Inspector', 'Reviewer', 'Reporter', 'Viewer'].forEach(r => {
             const o = document.createElement('option'); o.value = r; o.textContent = '역할: ' + r;
             if(r === 'Inspector') o.selected = true;
             roleSel.appendChild(o);
