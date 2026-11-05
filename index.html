@@ -2784,6 +2784,7 @@
         <input type="text" id="siteSearch" placeholder="시설물 이름 검색…" class="site-search-input" style="flex:1;">
         <button class="primary" id="btnNewSiteInList" style="flex-shrink:0;">＋ 시설물</button>
         <button class="ghost" id="btnBatchSites" style="flex-shrink:0;" title="시설물 이름을 여러 줄로 붙여넣어 한 번에 만들기">여러 개</button>
+        <button class="ghost" id="btnBulkDrawings" style="flex-shrink:0;" title="도면 파일 여러 개를 파일 이름으로 시설물에 자동 배정해 한 번에 등록">도면 일괄</button>
       </div>
       <div id="siteListBody"></div>
     </div>
@@ -2915,6 +2916,26 @@
     <div class="modal-foot">
       <button class="ghost" id="bfCancel">취소</button>
       <button class="primary" id="bfCreate">시설물 만들기</button>
+    </div>
+  </div>
+</div>
+
+<!-- 도면 일괄 등록 (파일 이름으로 시설물에 자동 배정) -->
+<div class="modal-backdrop" id="bulkDrawingModal" style="display:none;">
+  <div class="modal" style="max-width:760px;">
+    <div class="modal-head">
+      <h2>도면 일괄 등록</h2>
+      <button class="close-x" id="closeBulkDrawing" aria-label="닫기">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="hint">파일 이름에 시설물 이름이 들어 있으면 자동으로 그 시설물에 배정했습니다. 틀린 곳은 고르고, 도면 이름도 바꿀 수 있습니다. "배정 안 함"으로 두면 올리지 않습니다.</div>
+      <div id="bdList" style="margin-top:10px;"></div>
+      <input type="file" id="bulkDrawingInput" accept="image/*,application/pdf,.pdf" multiple style="display:none;">
+    </div>
+    <div class="modal-foot">
+      <div id="bdSummary" class="hint" style="margin-right:auto;"></div>
+      <button class="ghost" id="bdCancel">취소</button>
+      <button class="primary" id="bdRun">등록</button>
     </div>
   </div>
 </div>
@@ -3420,7 +3441,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v151';
+  const PS_BUILD = 'v152';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -13796,6 +13817,11 @@
   // ---------- 시설물 목록 모달 ----------
   const expandedSiteIds = new Set();
 
+  function siteDrawingCount(site){
+    return ((site.id === currentSiteId ? (drawings || []) : (site.drawings || [])).length) || (site.baseImageSrc ? 1 : 0);
+  }
+  let siteListOnlyNoDrawing = false;
+
   function renderSiteList(){
     const projectSites = sites.filter(s => s.projectId === currentProjectId);
     const curProject = projects.find(p => p.id === currentProjectId);
@@ -13833,8 +13859,27 @@
       siteListBody.appendChild(empty);
       return;
     }
+    // 준비 현황 요약 — 도면이 아직 없는 시설물이 몇 개인지 한눈에, 눌러서 그것만 모아 보기
+    const noDwCount = projectSites.filter(s => siteDrawingCount(s) === 0).length;
+    const edTotal = projectSites.reduce((a, s) => a + (s.existingDamages || []).filter(e => e && !e.isDeleted).length, 0);
+    const sumRow = document.createElement('div');
+    sumRow.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; font-size:12px; color:var(--sub); margin:0 2px 8px;';
+    const sumTxt = document.createElement('span');
+    sumTxt.textContent = '시설물 ' + projectSites.length + '개 · 도면 없음 ' + noDwCount + '개 · 기존손상 ' + edTotal + '건';
+    sumRow.appendChild(sumTxt);
+    if(noDwCount > 0 || siteListOnlyNoDrawing){
+      const lab = document.createElement('label');
+      lab.style.cssText = 'display:flex; align-items:center; gap:4px; cursor:pointer; white-space:nowrap;';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.checked = siteListOnlyNoDrawing;
+      cb.addEventListener('change', ()=>{ siteListOnlyNoDrawing = cb.checked; renderSiteList(); });
+      lab.appendChild(cb); lab.appendChild(document.createTextNode('도면 없는 것만'));
+      sumRow.appendChild(lab);
+    }
+    siteListBody.appendChild(sumRow);
     const q = (siteSearch.value || '').trim().toLowerCase();
-    const filtered = q ? projectSites.filter(s => s.name.toLowerCase().includes(q)) : projectSites;
+    let filtered = q ? projectSites.filter(s => s.name.toLowerCase().includes(q)) : projectSites;
+    if(siteListOnlyNoDrawing) filtered = filtered.filter(s => siteDrawingCount(s) === 0);
     if(filtered.length === 0){
       const empty = document.createElement('div');
       empty.className = 'log-empty';
@@ -13888,9 +13933,9 @@
 
       const metaRow = document.createElement('div');
       metaRow.className = 'fc-meta card-meta-row';
-      const dwCount = (isActive ? (drawings || []) : (site.drawings || [])).length || (site.baseImageSrc ? 1 : 0);
+      const dwCount = siteDrawingCount(site);
       const edCount = (site.existingDamages || []).filter(e => e && !e.isDeleted).length;
-      metaRow.textContent = '유형: ' + (site.facilityType || '절토사면') + (site.facilityForm ? ' (' + site.facilityForm + ')' : '') +
+      metaRow.textContent = '유형: ' + (site.facilityType || '종류 미정') + (site.facilityForm ? ' (' + site.facilityForm + ')' : '') +
         ' · 도면 ' + dwCount + '장 · 기존손상 ' + edCount + '건 · 지점 ' + pCount + '개' + (dateStr ? ' · ' + dateStr : '');
       if(dwCount === 0){
         const chip = document.createElement('span');
@@ -18061,9 +18106,9 @@
     // 드래그앤드롭으로 여러 장을 한 번에 끌어다 놓으면 파일마다 prompt()가 뜨는데,
     // 브라우저가 (반복된 팝업 등의 이유로) prompt 자체를 막아 예외를 던지는 경우가
     // 있을 수 있다 — 그런 경우에도 파일명 기반 기본 이름으로 조용히 계속 진행한다.
-    let userBaseName = defaultName;
+    let userBaseName = (opts && opts.name) ? String(opts.name).trim() || defaultName : defaultName;
     try{
-      if(!(opts && opts.noPrompt)) userBaseName = (prompt('새 도면의 이름을 입력하세요 (예: 정면도, 평면도, 1층 도면) — ' + file.name, defaultName) || defaultName).trim() || defaultName;
+      if(!(opts && (opts.noPrompt || opts.name))) userBaseName = (prompt('새 도면의 이름을 입력하세요 (예: 정면도, 평면도, 1층 도면) — ' + file.name, defaultName) || defaultName).trim() || defaultName;
     }catch(e){ userBaseName = defaultName; }
 
     let firstNewId = null;
@@ -18145,6 +18190,147 @@
     updateCounts();
     saveState();
   }
+
+  // ── 도면 일괄 등록 — 파일 이름으로 시설물에 자동 배정 ──
+  const bulkDrawingModal = document.getElementById('bulkDrawingModal');
+  const bulkDrawingInput = document.getElementById('bulkDrawingInput');
+  const bdList = document.getElementById('bdList');
+  const bdSummary = document.getElementById('bdSummary');
+  let bdRows = [];   // [{ file, siteId, name }]
+
+  // 파일 이름에서는 "도면 확장자"만 뗀다 — 시설물 이름의 "61.950k 옹벽"처럼 점이 들어간 이름을 확장자로 오해하지 않게.
+  function bdStem(fileName){ return String(fileName || '').replace(/\.(png|jpe?g|gif|webp|bmp|tiff?|svg|pdf)$/i, ''); }
+  function bdNorm(str){
+    return String(str || '').toLowerCase().replace(/[\s_\-.()\[\]]+/g, '');
+  }
+  function bdMatchSite(fileName, facs){
+    const fn = bdNorm(bdStem(fileName));
+    let best = null, bestLen = 0;
+    facs.forEach(f=>{
+      const n = bdNorm(f.name);
+      if(n.length >= 2 && fn.includes(n) && n.length > bestLen){ best = f; bestLen = n.length; }
+    });
+    if(best) return best;
+    // 반대로 파일 이름이 시설물 이름의 일부(예: "61.820k")일 때 — 한 곳으로만 좁혀질 때만 인정
+    if(fn.length >= 4){
+      const hit = facs.filter(f => bdNorm(f.name).includes(fn));
+      if(hit.length === 1) return hit[0];
+    }
+    return null;
+  }
+  function bdDefaultName(fileName, site){
+    let stem = bdStem(fileName).trim();
+    if(site && site.name){
+      const esc = site.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const stripped = stem.replace(new RegExp(esc, 'i'), '').replace(/^[\s_\-.()\[\]]+|[\s_\-.()\[\]]+$/g, '').trim();
+      if(stripped) return stripped;
+    }
+    return stem;
+  }
+
+  function openBulkDrawings(files){
+    const facs = sites.filter(s => s.projectId === currentProjectId);
+    if(facs.length === 0){ alert('이 프로젝트에 시설물이 없습니다. 먼저 시설물을 만들어 주세요.'); return; }
+    bdRows = files.map(file=>{
+      const site = bdMatchSite(file.name, facs);
+      return { file, siteId: site ? site.id : '', name: bdDefaultName(file.name, site) };
+    });
+    renderBulkDrawings();
+    bulkDrawingModal.style.display = 'flex';
+  }
+
+  function renderBulkDrawings(){
+    const facs = sites.filter(s => s.projectId === currentProjectId);
+    bdList.innerHTML = '';
+    bdRows.forEach((row, idx)=>{
+      const wrap = document.createElement('div');
+      wrap.className = 'dm-row';
+      wrap.style.flexWrap = 'wrap';
+      const fn = document.createElement('div');
+      fn.style.cssText = 'flex:1 1 200px; min-width:0; font-size:12px; word-break:break-all;';
+      fn.textContent = '📄 ' + row.file.name + ' (' + Math.max(1, Math.round(row.file.size / 1024)) + 'KB)';
+      const sel = document.createElement('select');
+      sel.className = 'dm-name'; sel.style.cssText += ';flex:1 1 180px;';
+      const o0 = document.createElement('option'); o0.value = ''; o0.textContent = '— 배정 안 함 —'; sel.appendChild(o0);
+      facs.forEach(f=>{ const o = document.createElement('option'); o.value = f.id; o.textContent = f.name; sel.appendChild(o); });
+      sel.value = row.siteId;
+      const nm = document.createElement('input');
+      nm.type = 'text'; nm.className = 'dm-name'; nm.style.flex = '1 1 140px'; nm.placeholder = '도면 이름'; nm.value = row.name;
+      sel.addEventListener('change', ()=>{
+        const prev = facs.find(f => f.id === row.siteId);
+        row.siteId = sel.value;
+        const site = facs.find(f => f.id === row.siteId);
+        // 이름을 직접 바꾸지 않았다면(자동으로 만든 이름 그대로면) 새 시설물 기준으로 다시 만든다
+        if(!row.nameEdited){ row.name = bdDefaultName(row.file.name, site); nm.value = row.name; }
+        updateBdSummary();
+      });
+      nm.addEventListener('input', ()=>{ row.name = nm.value; row.nameEdited = true; });
+      const rm = document.createElement('button');
+      rm.className = 'ghost'; rm.textContent = '✕'; rm.title = '이 파일 빼기';
+      rm.addEventListener('click', ()=>{ bdRows.splice(idx, 1); renderBulkDrawings(); });
+      wrap.appendChild(fn); wrap.appendChild(sel); wrap.appendChild(nm); wrap.appendChild(rm);
+      bdList.appendChild(wrap);
+    });
+    updateBdSummary();
+  }
+  function updateBdSummary(){
+    const ok = bdRows.filter(r => r.siteId).length;
+    bdSummary.textContent = '파일 ' + bdRows.length + '개 중 ' + ok + '개 등록 예정' + (bdRows.length - ok ? ' · 배정 안 함 ' + (bdRows.length - ok) + '개' : '');
+    document.getElementById('bdRun').disabled = ok === 0;
+  }
+
+  const btnBulkDrawingsEl = document.getElementById('btnBulkDrawings');
+  if(btnBulkDrawingsEl) btnBulkDrawingsEl.addEventListener('click', ()=>{
+    if(sites.filter(s => s.projectId === currentProjectId).length === 0){ alert('이 프로젝트에 시설물이 없습니다. 먼저 시설물을 만들어 주세요.'); return; }
+    bulkDrawingInput.click();
+  });
+  bulkDrawingInput.addEventListener('change', ()=>{
+    const files = Array.from(bulkDrawingInput.files || []).filter(f => f.type === 'application/pdf' || f.type.startsWith('image/') || /\.pdf$/i.test(f.name));
+    bulkDrawingInput.value = '';
+    if(files.length === 0) return;
+    openBulkDrawings(files);
+  });
+  function closeBulkDrawings(){ bulkDrawingModal.style.display = 'none'; bdRows = []; }
+  document.getElementById('closeBulkDrawing').addEventListener('click', closeBulkDrawings);
+  document.getElementById('bdCancel').addEventListener('click', closeBulkDrawings);
+  document.getElementById('bdRun').addEventListener('click', async ()=>{
+    const runBtn = document.getElementById('bdRun');
+    if(runBtn.disabled) return;
+    const todo = bdRows.filter(r => r.siteId);
+    if(todo.length === 0) return;
+    runBtn.disabled = true;
+    const bySite = new Map();
+    todo.forEach(r => { if(!bySite.has(r.siteId)) bySite.set(r.siteId, []); bySite.get(r.siteId).push(r); });
+    const startSiteId = currentSiteId;
+    let done = 0, failed = 0;
+    try{
+      for(const [siteId, rows] of bySite){
+        const site = sites.find(x => x.id === siteId);
+        if(!site) continue;
+        if(site.id !== currentSiteId){
+          commitLiveToCurrentSite();
+          await loadSite(site);
+        }
+        for(const r of rows){
+          runBtn.textContent = '등록 중 ' + (done + 1) + '/' + todo.length;
+          const before = (drawings || []).length;
+          try{ await importDroppedDrawingFile(r.file, { noPrompt: true, name: (r.name || '').trim() }); }catch(e){ console.warn('도면 일괄 등록 실패', r.file.name, e); }
+          if((drawings || []).length > before) done++; else failed++;
+        }
+        afterDrawingsImported();
+      }
+      // 원래 보던 시설물로 돌아간다
+      const back = sites.find(x => x.id === startSiteId);
+      if(back && back.id !== currentSiteId){ commitLiveToCurrentSite(); await loadSite(back); }
+      saveState();
+    }finally{
+      runBtn.textContent = '등록';
+      runBtn.disabled = false;
+    }
+    closeBulkDrawings();
+    renderSiteList();
+    alert('도면 ' + done + '건을 등록했습니다.' + (failed ? '\n(불러오지 못한 파일 ' + failed + '개 — 이미지·PDF가 맞는지 확인해 주세요)' : ''));
+  });
 
   // ── 도면 관리창 — 이름 바꾸기 · 순서 · 삭제 · 여러 장 추가 (예전의 번호 입력창 대체) ──
   const drawingMgrModal = document.getElementById('drawingMgrModal');
