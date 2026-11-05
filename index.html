@@ -2494,6 +2494,7 @@
   #btnResetImage, #btnToggleExplorer, #btnToggleWideMode{ display:none !important; }
   /* 탐색기에 같은 기능이 있어 겹치는 상단 버튼, 그리고 PC에서 쓰지 않는 기록목록 필터(🔍) */
   #btnProjectSwitch, #btnNewSite, #btnSiteList, #btnToggleLogFilter{ display:none !important; }
+  body.pc-explorer-docked #mmSiteList{ display:none !important; }
   #btnDashboardQuick{ margin-left:6px; white-space:nowrap; }
   #btnToggleInspector{ order:3 !important; margin-left:0; }   /* 접기(▶) 버튼은 제목 줄 오른쪽 끝으로 */
   .side-head{ flex-wrap:wrap; align-items:center; justify-content:flex-start; gap:6px 8px; letter-spacing:0; }
@@ -3484,7 +3485,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v156';
+  const PS_BUILD = 'v157';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -5023,7 +5024,8 @@
       }
       return !usedRefs.has(k);
     });
-    return { orphanKeys, usedCount: usedRefs.size, totalBlobs: allPhotoKeys.length };
+    return { orphanKeys, usedCount: usedRefs.size, totalBlobs: allPhotoKeys.length,
+      photoCount: allPhotoKeys.filter(k => !(typeof k === 'string' && k.indexOf('drawing:') === 0)).length };
   }
 
   // ---------- 앱 재실행 복구 및 저장소 무결성 진단 도구 ----------
@@ -10564,6 +10566,29 @@
     }
   }
 
+  // 예전 버전에서 "위치 없이 보관"한 사진(site.unassignedPhotos)을 위치 미지정 지점으로 옮긴다 — 한 번만 일어난다.
+  function migrateUnassignedPhotos(site){
+    try{
+      const list = site && site.unassignedPhotos;
+      if(!Array.isArray(list) || list.length === 0) return false;
+      list.forEach(ph=>{
+        if(!ph) return;
+        markers.push({
+          id: 'm' + Date.now() + Math.random().toString(36).slice(2,6),
+          num: nextNum++,
+          photos: [ph],
+          createdAt: ph.createdAt || new Date().toISOString(),
+          createdBy: (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null,
+          gps: null,
+          locationSource: 'unlocated',
+          locationHistory: []
+        });
+      });
+      site.unassignedPhotos = [];
+      return true;
+    }catch(e){ console.warn('위치 없이 보관한 사진 옮기기 실패(무시)', e); return false; }
+  }
+
   async function loadSite(site){
     // 다른 시설물로 넘어가기 직전, 방금까지 보던 시설물의 사진 원본(base64, 장당
     // 수백KB~수MB)을 메모리에서 내려놓는다. 사진은 이미 photoBlobs 스토어에
@@ -10606,6 +10631,7 @@
     activityLog = site.activityLog || [];
     trackLog = site.trackLog || [];
     markers.forEach(normalizePhotos);
+    if(migrateUnassignedPhotos(site)){ markers.forEach(normalizePhotos); setTimeout(()=>{ try{ renderMarkers(); renderLog(); updateCounts(); saveState(); }catch(e){} }, 0); }
 
     // [Durable Store 복구] IndexedDB inspectionPoints에서 최신/누락 마커 안전 복구
     await restoreInspectionPointsFromDurableStore(site.id);
@@ -13652,6 +13678,10 @@
       return;
     }
 
+    // 같은 이름이 이미 있으면 한 번 확인한다(여러 개 추가는 같은 이름을 건너뛰므로 하나씩 만들 때도 같은 기준으로 알려 준다)
+    if(sites.some(x => x.projectId === currentProjectId && x.name === fmName.value.trim())){
+      if(!await psConfirm('이 프로젝트에 같은 이름의 시설물이 이미 있습니다.\n그래도 새로 만들까요?')) return;
+    }
     commitLiveToCurrentSite();
     const site = {
       id: genId(),
@@ -13958,7 +13988,9 @@
       siteListBody.appendChild(empty);
       return;
     }
-    filtered.slice().sort((a,b)=> new Date(b.savedAt||0) - new Date(a.savedAt||0)).forEach(site=>{
+    // 저장할 때마다 순서가 바뀌면 시설물이 많을수록 찾기 어렵다 — 이름순(숫자는 크기대로: 2 < 10)으로 고정한다.
+    const _nameCollator = new Intl.Collator('ko', { numeric: true, sensitivity: 'base' });
+    filtered.slice().sort((a,b)=> _nameCollator.compare(a.name || '', b.name || '')).forEach(site=>{
       const isActive = site.id === currentSiteId;
       const status = computeFacilityStatus(site);
       const siteMarkers = (isActive ? markers : (site.markers || []));
@@ -14173,6 +14205,7 @@
     }
     renderProjectHeader();
     applyProjectRoleGate();
+    try{ renderSiteList(); }catch(e){}   // PC 탐색기(시설물 목록)가 이전 프로젝트의 시설물을 계속 보여 주지 않게
     saveState();
   }
 
@@ -14906,6 +14939,9 @@
     };
     stampProjectCreator(project);
     projects.push(project);
+    // 처음 실행 때 자동으로 만들어진 "기본 프로젝트"가 시설물도 정보도 없이 비어 있으면 치운다(목록이 어지러워지지 않게)
+    projects = projects.filter(pr => !(pr !== project && pr.name === DEFAULT_PROJECT_NAME && !pr.organizationId && !pr.cloudSyncedAt && !pr.client && !pr.inspector
+      && !sites.some(st => st.projectId === pr.id) && !deletedSites.some(d => d.originalProjectId === pr.id)));
     switchToProject(project.id);
     renderProjectList();
     const thenFacility = document.getElementById('npThenFacility').checked;
@@ -16670,9 +16706,9 @@
       alert('고아 사진을 확인하는 중 오류가 발생했습니다: ' + (e && e.message || e));
       return;
     }
-    const { orphanKeys, totalBlobs } = result;
+    const { orphanKeys, totalBlobs, photoCount } = result;
     if(!orphanKeys || orphanKeys.length === 0){
-      alert('정리할 고아 사진이 없습니다. (전체 저장된 사진 ' + totalBlobs + '장 모두 지점 또는 휴지통에 연결되어 있습니다)');
+      alert('정리할 고아 사진이 없습니다. (저장된 사진 ' + (photoCount != null ? photoCount : totalBlobs) + '장 모두 지점 또는 휴지통에 연결되어 있습니다)');
       return;
     }
     let totalBytes = 0;
@@ -16921,6 +16957,7 @@
     const remaining = noGpsQueue.filter(x=>!x.resolved);
     if(remaining.length === 0){
       noGpsBody.innerHTML = '<div class="log-empty">모두 처리되었습니다.</div>';
+      setTimeout(()=>{ if(noGpsQueue.every(x => x.resolved)) noGpsModal.style.display = 'none'; }, 900);
       return;
     }
     noGpsBody.innerHTML = '';
@@ -16969,8 +17006,13 @@
       skipBtn.addEventListener('click', ()=>{
         item.resolved = true;
         item.skipped = true;
-        if(!currentSiteUnassigned()) initUnassignedForSite();
-        siteUnassignedPhotos().push(item.photo);
+        // 예전에는 보이지 않는 보관함(unassignedPhotos)에 넣어 다시 볼 방법이 없었다.
+        // 이제는 위치만 없는 "지점"으로 만든다 — 기록 목록에 나오고, 상세에서 손상 입력·"위치 이동"으로 도면에 배치할 수 있다.
+        const um = newMarkerBase({}, 'unlocated');
+        um.photos.push(item.photo);
+        markers.push(um);
+        renderMarkers(); renderMapMarkers(); renderLog(); updateCounts();
+        logActivity('사진을 위치 없이 보관', '지점 ' + um.num + ' (위치 미지정)');
         renderNoGpsQueue();
         saveState();
       });
@@ -17322,6 +17364,19 @@
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   }
 
+  // 조사완료 처리한 시설물에 지점을 더하면 "완료 후 수정됨"이 된다 — 실수로 눌러 생긴 빈 지점이 남지 않도록 시설물마다 한 번만 묻는다.
+  const reopenAsked = new Set();
+  function needsReopenConfirm(){
+    const st = currentSiteObj();
+    return !!(st && st.status === '조사완료' && !reopenAsked.has(st.id));
+  }
+  function askReopenThen(fn){
+    const st = currentSiteObj();
+    psConfirm('이 시설물은 "조사완료"로 처리되어 있습니다.\n\n새 지점을 추가하면 "완료 후 수정됨"으로 바뀌어 다시 확인이 필요합니다.\n계속 추가할까요?').then(ok=>{
+      if(ok && st){ reopenAsked.add(st.id); fn(); }
+    });
+  }
+
   function newMarkerBase(coordFields, locationSource){
     return Object.assign({
       id: 'm' + Date.now() + Math.random().toString(36).slice(2,5),
@@ -17531,12 +17586,17 @@
     if(!m) return;
     movingMarkerId = markerId;
     previewModal.style.display = 'none';
+    let _unlocated = false;
     if(m.xPct != null){
       if(currentMode !== 'image') switchMode('image');
     } else if(m.lat != null){
       if(currentMode !== 'map') switchMode('map');
+    } else if(baseImageSrc){
+      // 위치가 아직 없는 지점("위치 없이 보관"한 사진 등)은 도면 위에 배치하는 것이 기본이다
+      _unlocated = true;
+      if(currentMode !== 'image') switchMode('image');
     }
-    moveBannerText.textContent = '이동할 새 위치를 눌러주세요';
+    moveBannerText.textContent = _unlocated ? '이 지점의 위치를 도면에서 눌러 정해주세요' : '이동할 새 위치를 눌러주세요';
     moveBanner.style.display = 'flex';
   }
 
@@ -17842,9 +17902,13 @@
       cancelMoveMode();
       return;
     }
-    const newImgMarker = newMarkerBase({ xPct, yPct, drawingId: currentDrawingId });
-    lastPointAction = { type:'create', markerId: newImgMarker.id };
-    commitNewMarker(newImgMarker);
+    const _createImgPoint = ()=>{
+      const newImgMarker = newMarkerBase({ xPct, yPct, drawingId: currentDrawingId });
+      lastPointAction = { type:'create', markerId: newImgMarker.id };
+      commitNewMarker(newImgMarker);
+    };
+    if(needsReopenConfirm()){ askReopenThen(_createImgPoint); return; }
+    _createImgPoint();
   }
 
   // ---------- 조사자별 색상 구분 ----------
@@ -18180,7 +18244,9 @@
     }
 
     const baseNameInput = file.name.replace(/\.[^/.]+$/, '').trim();
-    const defaultName = baseNameInput || ('도면 ' + (drawings.length + 1));
+    // 파일 이름에 시설물 이름이 들어 있으면(예: "61.820k 옹벽_정면도") 도면 이름에서는 뗀다 — 탭이 길어지지 않게(일괄 등록과 같은 규칙)
+    const _strippedName = baseNameInput ? bdDefaultName(file.name, currentSiteObj()) : '';
+    const defaultName = _strippedName || baseNameInput || ('도면 ' + (drawings.length + 1));
     // 드래그앤드롭으로 여러 장을 한 번에 끌어다 놓으면 파일마다 prompt()가 뜨는데,
     // 브라우저가 (반복된 팝업 등의 이유로) prompt 자체를 막아 예외를 던지는 경우가
     // 있을 수 있다 — 그런 경우에도 파일명 기반 기본 이름으로 조용히 계속 진행한다.
@@ -18550,9 +18616,13 @@
 
   btnAddAtGps.addEventListener('click', ()=>{
     if(!lastGps){ alert('아직 GPS 위치를 확인하지 못했습니다. 잠시 후 다시 시도해주세요.'); return; }
-    const marker = newMarkerBase({ lat: lastGps.lat, lng: lastGps.lng }, 'device-gps');
-    lastPointAction = { type:'create', markerId: marker.id };
-    commitNewMarker(marker);
+    const _createGpsPoint = ()=>{
+      const marker = newMarkerBase({ lat: lastGps.lat, lng: lastGps.lng }, 'device-gps');
+      lastPointAction = { type:'create', markerId: marker.id };
+      commitNewMarker(marker);
+    };
+    if(needsReopenConfirm()){ askReopenThen(_createGpsPoint); return; }
+    _createGpsPoint();
   });
 
   btnRecenterMap.addEventListener('click', ()=>{
@@ -18897,6 +18967,11 @@
       timeEl.textContent = posTxt;
       timeEl.classList.add('pos');
       timeEl.title = '위치 ' + posTxt + (timeTxt ? ' · 촬영 ' + timeTxt : '');
+    } else if(m.xPct == null && m.lat == null){
+      timeEl.textContent = '위치 미지정';
+      timeEl.classList.add('pos');
+      timeEl.style.color = '#e67e22';
+      timeEl.title = '위치가 정해지지 않은 지점 — 상세에서 "위치 이동"으로 도면에 배치하세요' + (timeTxt ? ' · 촬영 ' + timeTxt : '');
     } else {
       timeEl.textContent = timeTxt;
     }
@@ -19374,7 +19449,10 @@
   function cameraErrorMessage(err){
     const name = err && err.name;
     if(name === 'NotAllowedError' || name === 'PermissionDeniedError'){
-      return '카메라 권한이 차단되어 있습니다. iPhone 설정에서 카메라 권한을 확인해주세요.';
+      const ua = navigator.userAgent || '';
+      if(/iPhone|iPad|iPod/i.test(ua)) return '카메라 권한이 차단되어 있습니다. iPhone 설정에서 카메라 권한을 확인해주세요.';
+      if(/Android/i.test(ua)) return '카메라 권한이 차단되어 있습니다. 휴대폰 설정 → 앱(브라우저) → 권한에서 카메라를 허용해주세요.';
+      return '카메라를 쓸 수 없습니다. 주소창 왼쪽의 사이트 설정에서 카메라를 허용하거나, 카메라가 없으면 아래 "사진첩에서 선택"으로 사진 파일을 올려주세요.';
     }
     if(name === 'NotFoundError' || name === 'DevicesNotFoundError'){
       return '사용 가능한 카메라를 찾을 수 없습니다.';
@@ -22013,7 +22091,8 @@
 
       psProgress.set(0, '압축하는 중');
       const blob = await zip.generateAsync({type:'blob'}, (meta)=>{ psProgress.set(meta.percent, '압축하는 중'); });
-      await psProgress.deliver(blob, 'PeachShot_기록.zip');
+      const _zipSite = currentSiteName() || '기록';
+      await psProgress.deliver(blob, 'PeachShot_' + _zipSite.replace(/[\\/:*?"<>|]/g, '_') + '_사진.zip');
     }catch(e){
       psProgress.fail('ZIP을 만들지 못했습니다.');
       alert('내보내기 중 오류가 발생했습니다.');
