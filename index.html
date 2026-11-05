@@ -3325,7 +3325,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v139';
+  const PS_BUILD = 'v140';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -6311,6 +6311,19 @@
         }
       }
 
+      // 내가 만든 조직인데 내 멤버 행이 없으면(예전 오류로 조직만 만들어진 경우) 관리자로 등록해 준다.
+      // 서버 규칙상 조직 소유자는 자기 자신의 행을 넣을 수 있다. 실패해도 조용히 넘어간다.
+      try{
+        const haveRow = new Set((myMemberships || []).map(m => m.organization_id));
+        for(const o of (ownedOrgs || [])){
+          if(!haveRow.has(o.id)){
+            const { error: healErr } = await supabaseClient.from('organization_members')
+              .insert({ organization_id: o.id, user_id: u.id, email: u.email, role:'Admin', status:'active' });
+            if(healErr) console.warn('조직 관리자 등록 보정 실패(무시)', healErr);
+          }
+        }
+      }catch(e){ console.warn('조직 관리자 등록 보정 예외(무시)', e); }
+
       myOrganizations = orgList.sort((a,b)=> new Date(a.created_at || 0) - new Date(b.created_at || 0));
       myRoleByOrg = {};
 
@@ -6343,14 +6356,18 @@
     if(!supabaseClient || !supabaseSession) return { ok:false, reason:'로그인이 필요합니다.' };
     try{
       const u = supabaseSession.user;
-      const orgId = 'org_' + generateSecureToken(12);
+      // 조직 id 는 DB가 정하는 uuid 를 쓴다(예전처럼 'org_…' 문자열을 보내면 DB가 거부한다).
       const { data: org, error } = await supabaseClient.from('organizations')
-        .insert({ id: orgId, name: name.trim(), owner_user_id: u.id }).select().single();
+        .insert({ name: name.trim(), owner_user_id: u.id }).select().single();
       if(error) throw error;
 
+      // 만든 사람은 DB가 허용하는 역할 중 최상위인 'Admin' 으로 등록한다(Owner 는 DB 허용 역할이 아니다).
       const { error: memErr } = await supabaseClient.from('organization_members')
-        .insert({ organization_id: org.id, user_id: u.id, email: u.email, role:'Owner', status:'active' });
-      if(memErr && !memErr.message.includes('duplicate')) console.warn('멤버십 자동 생성 알림', memErr);
+        .insert({ organization_id: org.id, user_id: u.id, email: u.email, role:'Admin', status:'active' });
+      if(memErr && !String(memErr.message || '').includes('duplicate')){
+        console.warn('멤버십 자동 생성 실패', memErr);
+        return { ok:false, reason:'조직은 만들어졌지만 관리자 등록에 실패했습니다: ' + (memErr.message || '알 수 없는 오류') };
+      }
 
       setActiveOrganization(org.id);
       await loadMyOrganizations();
@@ -6395,10 +6412,15 @@
         }
       }
 
-      const { error } = await supabaseClient.from('organization_members')
-        .update({ status:'revoked' })
-        .eq('id', memberId).eq('organization_id', organizationId);
+      // DB 의 status 는 invited/active 만 허용하므로 'revoked' 로 바꿀 수 없다 — 행을 삭제한다.
+      // 삭제된 행이 0개이면(권한 없음 등) 성공으로 처리하지 않는다.
+      const { data: delRows, error } = await supabaseClient.from('organization_members')
+        .delete()
+        .eq('id', memberId).eq('organization_id', organizationId).select('id');
       if(error) throw error;
+      if(!delRows || delRows.length === 0){
+        return { ok:false, reason:'제외되지 않았습니다. 이 계정에 팀원을 제외할 권한이 없거나 서버 설정이 아직 반영되지 않았습니다.' };
+      }
 
       await loadMyOrganizations();
       return { ok:true, message:'멤버가 조직에서 제외되었습니다.' };
@@ -6657,9 +6679,18 @@
   async function fetchOrganizationInvitations(organizationId){
     if(!supabaseClient || !supabaseSession) return [];
     try{
-      const { data, error } = await supabaseClient.from('organization_invitations')
-        .select('id, organization_id, role, target_email, created_at, expires_at, used_at, revoked_at, max_uses, use_count')
-        .eq('organization_id', organizationId).order('created_at', { ascending:false });
+      // 초대 목록은 서버 함수(list_org_invitations)로 읽는다. 아직 서버에 없으면 예전 방식으로 시도한다.
+      let data = null, error = null;
+      if(!window.__psNoListInvRpc){
+        const r = await supabaseClient.rpc('list_org_invitations', { p_organization_id: organizationId });
+        if(r.error){ window.__psNoListInvRpc = true; } else { data = r.data; }
+      }
+      if(data === null){
+        const r2 = await supabaseClient.from('organization_invitations')
+          .select('id, organization_id, role, target_email, created_at, expires_at, used_at, revoked_at, max_uses, use_count')
+          .eq('organization_id', organizationId).order('created_at', { ascending:false });
+        data = r2.data; error = r2.error;
+      }
       if(error) throw error;
       const now = new Date();
       return (data || []).map(inv => {
@@ -7867,18 +7898,35 @@
           createLinkBtn.textContent = '초대 링크 생성 및 복사';
 
           createLinkBtn.addEventListener('click', async ()=>{
+            if(createLinkBtn.disabled) return;
+            const emailVal = targetEmailInput.value.trim();
+            // 서버가 초대받을 이메일을 반드시 요구한다(비워 두면 생성이 거부된다)
+            if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailVal)){ alert('초대할 사람의 이메일을 올바르게 입력해 주세요.'); targetEmailInput.focus(); return; }
             createLinkBtn.disabled = true;
             createLinkBtn.textContent = '생성 중…';
-            const res = await createOrganizationInvitation(org.id, roleSel.value, parseInt(expSel.value, 10), targetEmailInput.value.trim());
-            createLinkBtn.disabled = false;
-            createLinkBtn.textContent = '초대 링크 생성 및 복사';
+            let res;
+            try{
+              res = await createOrganizationInvitation(org.id, roleSel.value, parseInt(expSel.value, 10), emailVal);
+            }catch(e){
+              res = { ok:false, reason:(e && e.message) || String(e) };
+            }finally{
+              createLinkBtn.disabled = false;
+              createLinkBtn.textContent = '초대 링크 생성 및 복사';
+            }
             if(res.ok && res.inviteUrl){
+              // 일부 기기(아이폰 홈화면 앱 등)는 클립보드 쓰기가 응답 없이 멈출 수 있어 2초까지만 기다린다.
+              let copied = false;
               try{
-                await navigator.clipboard.writeText(res.inviteUrl);
-                alert('🎉 초대 링크가 생성되어 클립보드에 복사되었습니다!\n\n링크:\n' + res.inviteUrl + '\n\n초대 대상자에게 링크를 공유하세요.');
-              }catch(e){
-                prompt('초대 링크가 생성되었습니다. 아래 링크를 복사하세요:', res.inviteUrl);
-              }
+                if(navigator.clipboard && navigator.clipboard.writeText){
+                  await Promise.race([
+                    navigator.clipboard.writeText(res.inviteUrl),
+                    new Promise((_, rej) => setTimeout(() => rej(new Error('clipboard timeout')), 2000))
+                  ]);
+                  copied = true;
+                }
+              }catch(e){ copied = false; }
+              if(copied) alert('🎉 초대 링크가 생성되어 클립보드에 복사되었습니다!\n\n링크:\n' + res.inviteUrl + '\n\n초대 대상자에게 링크를 공유하세요.');
+              else alert('초대 링크가 생성되었습니다. 자동 복사는 되지 않았으니 아래 링크를 길게 눌러 복사해 주세요.\n\n' + res.inviteUrl);
               targetEmailInput.value = '';
               renderCloudSyncBody();
             } else {
