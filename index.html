@@ -3325,7 +3325,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v141';
+  const PS_BUILD = 'v142';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -7804,6 +7804,38 @@
             renderProjectList();
           });
           headRow.appendChild(selectBtn);
+        }
+        // 조직 삭제 — 조직을 만든 사람(소유자)에게만 보이고, 프로젝트가 남아 있으면 서버가 거부한다.
+        if(org.owner_user_id && supabaseSession && org.owner_user_id === supabaseSession.user.id){
+          const delOrgBtn = document.createElement('button');
+          delOrgBtn.className = 'card-btn danger';
+          delOrgBtn.style.cssText = 'padding:2px 6px; font-size:11px; margin-left:6px;';
+          delOrgBtn.textContent = '조직 삭제';
+          delOrgBtn.addEventListener('click', async ()=>{
+            if(delOrgBtn.disabled) return;
+            if(!await psConfirm('"' + org.name + '" 조직을 삭제할까요?\n\n팀원 목록과 초대 내역이 함께 삭제되며 되돌릴 수 없습니다.\n(이 조직에 프로젝트가 남아 있으면 삭제되지 않습니다.)', { level:'danger' })) return;
+            delOrgBtn.disabled = true;
+            try{
+              const { error: dErr } = await supabaseClient.rpc('delete_organization', { p_organization_id: org.id });
+              if(dErr){
+                const m = String(dErr.message || '');
+                if(m.includes('still has projects')) alert('이 조직에 프로젝트가 남아 있어 삭제할 수 없습니다.\n프로젝트를 먼저 삭제하거나 개인 프로젝트로 옮긴 뒤 다시 시도해 주세요.');
+                else if(m.includes('Only the organization owner')) alert('조직을 만든 사람만 삭제할 수 있습니다.');
+                else alert('조직 삭제 실패: ' + m);
+                delOrgBtn.disabled = false;
+                return;
+              }
+              if(activeOrganizationId === org.id) setActiveOrganization(null);
+              await loadMyOrganizations();
+              alert('조직이 삭제되었습니다.');
+              renderCloudSyncBody();
+              renderProjectList();
+            }catch(e){
+              alert('조직 삭제 중 오류가 발생했습니다: ' + ((e && e.message) || e));
+              delOrgBtn.disabled = false;
+            }
+          });
+          headRow.appendChild(delOrgBtn);
         }
         orgBox.appendChild(headRow);
 
