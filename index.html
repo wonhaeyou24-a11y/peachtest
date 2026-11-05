@@ -2463,6 +2463,36 @@
 .prep-chip.warn{color:#e67e22; border-color:#e67e22;}
 .pc-only-hint{display:none; margin-top:8px; font-size:12px; color:var(--sub);}
 @media (min-width: 880px){ .pc-only-hint{display:block;} }
+
+/* 시설물 목록(탐색기) 위쪽 도구줄 */
+.site-tools{margin-bottom:10px;}
+.site-tools .site-search-input{margin-bottom:8px;}
+.site-tools-btns{display:flex; gap:6px;}
+.site-tools-btns button{flex:1 1 0; min-width:0; white-space:nowrap; padding:8px 4px; font-size:13px; justify-content:center;}
+.site-tools-btns .primary{flex:1.25 1 0;}
+#siteModal .modal-body{overflow-x:hidden;}
+/* 시설물 카드(탐색기) — 정보를 줄별로 나눠 읽기 쉽게 */
+.fc-stats{font-size:12px; color:var(--text); margin-top:2px;}
+.fc-date{font-size:11px; color:var(--sub); margin-top:1px;}
+
+/* 휴지통 창 — 긴 안내글 때문에 "완전삭제" 버튼이 화면 밖으로 밀리고 창이 옆으로 움직이던 문제:
+   줄이 넘치면 버튼을 아래줄로 내리고, 옆으로 넘치거나 끌리지 않게 막는다 */
+#trashModal .modal-body{ overflow-x:hidden; touch-action:pan-y; overscroll-behavior:contain; }
+#trashModal .audit-row{ flex-wrap:wrap; gap:6px 8px; }
+#trashModal .audit-row > span{ flex:1 1 180px; min-width:0; overflow-wrap:anywhere; line-height:1.45; }
+#trashModal .audit-row > div{ flex:none; margin-left:auto; }
+#trashModal h3{ min-width:0; }
+
+/* PC: 상단 줄에서 쓰지 않는 버튼 숨김 + 기록목록 머리 정리 */
+@media (min-width: 880px){
+  #btnResetImage, #btnToggleExplorer, #btnToggleWideMode{ display:none !important; }
+  .side-head{ flex-wrap:wrap; align-items:center; gap:6px 8px; letter-spacing:0; }
+  .side-head > span:first-child{ display:contents !important; }   /* 안쪽 style=display:flex 보다 우선 */
+  .side-head .side-title{ order:1; white-space:nowrap; font-size:13px; font-weight:700; color:var(--text); flex:1 1 auto; }
+  .side-head #sideCount{ order:2; white-space:nowrap; flex:none; font-size:12px; }
+  .side-head::before{ content:''; order:3; flex:0 0 100%; height:0; }
+  .side-head .icon-btn{ order:4; white-space:nowrap; padding:4px 10px !important; font-size:12px !important; border-radius:999px; line-height:1.3; }
+}
 </style>
 </head>
 
@@ -2780,11 +2810,13 @@
       <button class="close-x" id="closeSiteModal" aria-label="닫기">✕</button>
     </div>
     <div class="modal-body">
-      <div style="display:flex; gap:8px; margin-bottom:10px;">
-        <input type="text" id="siteSearch" placeholder="시설물 이름 검색…" class="site-search-input" style="flex:1;">
-        <button class="primary" id="btnNewSiteInList" style="flex-shrink:0;">＋ 시설물</button>
-        <button class="ghost" id="btnBatchSites" style="flex-shrink:0;" title="시설물 이름을 여러 줄로 붙여넣어 한 번에 만들기">여러 개</button>
-        <button class="ghost" id="btnBulkDrawings" style="flex-shrink:0;" title="도면 파일 여러 개를 파일 이름으로 시설물에 자동 배정해 한 번에 등록">도면 일괄</button>
+      <div class="site-tools">
+        <input type="text" id="siteSearch" placeholder="시설물 이름 검색…" class="site-search-input">
+        <div class="site-tools-btns">
+          <button class="primary" id="btnNewSiteInList">＋ 시설물</button>
+          <button class="ghost" id="btnBatchSites" title="시설물 이름을 여러 줄로 붙여넣어 한 번에 만들기">여러 개</button>
+          <button class="ghost" id="btnBulkDrawings" title="도면 파일 여러 개를 파일 이름으로 시설물에 자동 배정해 한 번에 등록">도면 일괄</button>
+        </div>
       </div>
       <div id="siteListBody"></div>
     </div>
@@ -3441,7 +3473,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v152';
+  const PS_BUILD = 'v153';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -13935,14 +13967,19 @@
       metaRow.className = 'fc-meta card-meta-row';
       const dwCount = siteDrawingCount(site);
       const edCount = (site.existingDamages || []).filter(e => e && !e.isDeleted).length;
-      metaRow.textContent = '유형: ' + (site.facilityType || '종류 미정') + (site.facilityForm ? ' (' + site.facilityForm + ')' : '') +
-        ' · 도면 ' + dwCount + '장 · 기존손상 ' + edCount + '건 · 지점 ' + pCount + '개' + (dateStr ? ' · ' + dateStr : '');
+      metaRow.textContent = '유형: ' + (site.facilityType || '종류 미정') + (site.facilityForm ? ' (' + site.facilityForm + ')' : '');
+      const statsRow = document.createElement('div');
+      statsRow.className = 'fc-stats';
+      statsRow.textContent = '도면 ' + dwCount + '장 · 기존손상 ' + edCount + '건 · 지점 ' + pCount + '개';
       if(dwCount === 0){
         const chip = document.createElement('span');
         chip.className = 'prep-chip warn';
         chip.textContent = '도면 없음';
-        metaRow.appendChild(chip);
+        statsRow.appendChild(chip);
       }
+      const dateRow = document.createElement('div');
+      dateRow.className = 'fc-date';
+      dateRow.textContent = dateStr ? '저장 ' + dateStr : '';
 
       // 버튼들이 오른쪽에만 몰려있고(justify-content:flex-end) 줄 자체는 카드
       // 전체 폭을 차지한다 — 예전엔 이 줄 전체에 클릭 차단을 걸어서, 버튼이 없는
@@ -14013,6 +14050,8 @@
 
       card.appendChild(headerRow);
       card.appendChild(metaRow);
+      card.appendChild(statsRow);
+      if(dateStr) card.appendChild(dateRow);
       card.appendChild(actionsRow);
 
       // PC 도킹모드 조사지점 트리
