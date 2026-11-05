@@ -3500,7 +3500,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v159';
+  const PS_BUILD = 'v160';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -14088,7 +14088,7 @@
 
     const siteMarkers = (site.id === currentSiteId ? markers : (site.markers || []));
     if (!siteMarkers || siteMarkers.length === 0) {
-      const hasDrawings = (site.drawings && site.drawings.length > 0) || site.baseImageSrc;
+      const hasDrawings = (site.drawings && site.drawings.length > 0) || site.baseImageSrc || site.baseImageRef;
       return (hasDrawings || site.facilityType)
         ? { text: '준비완료', class: 'status-prepared' }
         : { text: '준비중', class: 'status-ready' };
@@ -14110,7 +14110,11 @@
   const expandedSiteIds = new Set();
 
   function siteDrawingCount(site){
-    return ((site.id === currentSiteId ? (drawings || []) : (site.drawings || [])).length) || (site.baseImageSrc ? 1 : 0);
+    const n = ((site.id === currentSiteId ? (drawings || []) : (site.drawings || [])).length);
+    if(n) return n;
+    // 아직 열어 보지 않은 예전 시설물은 도면이 "도면 배열"이 아니라 단일 이미지(baseImageSrc) 또는 기기 저장소 참조(baseImageRef)로만 남아 있다 —
+    // 그것도 도면 1장으로 센다(안 그러면 도면이 있는데 "도면 없음"으로 나온다).
+    return (site.baseImageSrc || site.baseImageRef) ? 1 : 0;
   }
   let siteListOnlyNoDrawing = false;
 
