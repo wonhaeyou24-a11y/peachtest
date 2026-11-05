@@ -3500,7 +3500,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v161';
+  const PS_BUILD = 'v162';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -6961,8 +6961,8 @@
       if(error){
         let reason = error.message || '초대 생성 실패';
         const msg = reason.toLowerCase();
-        if(msg.includes('permission') || msg.includes('admin') || msg.includes('권한')){
-          reason = '조직 초대 권한이 없습니다. (Admin만 가능)';
+        if(msg.includes('only the organization owner') || msg.includes('permission') || msg.includes('admin') || msg.includes('권한')){
+          reason = '초대 링크는 조직을 만든 사람만 만들 수 있습니다.';
         }
         return { ok:false, reason };
       }
