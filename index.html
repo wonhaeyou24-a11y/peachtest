@@ -3325,7 +3325,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v142';
+  const PS_BUILD = 'v143';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -5136,6 +5136,28 @@
 
   // ---------- persistence ----------
   function genId(){ return 's' + Date.now() + Math.random().toString(36).slice(2,6); }
+
+  // 시설물을 "사본"으로 만들 때(프로젝트 복사 · 백업 복원 · 휴지통 복원 등) 지점·기존손상의 번호표(id)를 새로 만든다.
+  // 클라우드는 지점/기존손상을 id 하나로만 구분하므로, 같은 id 를 그대로 올리면 원본 프로젝트의 지점이
+  // 사본 쪽으로 옮겨가 버린다(2026-11 고고 프로젝트 사례). 지점의 손상기록이 가리키는 기존손상 id 도 같이 바꾼다.
+  function renewSiteEntityIds(site){
+    if(!site) return site;
+    const edMap = new Map();
+    (site.existingDamages || []).forEach(ed=>{
+      if(!ed) return;
+      const nid = genId();
+      if(ed.id) edMap.set(ed.id, nid);
+      ed.id = nid;
+    });
+    (site.markers || []).forEach(m=>{
+      if(!m) return;
+      m.id = genId();
+      (m.damages || []).forEach(d=>{
+        if(d && d.existingDamageId && edMap.has(d.existingDamageId)) d.existingDamageId = edMap.get(d.existingDamageId);
+      });
+    });
+    return site;
+  }
 
   // ================================================================
   // 손상명 사용빈도 — AI 없이, 실제 선택 횟수만으로 "⭐ 자주 사용" 항목을 앞에 보여준다.
@@ -7544,10 +7566,7 @@
         // 사본(원래 프로젝트가 이 기기에 이미 있어 복제하는 경우)은 지점·기존손상 번호표(id)를 새로 만든다 —
         // 같은 id를 쓰면 클라우드에서 원본의 지점이 사본 쪽으로 옮겨가 버린다(동암중 사례).
         if(!keepOriginalIds){
-          newSites.forEach(s=>{
-            (s.markers || []).forEach(m => { m.id = genId(); });
-            (s.existingDamages || []).forEach(ed => { if(ed) ed.id = genId(); });
-          });
+          newSites.forEach(s=> renewSiteEntityIds(s));
         }
         newSites.forEach(s=>{
           const nums = (s.markers || []).map(m => m.num || 0);
@@ -14144,6 +14163,7 @@
       const clone = JSON.parse(JSON.stringify(s));
       clone.id = genId();
       clone.projectId = newProject.id;
+      renewSiteEntityIds(clone);   // 사본의 지점·기존손상은 새 번호표 — 같은 번호면 클라우드에서 원본 지점이 사본으로 옮겨간다
       clone.status = undefined; clone.completedAt = undefined; clone.completionSignature = undefined;
       (clone.markers || []).forEach(m=>{ (m.photos || []).forEach(p=>{ if(p.photoRef) delete p.photoRef; }); });
       return clone;
@@ -14490,6 +14510,8 @@
         delete site.type;
         site.id = genId();
         site.markers = (site.markers || []).map(m => Object.assign({}, m));
+        site.existingDamages = (site.existingDamages || []).map(ed => Object.assign({}, ed));
+        renewSiteEntityIds(site);   // 복원본은 새 번호표 — 원본 프로젝트가 클라우드에 있어도 지점이 옮겨가지 않는다
         site.markers.forEach(normalizePhotos);
         // 백업 파일은 사진 원본을 이미 그대로 담고 있으므로, 혹시 남아있을 수 있는
         // photoRef(다른 기기의 로컬 저장소를 가리키던 값)는 의미가 없어 제거한다.
@@ -15353,6 +15375,13 @@
   function restoreDeletedSite(item){
     const s = item.site;
     const targetProjectExists = projects.find(p => p.id === item.originalProjectId);
+    // 원래 프로젝트가 없어졌거나 같은 시설물이 이미 있으면 "다른 곳에 새로 놓는" 것이므로 새 번호표를 준다.
+    // 그대로 두면 클라우드에서 원래 프로젝트의 시설물·지점이 이쪽으로 옮겨간다(2026-11 고고 프로젝트 사례).
+    if(!targetProjectExists || sites.some(x => x.id === s.id)){
+      s.id = genId();
+      renewSiteEntityIds(s);
+      delete s.createdBy; delete s._pushBlocked; delete s.revision;
+    }
     if(targetProjectExists){
       s.projectId = item.originalProjectId;
     } else if(currentProjectId){
@@ -16372,6 +16401,8 @@
           site.drawings = data.drawings;
           site.currentDrawingId = data.currentDrawingId || data.drawings[0].id;
         }
+        site.markers = site.markers.map(m => Object.assign({}, m));
+        renewSiteEntityIds(site);   // 불러온 시설물은 새 시설물이므로 지점도 새 번호표
         site.markers.forEach(normalizePhotos);
         site.markers.forEach(m=>{
           (m.photos||[]).forEach(p=>{ if(p.photoRef && p.src) delete p.photoRef; if(p.src && typeof p.src==='string' && p.src.startsWith('data:')) delete p.blobExtracted; });
