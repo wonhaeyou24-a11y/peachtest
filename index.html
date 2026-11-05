@@ -3325,7 +3325,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v147';
+  const PS_BUILD = 'v148';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -6872,11 +6872,23 @@
   }
 
   let isProcessingPendingInvite = false;
+  async function clearInviteTokenFromAccount(){
+    try{
+      if(supabaseClient && supabaseSession && supabaseSession.user && supabaseSession.user.user_metadata && supabaseSession.user.user_metadata.invite_token){
+        await supabaseClient.auth.updateUser({ data: { invite_token: null } });
+      }
+    }catch(e){ console.warn('계정의 초대 정보 정리 실패(무시)', e); }
+  }
 
   async function checkAndProcessPendingInvite(){
     if(isProcessingPendingInvite) return;
     let pendingToken = null;
     try{ pendingToken = getPendingInvite(); }catch(e){}
+    let tokenFromAccount = false;
+    if((!pendingToken || !pendingToken.trim()) && supabaseSession && supabaseSession.user && supabaseSession.user.user_metadata){
+      const mt = supabaseSession.user.user_metadata.invite_token;
+      if(mt && String(mt).trim()){ pendingToken = String(mt).trim(); tokenFromAccount = true; }
+    }
     if(!pendingToken || !pendingToken.trim()) return;
 
     isProcessingPendingInvite = true;
@@ -6885,6 +6897,7 @@
       const check = await verifyInvitationToken(pendingToken);
       if(!check || !check.valid){
         clearPendingInvite();
+        if(supabaseSession) await clearInviteTokenFromAccount();
         window._pendingInviteInfo = null;
         alert(check ? check.reason : '유효하지 않거나 만료된 초대 링크입니다.');
         renderCloudSyncBody();
@@ -6911,6 +6924,7 @@
           pending_invite_deleted: true
         });
         clearPendingInvite();
+        await clearInviteTokenFromAccount();
         window._pendingInviteInfo = null;
         alert(`⚠️ 초대받은 이메일(${check.target_email})과 현재 로그인된 계정(${currentAuthEmail})이 일치하지 않습니다.\n초대받은 이메일 계정으로 다시 로그인해주세요.`);
         renderCloudSyncBody();
@@ -6921,6 +6935,7 @@
       const result = await acceptOrganizationInvitation(pendingToken, check.target_email);
       if(result.ok){
         clearPendingInvite();
+        await clearInviteTokenFromAccount();
         window._pendingInviteInfo = null;
         if(result.organization_id){
           setActiveOrganization(result.organization_id);
@@ -6933,6 +6948,7 @@
       } else {
         if(result.permanentFailure || (result.reason && (result.reason.includes('이메일') || result.reason.includes('만료') || result.reason.includes('취소') || result.reason.includes('유효하지')))){
           clearPendingInvite();
+          await clearInviteTokenFromAccount();
           window._pendingInviteInfo = null;
         }
         alert('초대 가입 안내: ' + (result.reason || '초대 수락 실패'));
@@ -7815,8 +7831,13 @@
         }
 
         statusMsg.textContent = '가입 처리 중…';
-        const { error } = await supabaseClient.auth.signUp({ email: inputEmail, password: pwInput.value });
-        statusMsg.textContent = error ? ('가입 실패: ' + error.message) : '가입 완료! 자동 로그인되거나 인증 메일이 발송되었습니다.';
+        let signUpOpts;
+        const _pendTok = getPendingInvite();
+        if(_pendTok) signUpOpts = { data: { invite_token: _pendTok } };   // 초대 링크로 들어온 가입이면 토큰을 계정에 함께 저장
+        const { error } = await supabaseClient.auth.signUp({ email: inputEmail, password: pwInput.value, options: signUpOpts });
+        statusMsg.textContent = error ? ('가입 실패: ' + error.message)
+          : (_pendTok ? '가입 완료! 인증 메일이 왔다면 메일의 링크로 인증한 뒤, 이 앱에서 로그인하면 자동으로 조직에 가입됩니다.'
+                      : '가입 완료! 자동 로그인되거나 인증 메일이 발송되었습니다.');
       });
       row.appendChild(signInBtn); row.appendChild(signUpBtn);
       cloudSyncBody.appendChild(hint);
