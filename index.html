@@ -3500,7 +3500,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v158';
+  const PS_BUILD = 'v159';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -6449,7 +6449,13 @@
   async function loadRoleCache(){
     try{
       const cached = await storageGet(ROLE_CACHE_KEY);
-      if(cached && typeof cached === 'object') myRoleByOrg = cached;
+      // 권한 캐시는 "누구의 권한인지"(uid)와 함께 저장한다. 같은 기기를 다른 사람이 쓰면 이전 사람의 권한(예: Admin)이
+      // 새 사람에게 보이던 문제가 있었다. 지금 로그인한 사람(또는 이 기기의 마지막 로그인 사람)의 것일 때만 쓰고,
+      // 이미 서버에서 받아온 권한이 있으면 덮어쓰지 않는다. (예전 형식의 캐시는 누구 것인지 몰라 버린다 — 로그인하면 다시 받아온다.)
+      if(cached && typeof cached === 'object' && cached.uid && cached.roles && typeof cached.roles === 'object'){
+        const uid = (supabaseSession && supabaseSession.user && supabaseSession.user.id) || ((psReadLastLogin() || {}).id);
+        if(uid && cached.uid === uid && Object.keys(myRoleByOrg).length === 0) myRoleByOrg = cached.roles;
+      }
     }catch(e){ /* 캐시 없으면 기본값으로 동작 */ }
     applyProjectRoleGate();
   }
@@ -6671,6 +6677,8 @@
         }
         if(!session){
           myOrganizations = [];
+          myRoleByOrg = {};   // 로그아웃하면 이전 사람의 권한이 화면에 남지 않게
+          try{ applyProjectRoleGate(); }catch(e){}
         }
         updateLoginGate();
         renderCloudSyncBody();
@@ -6795,7 +6803,9 @@
         .select('*').eq('owner_user_id', u.id);
 
       const memberOrgIds = (myMemberships || []).map(m => m.organization_id);
-      let orgList = ownedOrgs || [];
+      // 복사본으로 만든다 — 같은 배열을 쓰면 아래에서 "소속된 조직"을 넣을 때 "내가 만든 조직(ownedOrgs)"에도 같이 들어가,
+      // 소속만 된 팀원이 그 조직의 소유자(Owner=관리자)로 표시되고 초대·제외 버튼이 보이던 오류가 있었다.
+      let orgList = (ownedOrgs || []).slice();
 
       if(memberOrgIds.length > 0){
         const { data: memberOrgs } = await supabaseClient.from('organizations')
@@ -6840,7 +6850,7 @@
         }).catch(()=>{});
       }
 
-      try{ await storageSet(ROLE_CACHE_KEY, myRoleByOrg); }catch(e){}
+      try{ await storageSet(ROLE_CACHE_KEY, { uid: u.id, roles: myRoleByOrg }); }catch(e){}
       applyProjectRoleGate();
     }catch(e){
       console.warn('조직 목록 불러오기 실패(무시하고 계속)', e);
