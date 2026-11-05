@@ -3325,7 +3325,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v144';
+  const PS_BUILD = 'v145';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -6300,7 +6300,7 @@
       supabaseClient.auth.getSession().then(({ data })=>{
         supabaseSession = data && data.session;
         if(supabaseSession) onSignedIn();
-        else checkAndProcessPendingInvite();
+        else{ checkAndProcessPendingInvite(); maybePromptFirstRunLogin(); }
         renderCloudSyncBody();
       });
       supabaseClient.auth.onAuthStateChange((_event, session)=>{
@@ -6320,6 +6320,32 @@
       supabaseClient = null;
       return false;
     }
+  }
+
+  // 처음 실행(이 기기에 시설물이 하나도 없고, 로그인도 안 됨)이면 로그인 창을 한 번만 먼저 보여 준다 —
+  // 팀 초대를 받은 사람이 초대받은 이메일로 바로 로그인/가입할 수 있게 한다. 닫고 혼자 써도 되며 다시 묻지 않는다.
+  const FIRST_LOGIN_PROMPT_KEY = 'point-shot-first-login-prompt';
+  function maybePromptFirstRunLogin(){
+    try{
+      if(supabaseSession) return;
+      if(localStorage.getItem(FIRST_LOGIN_PROMPT_KEY)) return;
+      let hasInviteLink = false;
+      try{ hasInviteLink = !!sessionStorage.getItem(PENDING_INVITE_KEY); }catch(e){}
+      if(hasInviteLink) return;               // 초대 링크로 들어왔다면 그쪽 안내(환영 배너)가 대신 뜬다
+      if((sites || []).length > 0) return;    // 이미 쓰던 기기는 건드리지 않는다
+      localStorage.setItem(FIRST_LOGIN_PROMPT_KEY, String(Date.now()));
+      setTimeout(()=>{
+        if(supabaseSession || !cloudSyncBody) return;
+        renderCloudSyncBody();
+        const banner = document.createElement('div');
+        banner.style.cssText = 'background:rgba(255,107,53,0.12); border:1px solid var(--accent); border-radius:8px; padding:12px; margin-bottom:12px; font-size:13px; line-height:1.5;';
+        banner.innerHTML = '<div style="font-weight:700; color:var(--accent); margin-bottom:4px;">👋 처음 사용하시나요?</div>' +
+          '팀 초대를 받으셨다면 <strong>초대받은 이메일</strong>로 로그인하거나 가입하세요.<br>' +
+          '혼자 조사하실 거라면 오른쪽 위 ✕ 로 닫고 바로 시작하셔도 됩니다. (이 안내는 다시 나오지 않습니다)';
+        if(cloudSyncBody.firstChild) cloudSyncBody.insertBefore(banner, cloudSyncBody.firstChild); else cloudSyncBody.appendChild(banner);
+        cloudSyncModal.style.display = 'flex';
+      }, 600);
+    }catch(e){ console.warn('첫 실행 로그인 안내 실패(무시)', e); }
   }
 
   async function onSignedIn(){
@@ -7642,6 +7668,64 @@
   }
 
   // ---------- UI: 클라우드 & 조직 & 초대 관리 패널 ----------
+  // 방금 만든 초대 링크 — 화면에 복사 버튼과 함께 남겨 둔다(창을 닫으면 사라진다. 서버에는 링크 원문이 저장되지 않는다).
+  let lastInviteLink = null; // { orgId, url, email, role }
+
+  async function copyTextRobust(text, inputEl){
+    try{
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        // 일부 기기는 클립보드 쓰기가 응답 없이 멈출 수 있어 2초까지만 기다린다
+        await Promise.race([
+          navigator.clipboard.writeText(text),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('clipboard timeout')), 2000))
+        ]);
+        return true;
+      }
+    }catch(e){}
+    try{
+      if(inputEl){ inputEl.focus(); inputEl.select(); inputEl.setSelectionRange(0, text.length); }
+      return !!document.execCommand('copy');
+    }catch(e){ return false; }
+  }
+
+  function buildInviteLinkPanel(info){
+    const box = document.createElement('div');
+    box.style.cssText = 'margin-top:8px; padding:8px; border:1px solid var(--accent); border-radius:6px; background:rgba(255,107,53,0.08);';
+    const head = document.createElement('div');
+    head.style.cssText = 'font-size:12px; font-weight:600; margin-bottom:6px;';
+    head.textContent = '✅ 초대 링크가 만들어졌습니다' + (info.email ? ' (' + info.email + ')' : '');
+    const inp = document.createElement('input');
+    inp.type = 'text'; inp.readOnly = true; inp.value = info.url;
+    inp.style.cssText = 'width:100%; box-sizing:border-box; background:var(--panel); border:1px solid var(--line); border-radius:4px; color:var(--text); font-family:inherit; font-size:11px; padding:6px 8px;';
+    inp.addEventListener('focus', ()=>{ try{ inp.select(); }catch(e){} });
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex; gap:6px; margin-top:6px; flex-wrap:wrap;';
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'primary'; copyBtn.style.cssText = 'padding:5px 12px; font-size:12px; flex:1; min-width:110px;';
+    copyBtn.textContent = '📋 링크 복사';
+    copyBtn.addEventListener('click', async ()=>{
+      const ok = await copyTextRobust(info.url, inp);
+      copyBtn.textContent = ok ? '✓ 복사됨' : '위 링크를 길게 눌러 복사하세요';
+      if(!ok){ try{ inp.focus(); inp.select(); }catch(e){} }
+      setTimeout(()=>{ copyBtn.textContent = '📋 링크 복사'; }, 2500);
+    });
+    row.appendChild(copyBtn);
+    if(navigator.share){
+      const shareBtn = document.createElement('button');
+      shareBtn.className = 'ghost'; shareBtn.style.cssText = 'padding:5px 12px; font-size:12px; flex:1; min-width:90px;';
+      shareBtn.textContent = '📤 공유';
+      shareBtn.addEventListener('click', async ()=>{
+        try{ await navigator.share({ title: 'PeachShot 팀 초대', text: 'PeachShot 팀 초대 링크입니다.', url: info.url }); }catch(e){ /* 취소는 무시 */ }
+      });
+      row.appendChild(shareBtn);
+    }
+    const note = document.createElement('div');
+    note.style.cssText = 'font-size:11px; color:var(--sub); margin-top:6px; line-height:1.4;';
+    note.textContent = '이 링크는 이 창을 닫으면 다시 볼 수 없습니다. 초대받은 이메일로만 가입할 수 있고 한 번만 쓸 수 있습니다.';
+    box.appendChild(head); box.appendChild(inp); box.appendChild(row); box.appendChild(note);
+    return box;
+  }
+
   function renderCloudSyncBody(){
     if(!cloudSyncBody) return;
     cloudSyncBody.innerHTML = '';
@@ -7946,7 +8030,7 @@
 
           const targetEmailInput = document.createElement('input');
           targetEmailInput.type = 'email';
-          targetEmailInput.placeholder = '초대할 이메일 (선택 사항)';
+          targetEmailInput.placeholder = '초대할 이메일 (필수)';
           targetEmailInput.style.cssText = 'background:var(--panel); border:1px solid var(--line); border-radius:4px; color:var(--text); font-family:inherit; font-size:12px; padding:4px 8px; flex:1; min-width:140px;';
 
           const roleSel = document.createElement('select');
@@ -7987,19 +8071,8 @@
               createLinkBtn.textContent = '초대 링크 생성 및 복사';
             }
             if(res.ok && res.inviteUrl){
-              // 일부 기기(아이폰 홈화면 앱 등)는 클립보드 쓰기가 응답 없이 멈출 수 있어 2초까지만 기다린다.
-              let copied = false;
-              try{
-                if(navigator.clipboard && navigator.clipboard.writeText){
-                  await Promise.race([
-                    navigator.clipboard.writeText(res.inviteUrl),
-                    new Promise((_, rej) => setTimeout(() => rej(new Error('clipboard timeout')), 2000))
-                  ]);
-                  copied = true;
-                }
-              }catch(e){ copied = false; }
-              if(copied) alert('🎉 초대 링크가 생성되어 클립보드에 복사되었습니다!\n\n링크:\n' + res.inviteUrl + '\n\n초대 대상자에게 링크를 공유하세요.');
-              else alert('초대 링크가 생성되었습니다. 자동 복사는 되지 않았으니 아래 링크를 길게 눌러 복사해 주세요.\n\n' + res.inviteUrl);
+              // 만든 링크는 복사 버튼이 있는 패널로 화면에 남긴다(알림창에 길게 띄우지 않는다).
+              lastInviteLink = { orgId: org.id, url: res.inviteUrl, email: emailVal, role: res.role };
               targetEmailInput.value = '';
               renderCloudSyncBody();
             } else {
@@ -8012,6 +8085,7 @@
           inviteControls.appendChild(expSel);
           inviteControls.appendChild(createLinkBtn);
           inviteCard.appendChild(inviteControls);
+          if(lastInviteLink && lastInviteLink.orgId === org.id) inviteCard.appendChild(buildInviteLinkPanel(lastInviteLink));
 
           // 최근 초대 목록
           const invListWrap = document.createElement('div');
@@ -8148,8 +8222,8 @@
     renderCloudSyncBody();
     cloudSyncModal.style.display = 'flex';
   });
-  closeCloudSync.addEventListener('click', ()=>{ cloudSyncModal.style.display = 'none'; });
-  cloudSyncModal.addEventListener('click', (e)=>{ if(e.target === cloudSyncModal) cloudSyncModal.style.display = 'none'; });
+  closeCloudSync.addEventListener('click', ()=>{ lastInviteLink = null; cloudSyncModal.style.display = 'none'; });
+  cloudSyncModal.addEventListener('click', (e)=>{ if(e.target === cloudSyncModal){ lastInviteLink = null; cloudSyncModal.style.display = 'none'; } });
 
   // ================================================================
   // PeachShot STEP 8: Sync UX & Storage Dashboard & OCC Conflict Resolver
