@@ -2450,6 +2450,20 @@
     * { transition: none !important; }
   }
 </style>
+<style>
+/* PC 프로젝트 준비용 추가 스타일 */
+.dm-row{display:flex; align-items:center; gap:10px; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--panel-2); margin-bottom:8px;}
+.dm-row.active{border-color:var(--accent);}
+.dm-thumb{width:72px; height:54px; object-fit:contain; background:#fff; border:1px solid var(--line); border-radius:4px; flex:none;}
+.dm-name{flex:1; min-width:0; background:var(--panel); border:1px solid var(--line); border-radius:4px; color:var(--text); font-family:inherit; font-size:13px; padding:6px 8px;}
+.dm-meta{font-size:11px; color:var(--sub); margin-top:3px;}
+.dm-btns{display:flex; gap:4px; flex:none;}
+.dm-btns button{padding:4px 8px; font-size:12px;}
+.prep-chip{display:inline-block; font-size:10px; padding:1px 6px; border-radius:10px; margin-left:4px; border:1px solid var(--line); color:var(--sub);}
+.prep-chip.warn{color:#e67e22; border-color:#e67e22;}
+.pc-only-hint{display:none; margin-top:8px; font-size:12px; color:var(--sub);}
+@media (min-width: 880px){ .pc-only-hint{display:block;} }
+</style>
 </head>
 
 <body>
@@ -2769,6 +2783,7 @@
       <div style="display:flex; gap:8px; margin-bottom:10px;">
         <input type="text" id="siteSearch" placeholder="시설물 이름 검색…" class="site-search-input" style="flex:1;">
         <button class="primary" id="btnNewSiteInList" style="flex-shrink:0;">＋ 시설물</button>
+        <button class="ghost" id="btnBatchSites" style="flex-shrink:0;" title="시설물 이름을 여러 줄로 붙여넣어 한 번에 만들기">여러 개</button>
       </div>
       <div id="siteListBody"></div>
     </div>
@@ -2839,6 +2854,86 @@
     <div class="modal-foot">
       <button class="ghost" id="piCancel">취소</button>
       <button class="primary role-gated" id="piSave">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- 새 프로젝트 만들기 -->
+<div class="modal-backdrop" id="newProjectModal" style="display:none;">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>새 프로젝트 만들기</h2>
+      <button class="close-x" id="closeNewProject" aria-label="닫기">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="hint">프로젝트명만 있으면 만들 수 있습니다. 나머지는 나중에 프로젝트 목록의 "수정"에서 채워도 됩니다.</div>
+      <div class="field-grid">
+        <label>프로젝트명 *<input id="npName" type="text" placeholder="예: OO시설 정밀안전점검 2026"></label>
+        <label id="npOrgWrap" style="display:none;">소속
+          <select id="npOrg"></select>
+        </label>
+        <label>발주처<input id="npClient" type="text" placeholder="예: OO시설공단"></label>
+        <label>조사자<input id="npInspector" type="text" placeholder="예: 홍길동"></label>
+        <label>조사기간 시작<input id="npStart" type="date"></label>
+        <label>조사기간 종료<input id="npEnd" type="date"></label>
+      </div>
+      <label style="display:flex; align-items:center; gap:6px; margin-top:10px; font-size:13px;">
+        <input id="npThenFacility" type="checkbox" checked> 만든 뒤 바로 시설물 추가하기
+      </label>
+    </div>
+    <div class="modal-foot">
+      <button class="ghost" id="npCancel">취소</button>
+      <button class="primary" id="npCreate">프로젝트 만들기</button>
+    </div>
+  </div>
+</div>
+
+<!-- 시설물 여러 개 한 번에 추가 -->
+<div class="modal-backdrop" id="batchFacilityModal" style="display:none;">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>시설물 여러 개 추가</h2>
+      <button class="close-x" id="closeBatchFacility" aria-label="닫기">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="hint">시설물 이름을 한 줄에 하나씩 적으면 한 번에 만들어집니다. (엑셀·한글 표에서 이름 열을 복사해 붙여넣어도 됩니다) 도면은 만든 뒤 시설물별로 올립니다.</div>
+      <textarea id="bfNames" rows="9" placeholder="예:&#10;61.820k 절토사면&#10;61.950k 옹벽&#10;62.100k 옹벽" style="width:100%; box-sizing:border-box; margin-top:8px; background:var(--panel-2); border:1px solid var(--line); border-radius:5px; color:var(--text); font-family:inherit; font-size:13px; padding:8px 9px; resize:vertical;"></textarea>
+      <div class="field-grid" style="margin-top:8px;">
+        <label>시설물 종류 (모두 같게)
+          <select id="bfType">
+            <option value="">나중에 선택</option>
+            <option value="옹벽">옹벽</option>
+            <option value="절토사면">절토사면</option>
+          </select>
+        </label>
+        <label>시설물 형식
+          <select id="bfForm"><option value="">시설물 종류를 먼저 선택하세요</option></select>
+        </label>
+      </div>
+      <div id="bfCount" class="hint" style="margin-top:6px;"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="ghost" id="bfCancel">취소</button>
+      <button class="primary" id="bfCreate">시설물 만들기</button>
+    </div>
+  </div>
+</div>
+
+<!-- 도면 관리 -->
+<div class="modal-backdrop" id="drawingMgrModal" style="display:none;">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="dwmTitle">도면 관리</h2>
+      <button class="close-x" id="closeDrawingMgr" aria-label="닫기">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="hint">이름을 눌러 바꾸고, ▲▼로 순서를 바꿉니다. 도면 파일(이미지·PDF)을 여러 장 한꺼번에 추가할 수 있고, 도면 화면에 파일을 끌어다 놓아도 됩니다. PDF는 쪽마다 도면 한 장이 됩니다.</div>
+      <div id="dwmList" style="margin-top:10px;"></div>
+      <input type="file" id="dwmFileInput" accept="image/*,application/pdf,.pdf" multiple style="display:none;">
+    </div>
+    <div class="modal-foot">
+      <button class="ghost" id="dwmClose">닫기</button>
+      <button class="primary" id="dwmAdd">＋ 도면 추가 (여러 장 선택)</button>
     </div>
   </div>
 </div>
@@ -3325,7 +3420,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v150';
+  const PS_BUILD = 'v151';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -10269,7 +10364,7 @@
     const div = document.createElement('div');
     div.className = 'empty-msg';
     div.id = 'emptyMsg';
-    div.innerHTML = '<div class="icon">⌖</div>도면이나 사진을 불러온 뒤,<br>기록할 지점을 클릭하면 번호가 매겨집니다.';
+    div.innerHTML = '<div class="icon">⌖</div>도면이나 사진을 불러온 뒤,<br>기록할 지점을 클릭하면 번호가 매겨집니다.<div class="pc-only-hint">💡 도면 파일(이미지·PDF)을 이 화면으로 끌어다 놓으면 여러 장도 한 번에 등록됩니다.</div>';
     stage.appendChild(div);
     updateResetImageLabel();
     refreshStageHeader();
@@ -10990,7 +11085,7 @@
       // 눈금 보정값(calib)이 있는 도면만 그 값을 지문에 더한다 — 보정이 없는 기존 도면의 지문은 예전과 똑같아서
       // 업데이트만으로 모든 시설물이 다시 올라가는 일은 없고, 보정을 하거나 바꾸면 그때만 올라간다.
       copy.__drawingsFingerprint = (site.drawings || [])
-        .map(d => (d && d.id ? (d.id + '~' + (d.name || '') + '~' + ((d.imageSrc || d.svgData || d.svg || '').length) + (d.calib ? '~c' + JSON.stringify(d.calib) : '')) : ''))
+        .map(d => (d && d.id ? (d.id + '~' + (d.name || '') + '~' + ((d.imageSrc || d.svgData || d.svg || '').length) + (d.calib ? '~c' + JSON.stringify(d.calib) : '') + (d.orderTouched ? '~o' + (d.order || 0) : '')) : ''))
         .join('|');
       return JSON.stringify(copy);
     }catch(e){
@@ -11630,7 +11725,7 @@
           //   "본문이 달라졌다"고 판단해 blob을 다시 올려야 한다. 전체 base64 대신
           //   id·이름·이미지길이 지문만 비교에 넣는다.
           c.__drawingsFingerprint = (Array.isArray(o && o.drawings) ? o.drawings : [])
-            .map(d => (d && d.id ? (d.id + '~' + (d.name || '') + '~' + ((d.imageSrc || d.svgData || d.svg || '').length) + (d.calib ? '~c' + JSON.stringify(d.calib) : '')) : ''))
+            .map(d => (d && d.id ? (d.id + '~' + (d.name || '') + '~' + ((d.imageSrc || d.svgData || d.svg || '').length) + (d.calib ? '~c' + JSON.stringify(d.calib) : '') + (d.orderTouched ? '~o' + (d.order || 0) : '')) : ''))
             .join('|');
           return c;
         };
@@ -12884,6 +12979,89 @@
   });
   fmForm.addEventListener('change', updateFmStandardDbHint);
 
+  // ---------- 시설물 여러 개 한 번에 추가 (이름을 한 줄에 하나씩) ----------
+  const batchFacilityModal = document.getElementById('batchFacilityModal');
+  const bfNames = document.getElementById('bfNames');
+  const bfType = document.getElementById('bfType');
+  const bfForm = document.getElementById('bfForm');
+  const bfCount = document.getElementById('bfCount');
+  function parseBatchNames(){
+    const seen = new Set();
+    const out = [];
+    (bfNames.value || '').split(/\r?\n/).forEach(line=>{
+      const n = line.replace(/\t.*$/, '').trim();   // 엑셀에서 여러 열을 복사했으면 첫 열(이름)만
+      if(!n || seen.has(n)) return;
+      seen.add(n); out.push(n);
+    });
+    return out;
+  }
+  function updateBatchCount(){
+    const names = parseBatchNames();
+    const exist = new Set(sites.filter(x => x.projectId === currentProjectId).map(x => x.name));
+    const dup = names.filter(n => exist.has(n)).length;
+    bfCount.textContent = names.length ? ('만들 시설물 ' + names.length + '개' + (dup ? ' · 이 프로젝트에 이미 있는 이름 ' + dup + '개는 건너뜁니다' : '')) : '';
+  }
+  function openBatchFacilityModal(){
+    if(!currentProjectId || !projects.find(p => p.id === currentProjectId)){
+      ensureProjectsIntegrity({ firstRun: true });
+      renderProjectHeader();
+    }
+    bfNames.value = ''; bfType.value = ''; bfForm.innerHTML = '<option value="">시설물 종류를 먼저 선택하세요</option>';
+    updateBatchCount();
+    batchFacilityModal.style.display = 'flex';
+    setTimeout(()=>{ try{ bfNames.focus(); }catch(e){} }, 50);
+  }
+  bfNames.addEventListener('input', updateBatchCount);
+  bfType.addEventListener('change', ()=>{
+    const forms = FACILITY_FORMS[bfType.value] || [];
+    bfForm.innerHTML = forms.length ? forms.map(f=>'<option value="'+f+'">'+f+'</option>').join('') : '<option value="">-</option>';
+  });
+  function closeBatchFacilityModal(){ batchFacilityModal.style.display = 'none'; }
+  document.getElementById('closeBatchFacility').addEventListener('click', closeBatchFacilityModal);
+  document.getElementById('bfCancel').addEventListener('click', closeBatchFacilityModal);
+  batchFacilityModal.addEventListener('click', (e)=>{ if(e.target === batchFacilityModal) closeBatchFacilityModal(); });
+  document.getElementById('bfCreate').addEventListener('click', async ()=>{
+    const names = parseBatchNames();
+    if(names.length === 0){ alert('시설물 이름을 한 줄에 하나씩 적어주세요.'); return; }
+    if(names.length > 200){ alert('한 번에 200개까지 만들 수 있습니다. 나눠서 입력해주세요.'); return; }
+    commitLiveToCurrentSite();
+    const exist = new Set(sites.filter(x => x.projectId === currentProjectId).map(x => x.name));
+    const meId = (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null;
+    const created = [];
+    let skipped = 0;
+    for(const name of names){
+      if(exist.has(name)){ skipped++; continue; }
+      const site = {
+        id: genId(),
+        name,
+        facilityType: bfType.value,
+        facilityTypeOther: '',
+        facilityForm: bfForm.value || '',
+        description: '', length: '', height: '',
+        surveyDate: new Date().toISOString().slice(0,10),
+        route: '', address: '', agency: '', completionYear: '',
+        savedAt: new Date().toISOString(),
+        baseImageSrc: null,
+        markers: [],
+        nextNum: 1,
+        projectId: currentProjectId,
+        createdBy: meId
+      };
+      sites.push(site);
+      try{ await applyDamageMasterSnapshotIfNeeded(site); }catch(e){}
+      created.push(site);
+      exist.add(name);
+    }
+    closeBatchFacilityModal();
+    if(created.length && !currentSiteId){ await loadSite(created[0]); }
+    renderSiteList();
+    updatePcExplorerDocking();
+    saveState();
+    alert('시설물 ' + created.length + '개를 만들었습니다.' + (skipped ? '\n(이미 있는 이름 ' + skipped + '개는 건너뜀)' : '') + '\n\n각 시설물의 "도면" 버튼으로 도면을 올리세요.');
+  });
+  const btnBatchSitesEl = document.getElementById('btnBatchSites');
+  if(btnBatchSitesEl) btnBatchSitesEl.addEventListener('click', openBatchFacilityModal);
+
   let editingSiteId = null;
 
   function openFacilityModalForCreate(){
@@ -13651,7 +13829,7 @@
     if(projectSites.length === 0){
       const empty = document.createElement('div');
       empty.className = 'log-empty';
-      empty.textContent = '이 프로젝트에 저장된 시설물이 없습니다. "＋ 시설물"로 시작하세요.';
+      empty.textContent = '이 프로젝트에 저장된 시설물이 없습니다. "＋ 시설물"로 하나씩, 또는 "여러 개"로 이름을 붙여넣어 한 번에 만드세요.';
       siteListBody.appendChild(empty);
       return;
     }
@@ -13710,8 +13888,16 @@
 
       const metaRow = document.createElement('div');
       metaRow.className = 'fc-meta card-meta-row';
+      const dwCount = (isActive ? (drawings || []) : (site.drawings || [])).length || (site.baseImageSrc ? 1 : 0);
+      const edCount = (site.existingDamages || []).filter(e => e && !e.isDeleted).length;
       metaRow.textContent = '유형: ' + (site.facilityType || '절토사면') + (site.facilityForm ? ' (' + site.facilityForm + ')' : '') +
-        ' · 지점 ' + pCount + '개' + (dateStr ? ' · ' + dateStr : '');
+        ' · 도면 ' + dwCount + '장 · 기존손상 ' + edCount + '건 · 지점 ' + pCount + '개' + (dateStr ? ' · ' + dateStr : '');
+      if(dwCount === 0){
+        const chip = document.createElement('span');
+        chip.className = 'prep-chip warn';
+        chip.textContent = '도면 없음';
+        metaRow.appendChild(chip);
+      }
 
       // 버튼들이 오른쪽에만 몰려있고(justify-content:flex-end) 줄 자체는 카드
       // 전체 폭을 차지한다 — 예전엔 이 줄 전체에 클릭 차단을 걸어서, 버튼이 없는
@@ -13761,6 +13947,22 @@
         saveState();
       });
 
+      const dwBtn = document.createElement('button');
+      dwBtn.className = 'fc-btn card-btn';
+      dwBtn.textContent = '도면';
+      dwBtn.title = '이 시설물의 도면 관리(이름·순서·삭제·여러 장 추가)';
+      dwBtn.addEventListener('click', async (e)=>{
+        e.stopPropagation();
+        if(site.id !== currentSiteId){
+          commitLiveToCurrentSite();
+          await loadSite(site);
+          saveState();
+          updatePcExplorerDocking();
+        }
+        openDrawingMgr();
+      });
+
+      actionsRow.appendChild(dwBtn);
       actionsRow.appendChild(editBtn);
       actionsRow.appendChild(delBtn);
 
@@ -14537,15 +14739,44 @@
     return (myOrganizations[idx]) ? myOrganizations[idx].id : null;
   }
 
-  btnNewProject.addEventListener('click', ()=>{
-    const name = prompt('새 프로젝트 이름을 입력하세요', '');
-    if(!name || !name.trim()) return;
-    const organizationId = pickOrganizationForNewProject();
+  // 새 프로젝트 — 예전의 작은 입력창(prompt) 대신 입력 화면에서 프로젝트명·소속·발주처 등을 한 번에 적는다.
+  const newProjectModal = document.getElementById('newProjectModal');
+  const npName = document.getElementById('npName');
+  const npOrg = document.getElementById('npOrg');
+  const npOrgWrap = document.getElementById('npOrgWrap');
+  function openNewProjectModal(){
+    npName.value = ''; document.getElementById('npClient').value = ''; document.getElementById('npInspector').value = '';
+    document.getElementById('npStart').value = ''; document.getElementById('npEnd').value = '';
+    document.getElementById('npThenFacility').checked = true;
+    // 소속: 조직이 하나라도 있으면 고르게 한다(기본은 지금 작업 중인 조직, 없으면 개인)
+    npOrg.innerHTML = '';
+    const optP = document.createElement('option'); optP.value = ''; optP.textContent = '📁 개인 프로젝트'; npOrg.appendChild(optP);
+    (myOrganizations || []).forEach(o=>{
+      const op = document.createElement('option'); op.value = o.id; op.textContent = '🏢 ' + o.name; npOrg.appendChild(op);
+    });
+    npOrg.value = (activeOrganizationId && (myOrganizations || []).some(o => o.id === activeOrganizationId)) ? activeOrganizationId : '';
+    npOrgWrap.style.display = (myOrganizations || []).length ? '' : 'none';
+    newProjectModal.style.display = 'flex';
+    setTimeout(()=>{ try{ npName.focus(); }catch(e){} }, 50);
+  }
+  function closeNewProjectModal(){ newProjectModal.style.display = 'none'; }
+  btnNewProject.addEventListener('click', openNewProjectModal);
+  document.getElementById('closeNewProject').addEventListener('click', closeNewProjectModal);
+  document.getElementById('npCancel').addEventListener('click', closeNewProjectModal);
+  newProjectModal.addEventListener('click', (e)=>{ if(e.target === newProjectModal) closeNewProjectModal(); });
+  newProjectModal.addEventListener('keydown', (e)=>{ if(e.key === 'Enter' && e.target && e.target.tagName === 'INPUT' && e.target.type === 'text'){ e.preventDefault(); document.getElementById('npCreate').click(); } });
+  document.getElementById('npCreate').addEventListener('click', ()=>{
+    const name = npName.value.trim();
+    if(!name){ alert('프로젝트명을 입력해주세요.'); npName.focus(); return; }
     commitLiveToCurrentSite();
     const project = {
       id: genId(),
-      name: name.trim(),
-      organizationId: organizationId || null,
+      name,
+      organizationId: npOrg.value || null,
+      client: document.getElementById('npClient').value.trim(),
+      inspector: document.getElementById('npInspector').value.trim(),
+      surveyStartDate: document.getElementById('npStart').value,
+      surveyEndDate: document.getElementById('npEnd').value,
       createdAt: new Date().toISOString(),
       savedAt: new Date().toISOString(),
       standardDbVersion: standardDbVersion
@@ -14554,6 +14785,12 @@
     projects.push(project);
     switchToProject(project.id);
     renderProjectList();
+    const thenFacility = document.getElementById('npThenFacility').checked;
+    closeNewProjectModal();
+    if(thenFacility){
+      projectModal.style.display = 'none';
+      openFacilityModalForCreate();
+    }
   });
 
   // 사무실에서 프로젝트/시설물을 미리 만들지 못했을 때, 현장에서 최소한의 입력만으로
@@ -17730,7 +17967,7 @@
       const tab = document.createElement('button');
       tab.className = 'drawing-tab' + (d.id === currentDrawingId ? ' active' : '');
       tab.addEventListener('click', ()=>{
-        if(d.id === currentDrawingId){ openDrawingOptions(d); return; }
+        if(d.id === currentDrawingId){ openDrawingMgr(); return; }
         switchToDrawing(d.id);
       });
 
@@ -17756,6 +17993,12 @@
     addBtn.textContent = '＋ 도면 추가';
     addBtn.addEventListener('click', addNewDrawing);
     drawingTabs.appendChild(addBtn);
+    const mgrBtn = document.createElement('button');
+    mgrBtn.className = 'drawing-tab-add';
+    mgrBtn.textContent = '🗂 도면 관리';
+    mgrBtn.title = '도면 이름 바꾸기 · 순서 · 삭제 · 여러 장 추가';
+    mgrBtn.addEventListener('click', openDrawingMgr);
+    drawingTabs.appendChild(mgrBtn);
   }
 
   function switchToDrawing(drawingId){
@@ -17784,7 +18027,7 @@
   // 때 쓰는 기존 경로)는 "현재 도면 교체" 등 3갈래 분기가 있어 손대지 않고, 여기서는
   // 항상 "새 도면으로 추가"하는 경우만 별도 함수로 처리한다(기존 첫 도면/교체 흐름과
   // 완전히 분리돼 있어 기존 클릭 방식 동작에는 영향이 없다).
-  async function importDroppedDrawingFile(file){
+  async function importDroppedDrawingFile(file, opts){
     if(!currentSiteId){
       const site = { id: genId(), name: '시설물 ' + (sites.length + 1), savedAt: new Date().toISOString(), baseImageSrc:null, markers:[], nextNum:1, projectId: currentProjectId };
       sites.push(site);
@@ -17820,7 +18063,7 @@
     // 있을 수 있다 — 그런 경우에도 파일명 기반 기본 이름으로 조용히 계속 진행한다.
     let userBaseName = defaultName;
     try{
-      userBaseName = (prompt('새 도면의 이름을 입력하세요 (예: 정면도, 평면도, 1층 도면) — ' + file.name, defaultName) || defaultName).trim() || defaultName;
+      if(!(opts && opts.noPrompt)) userBaseName = (prompt('새 도면의 이름을 입력하세요 (예: 정면도, 평면도, 1층 도면) — ' + file.name, defaultName) || defaultName).trim() || defaultName;
     }catch(e){ userBaseName = defaultName; }
 
     let firstNewId = null;
@@ -17863,9 +18106,14 @@
     if(files.length === 0) return;
     // 파일마다 이름 확인 prompt()가 뜨므로(브라우저 특성상 동시에 여러 개 못 띄움)
     // 반드시 순서대로 하나씩 처리한다 — Promise.all로 동시에 돌리면 안 됨.
+    // 여러 장이면 이름을 일일이 묻지 않고 파일 이름을 쓴다(나중에 "도면 관리"에서 바꾼다)
     for(const file of files){
-      await importDroppedDrawingFile(file);
+      await importDroppedDrawingFile(file, { noPrompt: files.length > 1 });
     }
+    afterDrawingsImported();
+  });
+
+  function afterDrawingsImported(){
     renderBaseImage();
     renderMarkers();
     renderDrawingTabs();
@@ -17874,7 +18122,8 @@
     refreshStageHeader();
     saveState();
     updatePcExplorerDocking();
-  });
+    try{ if(drawingMgrModal.style.display === 'flex') renderDrawingMgr(); }catch(e){}
+  }
 
   // 도면 하나를 통째로 삭제한다(이미지 교체와 다름 — 교체는 같은 도면 슬롯의
   // 사진만 바꾸고, 이건 그 도면 탭 자체를 없앤다). 잘못 올린 도면을 지울 때는
@@ -17896,6 +18145,118 @@
     updateCounts();
     saveState();
   }
+
+  // ── 도면 관리창 — 이름 바꾸기 · 순서 · 삭제 · 여러 장 추가 (예전의 번호 입력창 대체) ──
+  const drawingMgrModal = document.getElementById('drawingMgrModal');
+  const dwmList = document.getElementById('dwmList');
+  const dwmFileInput = document.getElementById('dwmFileInput');
+  const dwmTitle = document.getElementById('dwmTitle');
+
+  function openDrawingMgr(){
+    if(!currentSiteId){ alert('먼저 시설물을 선택하거나 만들어주세요.'); return; }
+    renderDrawingMgr();
+    drawingMgrModal.style.display = 'flex';
+  }
+
+  function sortedDrawings(){
+    return (drawings || []).slice().sort((a,b)=>(a.order||0)-(b.order||0));
+  }
+
+  function renderDrawingMgr(){
+    const site = currentSiteObj();
+    dwmTitle.textContent = '도면 관리 · ' + (site ? site.name : '');
+    dwmList.innerHTML = '';
+    const list = sortedDrawings();
+    if(list.length === 0){
+      const empty = document.createElement('div');
+      empty.className = 'log-empty';
+      empty.textContent = '아직 도면이 없습니다. 아래 "도면 추가"로 이미지·PDF를 올리세요.';
+      dwmList.appendChild(empty);
+      return;
+    }
+    list.forEach((d, idx)=>{
+      const row = document.createElement('div');
+      row.className = 'dm-row' + (d.id === currentDrawingId ? ' active' : '');
+
+      const th = document.createElement('img');
+      th.className = 'dm-thumb';
+      th.alt = '';
+      const src = (d.id === currentDrawingId && baseImageSrc) ? baseImageSrc : d.imageSrc;
+      if(src) th.src = src;
+      else if(d.imageRef){ loadDrawingImage(d.imageRef).then(v => { if(v) th.src = v; }).catch(()=>{}); }
+      th.style.cursor = 'pointer';
+      th.title = '이 도면 보기';
+      th.addEventListener('click', ()=>{ switchToDrawing(d.id); renderDrawingMgr(); });
+
+      const mid = document.createElement('div');
+      mid.style.cssText = 'flex:1; min-width:0;';
+      const nameInp = document.createElement('input');
+      nameInp.className = 'dm-name';
+      nameInp.type = 'text';
+      nameInp.value = d.name || '';
+      nameInp.addEventListener('change', ()=>{
+        const v = nameInp.value.trim();
+        if(!v){ nameInp.value = d.name || ''; return; }
+        d.name = v;
+        renderDrawingTabs();
+        saveState();
+      });
+      nameInp.addEventListener('keydown', (e)=>{ if(e.key === 'Enter'){ nameInp.blur(); } });
+      const pts = (markers || []).filter(m => m.xPct != null && m.drawingId === d.id).length;
+      const meta = document.createElement('div');
+      meta.className = 'dm-meta';
+      let calibTxt = '';
+      try{ calibTxt = calibUsable(d.calib) ? ' · 눈금 보정됨 ✓' : ''; }catch(e){}
+      meta.textContent = '지점 ' + pts + '개' + calibTxt + (d.type ? ' · ' + d.type : '') + (d.id === currentDrawingId ? ' · 지금 보는 도면' : '');
+      mid.appendChild(nameInp); mid.appendChild(meta);
+
+      const btns = document.createElement('div');
+      btns.className = 'dm-btns';
+      const up = document.createElement('button');
+      up.className = 'ghost'; up.textContent = '▲'; up.title = '위로';
+      up.disabled = idx === 0;
+      up.addEventListener('click', ()=> moveDrawing(d, -1));
+      const down = document.createElement('button');
+      down.className = 'ghost'; down.textContent = '▼'; down.title = '아래로';
+      down.disabled = idx === list.length - 1;
+      down.addEventListener('click', ()=> moveDrawing(d, +1));
+      const del = document.createElement('button');
+      del.className = 'card-btn danger'; del.textContent = '삭제';
+      del.addEventListener('click', async ()=>{ await deleteDrawing(d); renderDrawingMgr(); });
+      btns.appendChild(up); btns.appendChild(down); btns.appendChild(del);
+
+      row.appendChild(th); row.appendChild(mid); row.appendChild(btns);
+      dwmList.appendChild(row);
+    });
+  }
+
+  function moveDrawing(d, delta){
+    const list = sortedDrawings();
+    list.forEach((x, i)=>{ x.order = i + 1; });       // 먼저 1..n 으로 정리
+    const i = list.findIndex(x => x.id === d.id);
+    const j = i + delta;
+    if(i < 0 || j < 0 || j >= list.length) return;
+    const a = list[i], b = list[j];
+    const t = a.order; a.order = b.order; b.order = t;
+    list.forEach(x => { x.orderTouched = true; });      // 순서를 바꾼 도면은 클라우드에도 올라가게 표시
+    renderDrawingTabs();
+    renderDrawingMgr();
+    saveState();
+  }
+
+  document.getElementById('closeDrawingMgr').addEventListener('click', ()=>{ drawingMgrModal.style.display = 'none'; });
+  document.getElementById('dwmClose').addEventListener('click', ()=>{ drawingMgrModal.style.display = 'none'; });
+  drawingMgrModal.addEventListener('click', (e)=>{ if(e.target === drawingMgrModal) drawingMgrModal.style.display = 'none'; });
+  document.getElementById('dwmAdd').addEventListener('click', ()=>{ if(!currentSiteId){ alert('먼저 시설물을 선택하거나 만들어주세요.'); return; } dwmFileInput.click(); });
+  dwmFileInput.addEventListener('change', async ()=>{
+    const files = Array.from(dwmFileInput.files || []);
+    dwmFileInput.value = '';
+    if(files.length === 0) return;
+    for(const file of files){
+      await importDroppedDrawingFile(file, { noPrompt: true });   // 이름은 파일 이름 — 여기서 바로 바꿀 수 있다
+    }
+    afterDrawingsImported();
+  });
 
   function openDrawingOptions(d){
     const action = prompt(

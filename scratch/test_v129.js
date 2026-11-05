@@ -22,7 +22,8 @@ check('이미 손상이 있는 사진의 "＋ 손상 추가 (N개)"는 예전처
 check('상세창의 자동 추가는 그대로: 사진당 한 번, 손상이 없을 때만', html.includes('if(freshPhotoIds.has(p.id) && idx === previewSelIdx){') && html.includes("if(!p.damages.length && !document.body.classList.contains('viewer-mode')) addDamageBtn.click();"));
 
 // (2) 모바일 빈 곳 끌기
-check('모바일: 화면 바깥으로 밀림 방지(overscroll-behavior:none) + 머리 줄 touch-action:none', html.includes('overscroll-behavior: none !important;') && html.includes('.side-head, .view-switcher, .stage-head { touch-action: none; }'));
+// v135 이후: 도면 탭 줄(.view-switcher)은 옆으로 밀어 넘길 수 있어야 하므로 touch-action:pan-x 로 바뀌었다(머리 줄 .side-head/.stage-head 는 그대로 none).
+check('모바일: 화면 바깥으로 밀림 방지(overscroll-behavior:none) + 머리 줄 touch-action:none, 도면 탭 줄은 가로 밀기 허용(pan-x)', html.includes('overscroll-behavior: none !important;') && html.includes('.side-head, .stage-head { touch-action: none; }') && html.includes('.view-switcher { touch-action: pan-x; }'));
 check('끌기 방지 장치는 모바일 폭에서만, 한 손가락만, 입력칸·사진 크게 보기·도면/지도·캔버스는 제외', html.includes("window.matchMedia('(max-width: 880px)')") && html.includes('e.touches.length !== 1') && html.includes("input, textarea, select, [contenteditable=\"true\"], #photoLightbox, .stage, #stage, .leaflet-container, canvas"));
 check('스크롤할 수 있는 영역(기록 목록 등) 안의 끌기는 막지 않음 (조상 중 overflow auto/scroll + 내용이 넘칠 때)', html.includes('const scrollableAncestor = (el)=>{') && html.includes("el.scrollHeight > el.clientHeight + 1"));
 check('touchmove 리스너는 passive:false (preventDefault 가능)', html.includes('}, { passive: false });'));
