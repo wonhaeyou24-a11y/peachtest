@@ -3325,7 +3325,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v143';
+  const PS_BUILD = 'v144';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -5136,6 +5136,28 @@
 
   // ---------- persistence ----------
   function genId(){ return 's' + Date.now() + Math.random().toString(36).slice(2,6); }
+
+  // 기존손상 번호표 — 클라우드(ps_existing_damages)는 id 하나로만 구분하므로 시설물마다 001부터 시작하면
+  // 두 번째 시설물의 기존손상이 첫 시설물의 것을 덮어쓴다. 새로 만드는 번호에는 시설물 표식 4글자를 붙여 겹치지 않게 한다.
+  function newExistingDamageId(site, num){
+    const tag = String((site && site.id) || '').slice(-4);
+    return 'EX-DMG-' + String(num).padStart(3, '0') + (tag ? '-' + tag : '');
+  }
+  const EX_DMG_OWN_ID_RE = /^EX-DMG-\d+(-[a-z0-9]+)?$/i;
+  // 예전 번호(EX-DMG-001)가 다른 시설물과 겹쳤을 때, 이 쪽 번호표를 새로 만들고 손상기록의 기존손상 연결도 따라 바꾼다.
+  function renameExistingDamageId(site, ed){
+    if(!site || !ed || !ed.id) return null;
+    const old = ed.id;
+    const num = (String(old).match(/\d+/) || ['0'])[0];
+    const used = new Set((site.existingDamages || []).map(x => x && x.id));
+    let nid = 'EX-DMG-' + num + '-' + String(site.id || '').slice(-4);
+    while(used.has(nid)) nid += Math.random().toString(36).slice(2, 4);
+    ed.id = nid;
+    (site.markers || []).forEach(m=>{
+      (m && m.damages || []).forEach(d=>{ if(d && d.existingDamageId === old) d.existingDamageId = nid; });
+    });
+    return nid;
+  }
 
   // 시설물을 "사본"으로 만들 때(프로젝트 복사 · 백업 복원 · 휴지통 복원 등) 지점·기존손상의 번호표(id)를 새로 만든다.
   // 클라우드는 지점/기존손상을 id 하나로만 구분하므로, 같은 id 를 그대로 올리면 원본 프로젝트의 지점이
@@ -11567,6 +11589,19 @@
 
         const edBaseRevision = Math.max(expectedRevision, (exDmg && typeof exDmg.revision === 'number') ? exDmg.revision : 1);
         const { data: existing, error: checkErr } = await fetchExisting('ps_existing_damages', 'revision, data, user_id, project_id, facility_id');
+        // 같은 번호표를 "다른 시설물"의 기존손상이 이미 쓰고 있으면 그 행을 덮어쓰지 않는다(예전 EX-DMG-001 형식 충돌).
+        // 이 쪽 번호표를 새로 만들고, 새 번호로 다시 올라가도록 시설물을 다시 큐에 넣는다.
+        if(!checkErr && existing && op !== 'delete' && existing.facility_id && facId && existing.facility_id !== facId && exDmg && exDmg.id){
+          const ownerSite = sites.find(s => (s.existingDamages || []).includes(exDmg));
+          if(ownerSite){
+            const oldId = exDmg.id;
+            const nid = renameExistingDamageId(ownerSite, exDmg);
+            diagLog('sync', 'existing_damage 번호 충돌 → 새 번호로 변경: ' + oldId + ' → ' + nid, { facility: ownerSite.id, cloud_facility: existing.facility_id });
+            try{ queueEntitySyncForFacility(ownerSite); }catch(e){}
+            try{ saveState(); }catch(e){}   // 바뀐 번호표가 이 기기에도 바로 저장되도록
+            return { ok: true, skipped: true, reason: 'id-renamed' };
+          }
+        }
         const edMoved = !!(existing && ((existing.project_id && existing.project_id !== projId) || (existing.facility_id && existing.facility_id !== facId)));
         if(!checkErr && existing && op !== 'delete' && existing.user_id && existing.user_id !== userId
            && !(exDmg && exDmg.createdBy === userId)){
@@ -15586,7 +15621,7 @@
       const site = sites.find(s => s.id === currentSiteId);
       const num = (site && site.nextExistingDamageNum) || 1;
       const d = {
-        id: 'EX-DMG-' + String(num).padStart(3,'0'),
+        id: newExistingDamageId(site, num),
         damageName: name,
         section: sectionVal,
         drawingPosition: edPosition.value.trim(),
@@ -15909,7 +15944,7 @@
         if(rowId) existingIds.add(rowId); // 같은 파일 안에서 ID가 겹쳐도 한 번만
         toInsert.push({
           // 피치샷 자체 번호(EX-DMG-…)를 되돌려 쓴 파일이면 externalId로 따로 저장하지 않는다
-          externalId: (rowId && !/^EX-DMG-\d+$/i.test(rowId)) ? rowId : '',
+          externalId: (rowId && !EX_DMG_OWN_ID_RE.test(rowId)) ? rowId : '',
           damageName: name,
           section: String(row['구간'] || '').trim(),
           drawingPosition: String(row['위치'] || '').trim(),
@@ -15950,7 +15985,7 @@
       let num = site.nextExistingDamageNum || 1;
       toInsert.forEach(item=>{
         const d = Object.assign({
-          id: 'EX-DMG-' + String(num).padStart(3,'0'),
+          id: newExistingDamageId(site, num),
           photos: [], isDeleted:false, createdAt: now, updatedAt: now
         }, item);
         existingDamages.push(d);
