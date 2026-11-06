@@ -2487,6 +2487,7 @@
 .cb-tools{ position:absolute; right:8px; top:8px; display:flex; flex-direction:column; gap:6px; z-index:20; }
 .cb-tools button{ min-width:44px; min-height:40px; font-size:16px; background:rgba(255,255,255,0.95); border:1px solid var(--line); border-radius:10px; padding:4px 8px; box-shadow:0 1px 4px rgba(0,0,0,0.25); }
 .cb-tools button.on{ background:var(--amber); }
+.cb-lbl{ position:absolute; transform:translate(-50%,-50%) scale(var(--zinv,1)); transform-origin:50% 50%; z-index:6; font:700 11px/1 sans-serif; color:#0D47A1; background:rgba(187,222,251,0.85); border:1px solid #1565C0; border-radius:4px; padding:3px 5px; white-space:nowrap; cursor:pointer; }
 .cb-reticle{ position:absolute; left:50%; top:50%; width:0; height:0; z-index:15; pointer-events:none; display:none; }
 .cb-reticle::before{ content:''; position:absolute; left:-26px; top:-1px; width:52px; height:2px; background:#d81b60; box-shadow:0 0 0 1px rgba(255,255,255,0.85); }
 .cb-reticle::after{ content:''; position:absolute; top:-26px; left:-1px; height:52px; width:2px; background:#d81b60; box-shadow:0 0 0 1px rgba(255,255,255,0.85); }
@@ -3550,7 +3551,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v169';
+  const PS_BUILD = 'v170';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -13295,7 +13296,24 @@
       const ctx = canvas.getContext('2d');
       await page.render({ canvasContext: ctx, viewport }).promise;
       const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
-      results.push({ pageNum, dataUrl, totalPages: pageCount });
+      // 눈금 설정에서 쓸 "도면 위 숫자" 위치(예: 0.0, 20.0, 38.5) — PDF 에 글자가 들어 있을 때만 얻는다. 실패해도 도면 불러오기에는 영향 없음.
+      let labels = [];
+      try{
+        const tc = await page.getTextContent();
+        const re = /^[+-]?\d{1,4}([.,]\d{1,3})?\s*[mM]?$/;
+        for(const it of tc.items){
+          const t = String(it.str || '').trim();
+          if(!t || !re.test(t) || !it.transform || Math.abs(it.transform[1]) > 0.01 || Math.abs(it.transform[2]) > 0.01) continue;
+          const v = parseFloat(t.replace(/[mM\s]/g, '').replace(',', '.')); if(!isFinite(v)) continue;
+          const pt = viewport.convertToViewportPoint(it.transform[4], it.transform[5]);
+          const w = (it.width || 0) * scale, h = (it.height || Math.abs(it.transform[3]) || 8) * scale;
+          const x = (pt[0] + w / 2) / canvas.width * 100, y = (pt[1] - h / 2) / canvas.height * 100;
+          if(x < 0 || x > 100 || y < 0 || y > 100) continue;
+          labels.push({ t, v, x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100 });
+          if(labels.length >= 120) break;
+        }
+      }catch(e){ labels = []; }
+      results.push({ pageNum, dataUrl, totalPages: pageCount, labels });
     }
     return results;
   }
@@ -14041,6 +14059,7 @@
           description: '',
           createdAt: new Date().toISOString()
         };
+        if(page.labels && page.labels.length) d.calibLabels = page.labels;
         drawings.push(d);
         if(pIdx === 0) firstNewId = d.id;
       });
@@ -14058,6 +14077,7 @@
       if(d){
         d.imageSrc = convertedPages[0].dataUrl;
         if(isPdf) d.type = 'PDF 도면';
+        if(convertedPages[0].labels && convertedPages[0].labels.length) d.calibLabels = convertedPages[0].labels; else delete d.calibLabels;
       }
       baseImageSrc = convertedPages[0].dataUrl;
       if(markers.length === 0) nextNum = 1; // 시설물 전체에 조사점이 하나도 안 남았을 때만 번호를 리셋
@@ -14076,6 +14096,7 @@
             description: '',
             createdAt: new Date().toISOString()
           };
+          if(page.labels && page.labels.length) extraD.calibLabels = page.labels;
           drawings.push(extraD);
         }
       }
@@ -14094,6 +14115,7 @@
           description: '',
           createdAt: new Date().toISOString()
         };
+        if(page.labels && page.labels.length) d.calibLabels = page.labels;
         drawings.push(d);
         if(pIdx === 0) firstNewId = d.id;
       });
@@ -18094,8 +18116,10 @@
       if(!cbs || e.target.closest('.cb-tools')) return;
       try{ view.setPointerCapture(e.pointerId); }catch(err){}
       ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if(ptrs.size === 1) cbs.tapLbl = e.target.closest ? e.target.closest('.cb-lbl') : null;
       if(ptrs.size === 2){
         const st = pinchState();
+        cbs.tapLbl = null;
         cbs.pinch = { d0: st.d, s0: cbs.scale, mx0: st.mx, my0: st.my, tx0: cbs.tx, ty0: cbs.ty };
         cbs.down = null;
         return;
@@ -18121,7 +18145,12 @@
     const up = (e)=>{
       ptrs.delete(e.pointerId);
       // 핀치 뒤 남은 손가락 하나로는 도면이 튀지 않게, 모두 뗄 때까지 기다린다
-      if(ptrs.size === 0 && cbs){ cbs.down = null; cbs.pinch = null; }
+      if(ptrs.size === 0 && cbs){
+        const d0 = cbs.down, lbl = cbs.tapLbl; cbs.tapLbl = null;
+        // 거의 움직이지 않고 뗐으면 "누름" — 파란 숫자를 눌렀다면 그 값을 가져온다
+        if(e.type === 'pointerup' && lbl && d0 && !cbs.pinch && Math.hypot(e.clientX - d0.sx, e.clientY - d0.sy) < 8) cbPickLabel(Number(lbl.dataset.i));
+        cbs.down = null; cbs.pinch = null;
+      }
     };
     view.addEventListener('pointerup', up); view.addEventListener('pointercancel', up);
     view.addEventListener('wheel', (e)=>{
@@ -18156,6 +18185,17 @@
     cbApplyT();
   }
 
+  // 도면 속 숫자를 눌렀을 때: 그 숫자 위치를 십자선 아래로 가져오고, 값을 입력칸에 채운다 (눈금선 위치는 사용자가 확대해서 마무리)
+  function cbPickLabel(i){
+    const dr = currentDrawingObj(); if(!cbs || !dr || !dr.calibLabels || !dr.calibLabels[i]) return;
+    if(!(cbs.step === 1 || cbs.step === 2 || cbs.step === 3)) return;
+    const lb = dr.calibLabels[i], v = cbRef.view;
+    cbs.scale = Math.max(cbs.scale, 3);
+    cbs.tx = v.clientWidth / 2 - (lb.x / 100 * cbs.fw) * cbs.scale;
+    cbs.ty = v.clientHeight / 2 - (lb.y / 100 * cbs.fh) * cbs.scale;
+    cbRef.val.value = String(lb.v);
+    cbApplyT(); cbUpdateOk();
+  }
   function cbMark(x, y, m, pend){
     const L = cbRef.layer;
     const c = document.createElement('div'); c.className = 'calib-cross' + (pend ? ' pend' : ''); c.style.left = x + '%'; c.style.top = y + '%'; L.appendChild(c);
@@ -18172,6 +18212,14 @@
       const v = cbRef.view, fx = ((v.clientWidth / 2 - cbs.tx) / cbs.scale) / cbs.fw * 100, fy = ((v.clientHeight / 2 - cbs.ty) / cbs.scale) / cbs.fh * 100;
       cbs.pending = (fx >= 0 && fx <= 100 && fy >= 0 && fy <= 100) ? { x: fx, y: fy } : null;
     }else cbs.pending = null;
+    // PDF 도면이면 도면 속 숫자(눈금 값 후보)를 파란 표시로 보여 준다 — 눌러서 가져오기
+    const dr0 = currentDrawingObj();
+    if(picking && dr0 && Array.isArray(dr0.calibLabels)){
+      dr0.calibLabels.forEach((lb, i)=>{
+        const c = document.createElement('div'); c.className = 'cb-lbl'; c.dataset.i = String(i);
+        c.style.left = lb.x + '%'; c.style.top = lb.y + '%'; c.textContent = lb.t; L.appendChild(c);
+      });
+    }
     // 이 도면에 이미 찍어 둔 지점은 작은 점으로 보여 준다(눈금과의 위치 관계 확인용)
     (markers || []).forEach(mk=>{
       if(mk.xPct == null || mk.drawingId !== cbs.drawingId) return;
@@ -18229,9 +18277,13 @@
       { a:'close', t:'닫기', fn: closeCalibModal }
     ]);
   }
+  function cbLblHint(){
+    const dr = currentDrawingObj();
+    return (dr && Array.isArray(dr.calibLabels) && dr.calibLabels.length) ? ' (도면 속 숫자를 누르면 그 값이 입력되고 숫자 위치로 이동합니다 — 십자선은 눈금선 쪽으로 직접 옮겨 맞추세요.)' : '';
+  }
   function cbGoStep1(){
     cbs.step = 1; cbs.p1 = null; cbs.pending = null; cbSetStepBar(1); cbRef.val.value = '0';
-    cbPanel('① 도면을 끌어서 눈금 한 곳(예: 0m)을 가운데 십자선 아래에 맞추세요. 두 손가락으로 벌리면 확대됩니다. 그 눈금의 값(m)을 적고 [확정]을 누르세요.', '', true, [
+    cbPanel('① 도면을 끌어서 눈금 한 곳(예: 0m)을 가운데 십자선 아래에 맞추세요. 두 손가락으로 벌리면 확대됩니다. 그 눈금의 값(m)을 적고 [확정]을 누르세요.' + cbLblHint(), '', true, [
       { a:'ok', t:'✓ 첫 눈금 확정', verb:'첫 눈금 확정', cls:'primary', fn: cbConfirm1 },
       { a:'close', t:'닫기', fn: closeCalibModal }
     ]);
@@ -18240,7 +18292,7 @@
     const v = cbNum(); if(!cbs.pending){ return; }
     if(v == null){ cbRef.msg.className = 'cb-msg warn'; cbRef.msg.textContent = '눈금 값을 숫자로 적어 주세요. 예: 0, 20, 100'; return; }
     cbs.p1 = { x: cbs.pending.x, y: cbs.pending.y, m: v }; cbs.pending = null; cbs.step = 2; cbSetStepBar(2); cbRef.val.value = '';
-    cbPanel('② 같은 방법으로, 첫 눈금과 멀리 떨어진 다른 눈금 한 곳(예: 마지막 눈금)을 십자선 아래에 맞추고 값(m)을 적은 뒤 [확정]을 누르세요. 두 눈금이 멀수록 정확합니다.', '', true, [
+    cbPanel('② 같은 방법으로, 첫 눈금과 멀리 떨어진 다른 눈금 한 곳(예: 마지막 눈금)을 십자선 아래에 맞추고 값(m)을 적은 뒤 [확정]을 누르세요. 두 눈금이 멀수록 정확합니다.' + cbLblHint(), '', true, [
       { a:'ok', t:'✓ 둘째 눈금 확정', verb:'둘째 눈금 확정', cls:'primary', fn: cbConfirm2 },
       { a:'back', t:'첫 눈금 다시', fn: cbGoStep1 }
     ]);
@@ -18718,6 +18770,7 @@
         description: '',
         createdAt: new Date().toISOString()
       };
+      if(page.labels && page.labels.length) d.calibLabels = page.labels;
       drawings.push(d);
       if(pIdx === 0) firstNewId = d.id;
     });
