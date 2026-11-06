@@ -3552,7 +3552,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v171';
+  const PS_BUILD = 'v172';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -6019,9 +6019,13 @@
     //    없어서, 팀원 자료 가져오기(pull) 도중 site.drawings 가 잠깐 비면 그 다음
     //    loadSite 에서 낡은 baseImageSrc 로 "도면 1" 을 또 만들어(새 id) 유령
     //    도면이 계속 늘어났다("기존에 있던 도면1 또 생겨").
-    if(site.drawings.length === 0 && site.baseImageSrc && !site._drawingsMigrated){
+    // ★ 이미 한 번 옮겼는데도(_drawingsMigrated) 도면 목록이 비어 있고 화면에는 이미지가 남아 있는 경우(예: "도서관 뒤"처럼
+    //    도면은 보이는데 도면 탭이 없는 상태)도 같은 이미지로 도면을 다시 만든다. 이때는 id 를 시설물 id 로 고정해서,
+    //    여러 번 실행되거나 다른 기기에서 같은 복구가 일어나도 도면이 계속 늘어나지 않게 한다.
+    const healEmpty = site.drawings.length === 0 && !!site.baseImageSrc && !!site._drawingsMigrated;
+    if(site.drawings.length === 0 && site.baseImageSrc && (!site._drawingsMigrated || healEmpty)){
       const d = {
-        id: genId(),
+        id: healEmpty ? ('dw-' + site.id) : genId(),
         name: '도면 1',
         type: '',
         order: 1,
