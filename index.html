@@ -2482,6 +2482,9 @@
 .cb-tools{ position:absolute; right:8px; top:8px; display:flex; flex-direction:column; gap:6px; z-index:20; }
 .cb-tools button{ min-width:44px; min-height:40px; font-size:16px; background:rgba(255,255,255,0.95); border:1px solid var(--line); border-radius:10px; padding:4px 8px; box-shadow:0 1px 4px rgba(0,0,0,0.25); }
 .cb-tools button.on{ background:var(--amber); }
+.cb-reticle{ position:absolute; left:50%; top:50%; width:0; height:0; z-index:15; pointer-events:none; display:none; }
+.cb-reticle::before{ content:''; position:absolute; left:-26px; top:-1px; width:52px; height:2px; background:#d81b60; box-shadow:0 0 0 1px rgba(255,255,255,0.85); }
+.cb-reticle::after{ content:''; position:absolute; top:-26px; left:-1px; height:52px; width:2px; background:#d81b60; box-shadow:0 0 0 1px rgba(255,255,255,0.85); }
 .cb-loupe{ position:absolute; width:120px; height:120px; border-radius:50%; border:3px solid #1565C0; box-shadow:0 2px 10px rgba(0,0,0,0.45); background-color:#fff; background-repeat:no-repeat; display:none; z-index:30; pointer-events:none; overflow:hidden; }
 .cb-loupe::before, .cb-loupe::after{ content:''; position:absolute; background:#d81b60; }
 .cb-loupe::before{ left:50%; top:8px; bottom:8px; width:2px; margin-left:-1px; }
@@ -3542,7 +3545,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v166';
+  const PS_BUILD = 'v167';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -18037,59 +18040,25 @@
       '<div class="cb-steps" id="cbSteps"><span data-s="1">① 첫 눈금</span><span data-s="2">② 둘째 눈금</span><span data-s="3">③ 검증</span></div>' +
       '<div class="cb-view" id="cbView">' +
         '<div class="cb-frame" id="cbFrame"><img id="cbImg" alt=""><div class="cb-layer" id="cbLayer"></div></div>' +
-        '<div class="cb-loupe" id="cbLoupe"></div>' +
-        '<div class="cb-tools"><button type="button" id="cbZoomIn">＋</button><button type="button" id="cbZoomOut">－</button><button type="button" id="cbFit">맞춤</button><button type="button" id="cbMode" class="on">🎯 찍기</button></div>' +
+        '<div class="cb-reticle" id="cbReticle"></div>' +
+        '<div class="cb-tools"><button type="button" id="cbZoomIn">＋</button><button type="button" id="cbZoomOut">－</button><button type="button" id="cbFit">맞춤</button></div>' +
       '</div>' +
       '<div class="cb-panel"><div class="cb-msg" id="cbMsg"></div>' +
-        '<div class="cb-row" id="cbRow"><input id="cbVal" type="text" inputmode="decimal" placeholder="몇 m?"><span style="font-size:13px;">m</span>' +
-          '<button type="button" class="ghost nud" data-k="left">◀</button><button type="button" class="ghost nud" data-k="right">▶</button><button type="button" class="ghost nud" data-k="up">▲</button><button type="button" class="ghost nud" data-k="down">▼</button></div>' +
+        '<div class="cb-row" id="cbRow"><input id="cbVal" type="text" inputmode="decimal" placeholder="몇 m?"><span style="font-size:13px;">m</span></div>' +
         '<div class="cb-btns" id="cbBtns"></div></div>';
     document.body.appendChild(el);
     const q = (sel)=> el.querySelector(sel);
     cbRef = { el, title:q('#cbTitle'), steps:q('#cbSteps'), view:q('#cbView'), frame:q('#cbFrame'), img:q('#cbImg'), layer:q('#cbLayer'),
-              loupe:q('#cbLoupe'), msg:q('#cbMsg'), row:q('#cbRow'), val:q('#cbVal'), btns:q('#cbBtns'), modeBtn:q('#cbMode') };
+              reticle:q('#cbReticle'), msg:q('#cbMsg'), row:q('#cbRow'), val:q('#cbVal'), btns:q('#cbBtns') };
 
     q('#cbClose').addEventListener('click', closeCalibModal);
     q('#cbZoomIn').addEventListener('click', ()=> cbZoom(1.5));
     q('#cbZoomOut').addEventListener('click', ()=> cbZoom(1 / 1.5));
     q('#cbFit').addEventListener('click', ()=> cbFit());
-    cbRef.modeBtn.addEventListener('click', ()=>{
-      if(!cbs) return;
-      cbs.mode = cbs.mode === 'place' ? 'pan' : 'place';
-      cbRef.modeBtn.textContent = cbs.mode === 'place' ? '🎯 찍기' : '✋ 이동';
-      cbRef.modeBtn.classList.toggle('on', cbs.mode === 'place');
-    });
-    cbRef.row.addEventListener('click', (e)=>{
-      const b = e.target.closest('button.nud'); if(!b || !cbs || !cbs.pending) return;
-      const z = cbs.scale || 1, sx = (1 / z) / cbs.fw * 100, sy = (1 / z) / cbs.fh * 100, pt = cbs.pending;
-      if(b.dataset.k === 'left') pt.x = Math.max(0, pt.x - sx);
-      else if(b.dataset.k === 'right') pt.x = Math.min(100, pt.x + sx);
-      else if(b.dataset.k === 'up') pt.y = Math.max(0, pt.y - sy);
-      else if(b.dataset.k === 'down') pt.y = Math.min(100, pt.y + sy);
-      cbRender();
-    });
+    cbRef.val.addEventListener('input', ()=> cbUpdateOk());
 
     const view = cbRef.view;
-    const place = (e)=>{
-      const r = view.getBoundingClientRect();
-      const fx = ((e.clientX - r.left - cbs.tx) / cbs.scale) / cbs.fw * 100;
-      const fy = ((e.clientY - r.top - cbs.ty) / cbs.scale) / cbs.fh * 100;
-      cbs.pending = { x: Math.min(100, Math.max(0, fx)), y: Math.min(100, Math.max(0, fy)) };
-      cbRender();
-    };
-    const showLoupe = (e)=>{
-      const r = view.getBoundingClientRect(), L = cbRef.loupe, mag = 3, half = 60;
-      const px = (e.clientX - r.left - cbs.tx) / cbs.scale, py = (e.clientY - r.top - cbs.ty) / cbs.scale;
-      L.style.backgroundSize = (cbs.fw * cbs.scale * mag) + 'px ' + (cbs.fh * cbs.scale * mag) + 'px';
-      L.style.backgroundPosition = (half - px * cbs.scale * mag) + 'px ' + (half - py * cbs.scale * mag) + 'px';
-      let top = e.clientY - r.top - 160; if(top < 4) top = e.clientY - r.top + 40;
-      L.style.left = Math.min(Math.max(4, e.clientX - r.left - half), r.width - 124) + 'px';
-      L.style.top = top + 'px';
-      L.style.display = 'block';
-    };
-    const canPlace = ()=> cbs && cbs.mode === 'place' && (cbs.step === 1 || cbs.step === 2 || cbs.step === 3);
-    // 두 손가락으로 벌리고 오므려 확대·축소하고, 두 손가락을 함께 움직여 도면을 옮긴다(기존 도면 화면과 같은 방식).
-    // 한 손가락: 찍기 모드에서는 십자선을 옮기고(확대경 표시), 이동 모드에서는 도면을 끈다.
+    // 십자선은 화면 가운데에 고정. 한 손가락으로 도면을 끌고, 두 손가락으로 벌리고 오므려 확대·축소한다.
     const ptrs = new Map();
     const pinchState = ()=>{
       const a = Array.from(ptrs.values()); const r = view.getBoundingClientRect();
@@ -18102,12 +18071,11 @@
       if(ptrs.size === 2){
         const st = pinchState();
         cbs.pinch = { d0: st.d, s0: cbs.scale, mx0: st.mx, my0: st.my, tx0: cbs.tx, ty0: cbs.ty };
-        cbs.down = null; cbRef.loupe.style.display = 'none';
+        cbs.down = null;
         return;
       }
       if(ptrs.size > 2 || cbs.pinch) return;
       cbs.down = { sx: e.clientX, sy: e.clientY, tx: cbs.tx, ty: cbs.ty };
-      if(canPlace()){ place(e); showLoupe(e); }
     });
     view.addEventListener('pointermove', (e)=>{
       if(!cbs || !ptrs.has(e.pointerId)) return;
@@ -18122,13 +18090,12 @@
         return;
       }
       if(!cbs.down || cbs.pinch) return;
-      if(cbs.mode === 'pan'){ cbs.tx = cbs.down.tx + (e.clientX - cbs.down.sx); cbs.ty = cbs.down.ty + (e.clientY - cbs.down.sy); cbApplyT(); }
-      else if(canPlace()){ place(e); showLoupe(e); }
+      cbs.tx = cbs.down.tx + (e.clientX - cbs.down.sx); cbs.ty = cbs.down.ty + (e.clientY - cbs.down.sy); cbApplyT();
     });
     const up = (e)=>{
       ptrs.delete(e.pointerId);
-      if(ptrs.size === 0){ if(cbs){ cbs.down = null; cbs.pinch = null; } cbRef.loupe.style.display = 'none'; }
-      else if(ptrs.size === 1 && cbs && cbs.pinch){ /* 핀치가 끝났다 — 남은 손가락으로는 십자선이 움직이지 않게 모두 뗄 때까지 기다린다 */ cbRef.loupe.style.display = 'none'; }
+      // 핀치 뒤 남은 손가락 하나로는 도면이 튀지 않게, 모두 뗄 때까지 기다린다
+      if(ptrs.size === 0 && cbs){ cbs.down = null; cbs.pinch = null; }
     };
     view.addEventListener('pointerup', up); view.addEventListener('pointercancel', up);
     view.addEventListener('wheel', (e)=>{
@@ -18172,6 +18139,13 @@
   function cbRender(){
     if(!cbs) return;
     const L = cbRef.layer; L.innerHTML = '';
+    // 십자선(화면 가운데)이 가리키는 도면 위 좌표 — 1·2·3단계에서만 쓴다
+    const picking = cbs.step === 1 || cbs.step === 2 || cbs.step === 3;
+    cbRef.reticle.style.display = picking ? 'block' : 'none';
+    if(picking){
+      const v = cbRef.view, fx = ((v.clientWidth / 2 - cbs.tx) / cbs.scale) / cbs.fw * 100, fy = ((v.clientHeight / 2 - cbs.ty) / cbs.scale) / cbs.fh * 100;
+      cbs.pending = (fx >= 0 && fx <= 100 && fy >= 0 && fy <= 100) ? { x: fx, y: fy } : null;
+    }else cbs.pending = null;
     // 이 도면에 이미 찍어 둔 지점은 작은 점으로 보여 준다(눈금과의 위치 관계 확인용)
     (markers || []).forEach(mk=>{
       if(mk.xPct == null || mk.drawingId !== cbs.drawingId) return;
@@ -18188,7 +18162,6 @@
       ln.style.left = x1 + 'px'; ln.style.top = y1 + 'px'; ln.style.width = Math.hypot(x2 - x1, y2 - y1) + 'px';
       ln.style.transform = 'rotate(' + (Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI) + 'deg)'; L.appendChild(ln);
     }
-    if(cbs.pending) cbMark(cbs.pending.x, cbs.pending.y, 0, true);
     // 확정 버튼은 십자선을 찍은 뒤에만 켠다
     const okBtn = cbRef.btns.querySelector('[data-a="ok"]'); if(okBtn) okBtn.disabled = !cbs.pending;
   }
@@ -18205,10 +18178,15 @@
     cbRef.row.style.display = showInput ? 'flex' : 'none';
     cbRef.btns.innerHTML = '';
     buttons.forEach(b=>{
-      const btn = document.createElement('button'); btn.type = 'button'; btn.className = b.cls || 'ghost'; btn.dataset.a = b.a; btn.textContent = b.t;
+      const btn = document.createElement('button'); btn.type = 'button'; btn.className = b.cls || 'ghost'; btn.dataset.a = b.a; btn.textContent = b.t; if(b.verb) btn.dataset.verb = b.verb;
       btn.addEventListener('click', b.fn); cbRef.btns.appendChild(btn);
     });
-    cbRender();
+    cbRender(); cbUpdateOk();
+  }
+  function cbUpdateOk(){
+    const b = cbRef && cbRef.btns.querySelector('[data-a="ok"]'); if(!b) return;
+    if(!b.dataset.base) b.dataset.base = b.textContent;
+    const v = cbNum(); b.textContent = (v != null && b.dataset.verb) ? '✓ 여기가 ' + fmtStationM(v) + 'm — ' + b.dataset.verb : b.dataset.base;
   }
   const cbNum = ()=>{ const v = parseFloat(String(cbRef.val.value).replace(/[mM\s]/g, '').replace(',', '.')); return isFinite(v) ? v : null; };
 
@@ -18227,8 +18205,8 @@
   }
   function cbGoStep1(){
     cbs.step = 1; cbs.p1 = null; cbs.pending = null; cbSetStepBar(1); cbRef.val.value = '0';
-    cbPanel('① 도면의 눈금 한 곳(예: 0m)을 눌러 십자선을 맞추세요. 누르고 있으면 확대경이 보입니다. 아래에 그 눈금의 값(m)을 적고 [확정]을 누르세요.', '', true, [
-      { a:'ok', t:'✓ 첫 눈금 확정', cls:'primary', fn: cbConfirm1 },
+    cbPanel('① 도면을 끌어서 눈금 한 곳(예: 0m)을 가운데 십자선 아래에 맞추세요. 두 손가락으로 벌리면 확대됩니다. 그 눈금의 값(m)을 적고 [확정]을 누르세요.', '', true, [
+      { a:'ok', t:'✓ 첫 눈금 확정', verb:'첫 눈금 확정', cls:'primary', fn: cbConfirm1 },
       { a:'close', t:'닫기', fn: closeCalibModal }
     ]);
   }
@@ -18236,8 +18214,8 @@
     const v = cbNum(); if(!cbs.pending){ return; }
     if(v == null){ cbRef.msg.className = 'cb-msg warn'; cbRef.msg.textContent = '눈금 값을 숫자로 적어 주세요. 예: 0, 20, 100'; return; }
     cbs.p1 = { x: cbs.pending.x, y: cbs.pending.y, m: v }; cbs.pending = null; cbs.step = 2; cbSetStepBar(2); cbRef.val.value = '';
-    cbPanel('② 첫 눈금과 멀리 떨어진 다른 눈금 한 곳(예: 마지막 눈금)을 눌러 맞추고, 값(m)을 적은 뒤 [확정]을 누르세요. 두 눈금이 멀수록 정확합니다.', '', true, [
-      { a:'ok', t:'✓ 둘째 눈금 확정', cls:'primary', fn: cbConfirm2 },
+    cbPanel('② 같은 방법으로, 첫 눈금과 멀리 떨어진 다른 눈금 한 곳(예: 마지막 눈금)을 십자선 아래에 맞추고 값(m)을 적은 뒤 [확정]을 누르세요. 두 눈금이 멀수록 정확합니다.', '', true, [
+      { a:'ok', t:'✓ 둘째 눈금 확정', verb:'둘째 눈금 확정', cls:'primary', fn: cbConfirm2 },
       { a:'back', t:'첫 눈금 다시', fn: cbGoStep1 }
     ]);
   }
@@ -18268,8 +18246,8 @@
   }
   function cbGoVerify(){
     cbs.step = 3; cbs.pending = null; cbSetStepBar(3); cbRef.val.value = '';
-    cbPanel('③ 위치를 이미 아는 눈금 한 곳(예: 중간 눈금)을 눌러 맞추고 그 값(m)을 적은 뒤 [비교]를 누르세요. 앱이 계산한 값과 얼마나 다른지 보여 줍니다.', '', true, [
-      { a:'ok', t:'✓ 비교', cls:'primary', fn: cbConfirmVerify },
+    cbPanel('③ 같은 방법으로, 위치를 이미 아는 눈금 한 곳(예: 중간 눈금)을 십자선 아래에 맞추고 그 값(m)을 적은 뒤 [비교]를 누르세요. 앱이 계산한 값과 얼마나 다른지 보여 줍니다.', '', true, [
+      { a:'ok', t:'✓ 비교', verb:'비교', cls:'primary', fn: cbConfirmVerify },
       { a:'close', t:'닫기', fn: closeCalibModal }
     ]);
   }
@@ -18293,11 +18271,9 @@
     if(movingMarkerId) cancelMoveMode();
     const dr = currentDrawingObj(); if(!dr) return;
     ensureCalibModal();
-    cbs = { drawingId: currentDrawingId, step: 1, p1: null, pending: null, scale: 1, tx: 0, ty: 0, fw: 1, fh: 1, mode: 'place', down: null };
+    cbs = { drawingId: currentDrawingId, step: 1, p1: null, pending: null, scale: 1, tx: 0, ty: 0, fw: 1, fh: 1, down: null, pinch: null };
     cbRef.title.textContent = '📏 눈금 설정 · ' + (dr.name || '도면');
-    cbRef.modeBtn.textContent = '🎯 찍기'; cbRef.modeBtn.classList.add('on');
     cbRef.el.style.display = 'flex';
-    cbRef.loupe.style.backgroundImage = 'url("' + baseImageSrc + '")';
     const go = ()=>{ cbFit(); if(calibUsable(dr.calib)) cbGoOverview(); else cbGoStep1(); };
     cbRef.img.onload = go;
     cbRef.img.src = baseImageSrc;
@@ -18305,7 +18281,7 @@
   }
   function closeCalibModal(){
     if(!cbRef) return;
-    cbRef.el.style.display = 'none'; cbRef.loupe.style.display = 'none'; cbRef.img.onload = null; cbs = null;
+    cbRef.el.style.display = 'none'; cbRef.img.onload = null; cbs = null;
     try{ updateCalibButton(); renderLog(); }catch(e){}
   }
   function startCalibration(){ openCalibModal(); }
