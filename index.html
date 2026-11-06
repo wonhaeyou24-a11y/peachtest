@@ -8,6 +8,7 @@
 <!-- PWA / iOS 홈 화면 앱 설정 -->
 <link rel="manifest" href="./manifest.json">
 <meta name="theme-color" content="#F2F2F7">
+<meta name="description" content="이미지 위 지점을 눌러 번호를 매기고 사진을 촬영해 시설물 점검 내용을 기록하는 현장 조사 앱">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="PeachShot">
@@ -3551,7 +3552,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v170';
+  const PS_BUILD = 'v171';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -7075,11 +7076,6 @@
 
   async function verifyInvitationToken(rawToken){
     if(!rawToken || !rawToken.trim()){
-      console.log('[PeachShot Invite Debug] verifyInvitationToken: 토큰 없음', {
-        hasToken: false, target_email: null, valid: false, status: 'NO_TOKEN',
-        current_auth_email: (supabaseSession && supabaseSession.user) ? supabaseSession.user.email : null,
-        accept_rpc_called: false, accept_rpc_result: null, pending_invite_deleted: false
-      });
       return { ok:false, valid:false, status:'INVALID', reason:'초대 토큰이 비어있습니다.' };
     }
     if(!supabaseClient) return { ok:false, valid:false, status:'INVALID', reason:'Supabase 연결 필요' };
@@ -7090,11 +7086,6 @@
       });
 
       if(error || !data){
-        console.log('[PeachShot Invite Debug] verifyInvitationToken: RPC 오류 또는 데이터 없음', {
-          hasToken: true, target_email: null, valid: false, status: 'ERROR',
-          current_auth_email: (supabaseSession && supabaseSession.user) ? supabaseSession.user.email : null,
-          accept_rpc_called: false, accept_rpc_result: null, pending_invite_deleted: true
-        });
         clearPendingInvite();
         window._pendingInviteInfo = null;
         return { ok:false, valid:false, status:'INVALID', reason:'유효하지 않거나 만료된 초대 링크입니다.' };
@@ -7105,16 +7096,6 @@
       const isValid = (invData.valid === true || (invData.valid !== false && !['EXPIRED', 'REVOKED', 'USED', 'INVALID'].includes(rawStatus)));
       const status = isValid ? 'VALID' : rawStatus;
 
-      console.log('[PeachShot Invite Debug] verifyInvitationToken 결과:', {
-        hasToken: true,
-        target_email: invData.target_email || null,
-        valid: isValid,
-        status: status,
-        current_auth_email: (supabaseSession && supabaseSession.user) ? supabaseSession.user.email : null,
-        accept_rpc_called: false,
-        accept_rpc_result: null,
-        pending_invite_deleted: !isValid
-      });
 
       if(!isValid){
         let reason = '유효하지 않거나 만료된 초대 링크입니다.';
@@ -7160,16 +7141,6 @@
 
     // 클라이언트 1차 방어: 기대 이메일과 현재 로그인 이메일 불일치 검증
     if(expectedEmail && currentAuthEmail && expectedEmail.toLowerCase().trim() !== currentAuthEmail){
-      console.log('[PeachShot Invite Debug] acceptOrganizationInvitation: 이메일 불일치로 RPC 호출 차단', {
-        hasToken: true,
-        target_email: expectedEmail,
-        valid: false,
-        status: 'EMAIL_MISMATCH',
-        current_auth_email: currentAuthEmail,
-        accept_rpc_called: false,
-        accept_rpc_result: 'FAIL (Email Mismatch)',
-        pending_invite_deleted: true
-      });
       clearPendingInvite();
       window._pendingInviteInfo = null;
       return {
@@ -7196,16 +7167,6 @@
           permanentFailure = true;
         }
 
-        console.log('[PeachShot Invite Debug] accept_org_invitation RPC 실패:', {
-          hasToken: true,
-          target_email: expectedEmail,
-          valid: false,
-          status: 'RPC_ERROR',
-          current_auth_email: currentAuthEmail,
-          accept_rpc_called: true,
-          accept_rpc_result: 'FAIL: ' + reason,
-          pending_invite_deleted: permanentFailure
-        });
 
         if(permanentFailure){
           clearPendingInvite();
@@ -7221,16 +7182,6 @@
       const role = resData.role || 'Inspector';
       const memberId = resData.member_id;
 
-      console.log('[PeachShot Invite Debug] accept_org_invitation RPC 성공:', {
-        hasToken: true,
-        target_email: expectedEmail,
-        valid: true,
-        status: 'ACCEPTED',
-        current_auth_email: currentAuthEmail,
-        accept_rpc_called: true,
-        accept_rpc_result: 'SUCCESS',
-        pending_invite_deleted: true
-      });
 
       clearPendingInvite();
       window._pendingInviteInfo = null;
@@ -7398,16 +7349,6 @@
       // 3단계: 로그인 완료 상태인 경우 대상 이메일 일치 검증
       const currentAuthEmail = (supabaseSession.user && supabaseSession.user.email) ? supabaseSession.user.email.toLowerCase().trim() : '';
       if(check.target_email && currentAuthEmail && check.target_email.toLowerCase().trim() !== currentAuthEmail){
-        console.log('[PeachShot Invite Debug] checkAndProcessPendingInvite: 로그인 이메일 불일치로 처리 중단', {
-          hasToken: true,
-          target_email: check.target_email,
-          valid: false,
-          status: 'EMAIL_MISMATCH',
-          current_auth_email: currentAuthEmail,
-          accept_rpc_called: false,
-          accept_rpc_result: 'FAIL (Email Mismatch)',
-          pending_invite_deleted: true
-        });
         clearPendingInvite();
         await clearInviteTokenFromAccount();
         window._pendingInviteInfo = null;
