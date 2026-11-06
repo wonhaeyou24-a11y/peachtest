@@ -3542,7 +3542,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v165';
+  const PS_BUILD = 'v166';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -18088,18 +18088,48 @@
       L.style.display = 'block';
     };
     const canPlace = ()=> cbs && cbs.mode === 'place' && (cbs.step === 1 || cbs.step === 2 || cbs.step === 3);
+    // 두 손가락으로 벌리고 오므려 확대·축소하고, 두 손가락을 함께 움직여 도면을 옮긴다(기존 도면 화면과 같은 방식).
+    // 한 손가락: 찍기 모드에서는 십자선을 옮기고(확대경 표시), 이동 모드에서는 도면을 끈다.
+    const ptrs = new Map();
+    const pinchState = ()=>{
+      const a = Array.from(ptrs.values()); const r = view.getBoundingClientRect();
+      return { d: Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) || 1, mx: (a[0].x + a[1].x) / 2 - r.left, my: (a[0].y + a[1].y) / 2 - r.top };
+    };
     view.addEventListener('pointerdown', (e)=>{
       if(!cbs || e.target.closest('.cb-tools')) return;
       try{ view.setPointerCapture(e.pointerId); }catch(err){}
+      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if(ptrs.size === 2){
+        const st = pinchState();
+        cbs.pinch = { d0: st.d, s0: cbs.scale, mx0: st.mx, my0: st.my, tx0: cbs.tx, ty0: cbs.ty };
+        cbs.down = null; cbRef.loupe.style.display = 'none';
+        return;
+      }
+      if(ptrs.size > 2 || cbs.pinch) return;
       cbs.down = { sx: e.clientX, sy: e.clientY, tx: cbs.tx, ty: cbs.ty };
       if(canPlace()){ place(e); showLoupe(e); }
     });
     view.addEventListener('pointermove', (e)=>{
-      if(!cbs || !cbs.down) return;
+      if(!cbs || !ptrs.has(e.pointerId)) return;
+      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if(ptrs.size >= 2 && cbs.pinch){
+        const st = pinchState(), P = cbs.pinch;
+        const ns = Math.min(12, Math.max(0.5, P.s0 * st.d / P.d0)), k = ns / P.s0;
+        cbs.scale = ns;
+        cbs.tx = st.mx - (P.mx0 - P.tx0) * k;
+        cbs.ty = st.my - (P.my0 - P.ty0) * k;
+        cbApplyT();
+        return;
+      }
+      if(!cbs.down || cbs.pinch) return;
       if(cbs.mode === 'pan'){ cbs.tx = cbs.down.tx + (e.clientX - cbs.down.sx); cbs.ty = cbs.down.ty + (e.clientY - cbs.down.sy); cbApplyT(); }
       else if(canPlace()){ place(e); showLoupe(e); }
     });
-    const up = ()=>{ if(cbs) cbs.down = null; cbRef.loupe.style.display = 'none'; };
+    const up = (e)=>{
+      ptrs.delete(e.pointerId);
+      if(ptrs.size === 0){ if(cbs){ cbs.down = null; cbs.pinch = null; } cbRef.loupe.style.display = 'none'; }
+      else if(ptrs.size === 1 && cbs && cbs.pinch){ /* 핀치가 끝났다 — 남은 손가락으로는 십자선이 움직이지 않게 모두 뗄 때까지 기다린다 */ cbRef.loupe.style.display = 'none'; }
+    };
     view.addEventListener('pointerup', up); view.addEventListener('pointercancel', up);
     view.addEventListener('wheel', (e)=>{
       if(!cbs) return; e.preventDefault();
