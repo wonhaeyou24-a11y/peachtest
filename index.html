@@ -3552,7 +3552,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v172';
+  const PS_BUILD = 'v173';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -17398,6 +17398,7 @@
     const frame = document.getElementById('imgFrame');
     if(!img || !frame || !img.naturalWidth) return;
     const sw = stage.clientWidth, sh = stage.clientHeight;
+    if(!sw || !sh){ fitIsAuto = true; return; }   // 아직 화면에 안 보이는 크기(0) — 크기가 잡히면 아래 ResizeObserver 가 다시 맞춘다
     const iw = img.naturalWidth, ih = img.naturalHeight;
     const fit = Math.min(sw / iw, sh / ih);
     frameW = iw * fit;
@@ -17407,12 +17408,30 @@
     zScale = 1;
     zTx = (sw - frameW) / 2;
     zTy = (sh - frameH) / 2;
-    applyTransform();
+    inFit = true;
+    try{ applyTransform(); }finally{ inFit = false; }
+    fitIsAuto = true;   // 사용자가 확대·이동하기 전까지는 "맞춤" 상태 — 창/칸 크기가 바뀌면 다시 맞춘다
+    lastFitSW = sw; lastFitSH = sh;
   }
+  // 앱을 껐다 켜거나 화면 크기가 늦게 정해지면(도면 칸 높이, 회전, 탐색기 열고 닫기) 처음 맞춘 값이 어긋나
+  // 도면이 구석으로 밀려 보였다. 사용자가 직접 확대·이동하지 않은 "맞춤" 상태일 때만 크기 변화에 맞춰 다시 맞춘다.
+  let fitIsAuto = true, inFit = false, lastFitSW = 0, lastFitSH = 0;
+  function refitIfStageResized(){
+    if(!fitIsAuto) return;
+    const sw = stage.clientWidth, sh = stage.clientHeight;
+    if(!sw || !sh) return;
+    if(Math.abs(sw - lastFitSW) < 1 && Math.abs(sh - lastFitSH) < 1) return;
+    if(document.getElementById('baseImg')) fitToStage();
+  }
+  try{ new ResizeObserver(refitIfStageResized).observe(stage); }catch(e){}
+  window.addEventListener('resize', refitIfStageResized);
+  window.addEventListener('orientationchange', ()=> setTimeout(refitIfStageResized, 300));
+  setInterval(refitIfStageResized, 700);   // 관찰자가 늦거나 빠지는 환경(화면이 가려진 상태 등)에서도 따라가도록 가볍게 한 번 더 확인
 
   function applyTransform(){
     const frame = document.getElementById('imgFrame');
     if(!frame) return;
+    if(!inFit) fitIsAuto = false;   // 맞춤 계산이 아닌 곳(확대·이동)에서 불렀다면 사용자가 직접 움직인 상태
     frame.style.transform = 'translate(' + zTx + 'px,' + zTy + 'px) scale(' + zScale + ')';
     frame.style.setProperty('--zinv', String(1 / (zScale || 1)));   // 눈금 보정 기준점 표시(.calib-mark) 크기 보정용
     zoomLabel.textContent = Math.round(zScale * 100) + '%';
