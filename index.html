@@ -2464,7 +2464,38 @@
 .pc-only-hint{display:none; margin-top:8px; font-size:12px; color:var(--sub);}
 @media (min-width: 880px){ .pc-only-hint{display:block;} }
 
-/* 눈금 보정: 십자선·기준선·미세조정 막대 */
+/* 눈금 설정 전용 화면 */
+.cb-modal{ position:fixed; inset:0; z-index:5000; background:var(--navy); display:flex; flex-direction:column; }
+.cb-top{ display:flex; align-items:center; gap:10px; padding:10px 12px; background:var(--panel); border-bottom:1px solid var(--line); flex:none; }
+.cb-top .cb-title{ font-weight:700; font-size:15px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cb-top button{ padding:6px 12px; }
+.cb-steps{ display:flex; gap:6px; padding:8px 12px; background:var(--panel); font-size:12px; flex:none; }
+.cb-steps span{ padding:3px 10px; border-radius:999px; border:1px solid var(--line); color:var(--muted); }
+.cb-steps span.on{ background:var(--amber); color:#1a1206; border-color:var(--amber); font-weight:700; }
+.cb-steps span.done{ color:#1b5e20; border-color:#1b5e20; }
+.cb-view{ position:relative; flex:1 1 auto; min-height:0; overflow:hidden; background:#e9e9ee; touch-action:none; user-select:none; -webkit-user-select:none; }
+.cb-frame{ position:absolute; left:0; top:0; transform-origin:0 0; background:#fff; box-shadow:0 0 0 1px rgba(0,0,0,0.15); }
+.cb-frame img{ width:100%; height:100%; display:block; pointer-events:none; -webkit-user-drag:none; }
+.cb-layer{ position:absolute; inset:0; pointer-events:none; }
+.cb-dot{ position:absolute; width:0; height:0; z-index:5; transform:scale(var(--zinv,1)); transform-origin:0 0; }
+.cb-dot::before{ content:''; position:absolute; left:-4px; top:-4px; width:8px; height:8px; border-radius:50%; background:#F2A93B; border:1px solid #fff; box-shadow:0 0 2px rgba(0,0,0,0.5); }
+.cb-tools{ position:absolute; right:8px; top:8px; display:flex; flex-direction:column; gap:6px; z-index:20; }
+.cb-tools button{ min-width:44px; min-height:40px; font-size:16px; background:rgba(255,255,255,0.95); border:1px solid var(--line); border-radius:10px; padding:4px 8px; box-shadow:0 1px 4px rgba(0,0,0,0.25); }
+.cb-tools button.on{ background:var(--amber); }
+.cb-loupe{ position:absolute; width:120px; height:120px; border-radius:50%; border:3px solid #1565C0; box-shadow:0 2px 10px rgba(0,0,0,0.45); background-color:#fff; background-repeat:no-repeat; display:none; z-index:30; pointer-events:none; overflow:hidden; }
+.cb-loupe::before, .cb-loupe::after{ content:''; position:absolute; background:#d81b60; }
+.cb-loupe::before{ left:50%; top:8px; bottom:8px; width:2px; margin-left:-1px; }
+.cb-loupe::after{ top:50%; left:8px; right:8px; height:2px; margin-top:-1px; }
+.cb-panel{ flex:none; background:var(--panel); border-top:1px solid var(--line); padding:10px 12px calc(10px + env(safe-area-inset-bottom)); }
+.cb-msg{ font-size:13px; line-height:1.5; margin-bottom:8px; }
+.cb-msg.ok{ color:#1b5e20; font-weight:600; } .cb-msg.warn{ color:#c25b00; font-weight:600; }
+.cb-row{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:8px; }
+.cb-row input{ width:96px; background:var(--panel-2); border:1px solid var(--line); border-radius:8px; color:var(--text); font-family:inherit; font-size:16px; padding:8px 10px; }
+.cb-row .nud{ min-width:40px; min-height:40px; font-size:16px; padding:4px 8px; }
+.cb-btns{ display:flex; gap:8px; flex-wrap:wrap; }
+.cb-btns button{ flex:1 1 120px; padding:10px 12px; font-size:14px; }
+
+/* (예전) 도면 위 눈금 보정: 십자선·기준선 — 눈금 설정 화면에서도 같은 모양을 쓴다 */
 .calib-cross{ position:absolute; width:0; height:0; z-index:8; pointer-events:none; transform:scale(var(--zinv, 1)); transform-origin:0 0; }
 .calib-cross::before{ content:''; position:absolute; left:-18px; top:-1px; width:36px; height:2px; background:#d81b60; box-shadow:0 0 0 1px rgba(255,255,255,0.8); }
 .calib-cross::after{ content:''; position:absolute; top:-18px; left:-1px; height:36px; width:2px; background:#d81b60; box-shadow:0 0 0 1px rgba(255,255,255,0.8); }
@@ -2624,7 +2655,6 @@
       <button id="zoomIn" aria-label="확대">＋</button>
       <button id="zoomFit">맞춤</button>
       <button id="zoomCalib" title="도면의 눈금(예: 0m, 100m) 두 곳을 눌러 지점의 위치(m)를 자동으로 계산합니다">📏 눈금</button>
-      <button id="zoomCalibView" type="button" style="display:none;" title="눈금 기준점과 기준선을 도면 위에 계속 보여 줍니다">👁 눈금선</button>
     </div>
     <div class="map-stage" id="mapStage" style="display:none;">
       <div id="mapView"></div>
@@ -3512,7 +3542,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v164';
+  const PS_BUILD = 'v165';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -17982,220 +18012,280 @@
     try{ renderCalibMarks(); }catch(e){}   // 도면을 바꾸면 그 도면의 눈금선 표시도 같이 갱신
   }
 
-  // 기준점 표시: 보정하는 동안, 그리고 보정을 마친 직후 몇 초 동안(또는 "👁 눈금선"을 켜 두면 계속) 보여 준다.
-  //  - 누른 곳마다 십자선 + 라벨, 두 기준점 사이에는 점선(기준선)을 그린다 — 어디를 눌렀는지 눈으로 확인할 수 있다.
+  // ================================================================
+  // 눈금 설정 전용 화면 — 도면 위에 겹쳐 띄우던 안내·조정 막대를 없애고, 눈금만 정밀하게 맞추는 전체 화면을 따로 둔다.
+  //  · 확대/이동(✋)·찍기(🎯) 전환, 누르는 동안 손가락 위에 확대경(돋보기), ◀▶▲▼ 한 칸 이동, 단계 안내(① 첫 눈금 ② 둘째 눈금 ③ 검증)
+  //  · 저장 값(drawing.calib {p1,p2,ar,setAt})과 계산식(calibStationOf)은 그대로 — 이미 맞춰 둔 눈금과 위치(m)는 바뀌지 않는다.
+  // ================================================================
   let calibShowAlways = false;
-  function calibBarEl(){
-    let bar = document.getElementById('calibBar');
-    if(bar) return bar;
-    bar = document.createElement('div');
-    bar.id = 'calibBar'; bar.className = 'calib-bar';
-    bar.innerHTML = '<button type="button" data-k="left" title="왼쪽으로 한 칸">◀</button><button type="button" data-k="right" title="오른쪽으로 한 칸">▶</button>' +
-      '<button type="button" data-k="up" title="위로 한 칸">▲</button><button type="button" data-k="down" title="아래로 한 칸">▼</button>' +
-      '<button type="button" data-k="ok" class="ok">✓ 확정</button>';
-    const host = document.querySelector('.stage-wrap') || document.body;
-    host.appendChild(bar);
-    bar.addEventListener('click', (e)=>{
-      const b = e.target.closest('button'); if(!b) return;
-      e.stopPropagation();
-      calibBarAction(b.dataset.k);
-    });
-    return bar;
-  }
-  function updateCalibBar(){
-    const bar = calibBarEl();
-    bar.style.display = (calibMode && calibMode.pending) ? 'flex' : 'none';
-  }
-  // 한 번 누르면 화면에서 1픽셀만큼 옮긴다(확대할수록 더 잘게 움직인다)
-  function calibBarAction(k){
-    if(!calibMode || !calibMode.pending || !frameW || !frameH) return;
-    const z = zScale || 1;
-    const sx = (1 / z) / frameW * 100, sy = (1 / z) / frameH * 100;
-    const pt = calibMode.pending;
-    if(k === 'left') pt.x = Math.max(0, pt.x - sx);
-    else if(k === 'right') pt.x = Math.min(100, pt.x + sx);
-    else if(k === 'up') pt.y = Math.max(0, pt.y - sy);
-    else if(k === 'down') pt.y = Math.min(100, pt.y + sy);
-    else if(k === 'ok'){ confirmCalibPoint(); return; }
-    renderCalibMarks();
-  }
-
   function renderCalibMarks(){
+    // 도면 위에는 눈금 표시를 더 올리지 않는다(눈금 설정 화면에서만 본다). 남아 있는 표시가 있으면 지운다.
     const frame = document.getElementById('imgFrame');
-    if(!frame){ try{ updateCalibBar(); }catch(e){} return; }
-    frame.querySelectorAll('.calib-mark, .calib-cross, .calib-line').forEach(el => el.remove());
-    const pts = [];
-    let line = null, pendingPt = null;
-    const dr = currentDrawingObj();
-    if(calibMode && calibMode.drawingId === currentDrawingId){
-      if(calibMode.p1) pts.push(calibMode.p1);
-      if(calibMode.pending) pendingPt = calibMode.pending;
-      if(calibMode.verify && dr && calibUsable(dr.calib)){ pts.length = 0; pts.push(dr.calib.p1, dr.calib.p2); line = [dr.calib.p1, dr.calib.p2]; }
-    } else if(!calibMode && (calibShowAlways || Date.now() < calibShowUntil)){
-      if(dr && calibUsable(dr.calib)){ pts.push(dr.calib.p1, dr.calib.p2); line = [dr.calib.p1, dr.calib.p2]; }
-    }
-    const W = frame.clientWidth || frameW, H = frame.clientHeight || frameH;
-    if(line && W && H){
-      const x1 = line[0].x / 100 * W, y1 = line[0].y / 100 * H, x2 = line[1].x / 100 * W, y2 = line[1].y / 100 * H;
-      const el = document.createElement('div');
-      el.className = 'calib-line';
-      el.style.left = x1 + 'px'; el.style.top = y1 + 'px';
-      el.style.width = Math.hypot(x2 - x1, y2 - y1) + 'px';
-      el.style.transform = 'rotate(' + (Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI) + 'deg)';
-      frame.appendChild(el);
-    }
-    const addMark = (pt, pend)=>{
-      const c = document.createElement('div');
-      c.className = 'calib-cross' + (pend ? ' pend' : '');
-      c.style.left = pt.x + '%'; c.style.top = pt.y + '%';
-      frame.appendChild(c);
-      const el = document.createElement('div');
-      el.className = 'calib-mark';
-      el.style.left = pt.x + '%'; el.style.top = pt.y + '%';
-      el.textContent = pend ? '여기?' : fmtStationM(pt.m) + 'm';
-      if(pend) el.style.background = '#ef6c00';
-      frame.appendChild(el);
+    if(frame) frame.querySelectorAll('.calib-mark, .calib-cross, .calib-line').forEach(el => el.remove());
+  }
+  function handleCalibTap(e){ /* 예전 도면 위 보정 방식 — 지금은 전용 화면을 쓴다 */ }
+
+  let cbRef = null;     // 눈금 설정 화면의 요소들
+  let cbs = null;       // 진행 상태 { dr, step, p1, pending, scale, tx, ty, fw, fh, mode, down }
+
+  function ensureCalibModal(){
+    if(cbRef) return cbRef;
+    const el = document.createElement('div');
+    el.id = 'calibModal'; el.className = 'cb-modal'; el.style.display = 'none';
+    el.innerHTML =
+      '<div class="cb-top"><div class="cb-title" id="cbTitle">📏 눈금 설정</div><button type="button" class="ghost" id="cbClose">닫기 ✕</button></div>' +
+      '<div class="cb-steps" id="cbSteps"><span data-s="1">① 첫 눈금</span><span data-s="2">② 둘째 눈금</span><span data-s="3">③ 검증</span></div>' +
+      '<div class="cb-view" id="cbView">' +
+        '<div class="cb-frame" id="cbFrame"><img id="cbImg" alt=""><div class="cb-layer" id="cbLayer"></div></div>' +
+        '<div class="cb-loupe" id="cbLoupe"></div>' +
+        '<div class="cb-tools"><button type="button" id="cbZoomIn">＋</button><button type="button" id="cbZoomOut">－</button><button type="button" id="cbFit">맞춤</button><button type="button" id="cbMode" class="on">🎯 찍기</button></div>' +
+      '</div>' +
+      '<div class="cb-panel"><div class="cb-msg" id="cbMsg"></div>' +
+        '<div class="cb-row" id="cbRow"><input id="cbVal" type="text" inputmode="decimal" placeholder="몇 m?"><span style="font-size:13px;">m</span>' +
+          '<button type="button" class="ghost nud" data-k="left">◀</button><button type="button" class="ghost nud" data-k="right">▶</button><button type="button" class="ghost nud" data-k="up">▲</button><button type="button" class="ghost nud" data-k="down">▼</button></div>' +
+        '<div class="cb-btns" id="cbBtns"></div></div>';
+    document.body.appendChild(el);
+    const q = (sel)=> el.querySelector(sel);
+    cbRef = { el, title:q('#cbTitle'), steps:q('#cbSteps'), view:q('#cbView'), frame:q('#cbFrame'), img:q('#cbImg'), layer:q('#cbLayer'),
+              loupe:q('#cbLoupe'), msg:q('#cbMsg'), row:q('#cbRow'), val:q('#cbVal'), btns:q('#cbBtns'), modeBtn:q('#cbMode') };
+
+    q('#cbClose').addEventListener('click', closeCalibModal);
+    q('#cbZoomIn').addEventListener('click', ()=> cbZoom(1.5));
+    q('#cbZoomOut').addEventListener('click', ()=> cbZoom(1 / 1.5));
+    q('#cbFit').addEventListener('click', ()=> cbFit());
+    cbRef.modeBtn.addEventListener('click', ()=>{
+      if(!cbs) return;
+      cbs.mode = cbs.mode === 'place' ? 'pan' : 'place';
+      cbRef.modeBtn.textContent = cbs.mode === 'place' ? '🎯 찍기' : '✋ 이동';
+      cbRef.modeBtn.classList.toggle('on', cbs.mode === 'place');
+    });
+    cbRef.row.addEventListener('click', (e)=>{
+      const b = e.target.closest('button.nud'); if(!b || !cbs || !cbs.pending) return;
+      const z = cbs.scale || 1, sx = (1 / z) / cbs.fw * 100, sy = (1 / z) / cbs.fh * 100, pt = cbs.pending;
+      if(b.dataset.k === 'left') pt.x = Math.max(0, pt.x - sx);
+      else if(b.dataset.k === 'right') pt.x = Math.min(100, pt.x + sx);
+      else if(b.dataset.k === 'up') pt.y = Math.max(0, pt.y - sy);
+      else if(b.dataset.k === 'down') pt.y = Math.min(100, pt.y + sy);
+      cbRender();
+    });
+
+    const view = cbRef.view;
+    const place = (e)=>{
+      const r = view.getBoundingClientRect();
+      const fx = ((e.clientX - r.left - cbs.tx) / cbs.scale) / cbs.fw * 100;
+      const fy = ((e.clientY - r.top - cbs.ty) / cbs.scale) / cbs.fh * 100;
+      cbs.pending = { x: Math.min(100, Math.max(0, fx)), y: Math.min(100, Math.max(0, fy)) };
+      cbRender();
     };
-    pts.forEach(pt => addMark(pt, false));
-    if(pendingPt) addMark(pendingPt, true);
-    try{ updateCalibBar(); }catch(e){}
+    const showLoupe = (e)=>{
+      const r = view.getBoundingClientRect(), L = cbRef.loupe, mag = 3, half = 60;
+      const px = (e.clientX - r.left - cbs.tx) / cbs.scale, py = (e.clientY - r.top - cbs.ty) / cbs.scale;
+      L.style.backgroundSize = (cbs.fw * cbs.scale * mag) + 'px ' + (cbs.fh * cbs.scale * mag) + 'px';
+      L.style.backgroundPosition = (half - px * cbs.scale * mag) + 'px ' + (half - py * cbs.scale * mag) + 'px';
+      let top = e.clientY - r.top - 160; if(top < 4) top = e.clientY - r.top + 40;
+      L.style.left = Math.min(Math.max(4, e.clientX - r.left - half), r.width - 124) + 'px';
+      L.style.top = top + 'px';
+      L.style.display = 'block';
+    };
+    const canPlace = ()=> cbs && cbs.mode === 'place' && (cbs.step === 1 || cbs.step === 2 || cbs.step === 3);
+    view.addEventListener('pointerdown', (e)=>{
+      if(!cbs || e.target.closest('.cb-tools')) return;
+      try{ view.setPointerCapture(e.pointerId); }catch(err){}
+      cbs.down = { sx: e.clientX, sy: e.clientY, tx: cbs.tx, ty: cbs.ty };
+      if(canPlace()){ place(e); showLoupe(e); }
+    });
+    view.addEventListener('pointermove', (e)=>{
+      if(!cbs || !cbs.down) return;
+      if(cbs.mode === 'pan'){ cbs.tx = cbs.down.tx + (e.clientX - cbs.down.sx); cbs.ty = cbs.down.ty + (e.clientY - cbs.down.sy); cbApplyT(); }
+      else if(canPlace()){ place(e); showLoupe(e); }
+    });
+    const up = ()=>{ if(cbs) cbs.down = null; cbRef.loupe.style.display = 'none'; };
+    view.addEventListener('pointerup', up); view.addEventListener('pointercancel', up);
+    view.addEventListener('wheel', (e)=>{
+      if(!cbs) return; e.preventDefault();
+      const r = view.getBoundingClientRect();
+      cbZoom(e.deltaY < 0 ? 1.25 : 0.8, e.clientX - r.left, e.clientY - r.top);
+    }, { passive: false });
+    return cbRef;
   }
 
-  function startCalibration(){
+  function cbFit(){
+    if(!cbs) return;
+    const view = cbRef.view, nw = cbRef.img.naturalWidth || 1, nh = cbRef.img.naturalHeight || 1;
+    const vw = view.clientWidth || 1, vh = view.clientHeight || 1;
+    const s0 = Math.min(vw / nw, vh / nh);
+    cbs.fw = nw * s0; cbs.fh = nh * s0; cbs.scale = 1;
+    cbs.tx = (vw - cbs.fw) / 2; cbs.ty = (vh - cbs.fh) / 2;
+    cbRef.frame.style.width = cbs.fw + 'px'; cbRef.frame.style.height = cbs.fh + 'px';
+    cbApplyT();
+  }
+  function cbApplyT(){
+    cbRef.frame.style.transform = 'translate(' + cbs.tx + 'px,' + cbs.ty + 'px) scale(' + cbs.scale + ')';
+    cbRef.frame.style.setProperty('--zinv', String(1 / cbs.scale));
+    cbRender();
+  }
+  function cbZoom(f, cx, cy){
+    if(!cbs) return;
+    const view = cbRef.view;
+    if(cx == null){ cx = view.clientWidth / 2; cy = view.clientHeight / 2; }
+    const ns = Math.min(12, Math.max(0.5, cbs.scale * f)), k = ns / cbs.scale;
+    cbs.tx = cx - (cx - cbs.tx) * k; cbs.ty = cy - (cy - cbs.ty) * k; cbs.scale = ns;
+    cbApplyT();
+  }
+
+  function cbMark(x, y, m, pend){
+    const L = cbRef.layer;
+    const c = document.createElement('div'); c.className = 'calib-cross' + (pend ? ' pend' : ''); c.style.left = x + '%'; c.style.top = y + '%'; L.appendChild(c);
+    const el = document.createElement('div'); el.className = 'calib-mark'; el.style.left = x + '%'; el.style.top = y + '%';
+    el.textContent = pend ? '여기?' : fmtStationM(m) + 'm'; if(pend) el.style.background = '#ef6c00'; L.appendChild(el);
+  }
+  function cbRender(){
+    if(!cbs) return;
+    const L = cbRef.layer; L.innerHTML = '';
+    // 이 도면에 이미 찍어 둔 지점은 작은 점으로 보여 준다(눈금과의 위치 관계 확인용)
+    (markers || []).forEach(mk=>{
+      if(mk.xPct == null || mk.drawingId !== cbs.drawingId) return;
+      const d = document.createElement('div'); d.className = 'cb-dot'; d.style.left = mk.xPct + '%'; d.style.top = mk.yPct + '%'; L.appendChild(d);
+    });
+    const dr = currentDrawingObj();
+    let line = null;
+    if(cbs.step === 'overview' || cbs.step === 3 || cbs.step === 4){
+      if(dr && calibUsable(dr.calib)){ line = [dr.calib.p1, dr.calib.p2]; cbMark(dr.calib.p1.x, dr.calib.p1.y, dr.calib.p1.m); cbMark(dr.calib.p2.x, dr.calib.p2.y, dr.calib.p2.m); }
+    }else if(cbs.step === 2 && cbs.p1){ cbMark(cbs.p1.x, cbs.p1.y, cbs.p1.m); }
+    if(line){
+      const x1 = line[0].x / 100 * cbs.fw, y1 = line[0].y / 100 * cbs.fh, x2 = line[1].x / 100 * cbs.fw, y2 = line[1].y / 100 * cbs.fh;
+      const ln = document.createElement('div'); ln.className = 'calib-line';
+      ln.style.left = x1 + 'px'; ln.style.top = y1 + 'px'; ln.style.width = Math.hypot(x2 - x1, y2 - y1) + 'px';
+      ln.style.transform = 'rotate(' + (Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI) + 'deg)'; L.appendChild(ln);
+    }
+    if(cbs.pending) cbMark(cbs.pending.x, cbs.pending.y, 0, true);
+    // 확정 버튼은 십자선을 찍은 뒤에만 켠다
+    const okBtn = cbRef.btns.querySelector('[data-a="ok"]'); if(okBtn) okBtn.disabled = !cbs.pending;
+  }
+
+  function cbSetStepBar(active){
+    cbRef.steps.querySelectorAll('span').forEach(sp=>{
+      const n = Number(sp.dataset.s);
+      sp.classList.toggle('on', n === active);
+      sp.classList.toggle('done', typeof active === 'number' ? n < active : true);
+    });
+  }
+  function cbPanel(msg, cls, showInput, buttons){
+    cbRef.msg.className = 'cb-msg' + (cls ? ' ' + cls : ''); cbRef.msg.textContent = msg;
+    cbRef.row.style.display = showInput ? 'flex' : 'none';
+    cbRef.btns.innerHTML = '';
+    buttons.forEach(b=>{
+      const btn = document.createElement('button'); btn.type = 'button'; btn.className = b.cls || 'ghost'; btn.dataset.a = b.a; btn.textContent = b.t;
+      btn.addEventListener('click', b.fn); cbRef.btns.appendChild(btn);
+    });
+    cbRender();
+  }
+  const cbNum = ()=>{ const v = parseFloat(String(cbRef.val.value).replace(/[mM\s]/g, '').replace(',', '.')); return isFinite(v) ? v : null; };
+
+  function cbGoOverview(){
+    const dr = currentDrawingObj(); cbs.step = 'overview'; cbs.pending = null; cbSetStepBar('overview');
+    cbPanel('눈금이 맞춰져 있습니다 (' + fmtStationM(dr.calib.p1.m) + 'm ~ ' + fmtStationM(dr.calib.p2.m) + 'm). 점선이 기준선입니다.', '', false, [
+      { a:'redo', t:'다시 맞추기', cls:'primary', fn: ()=> cbGoStep1() },
+      { a:'verify', t:'검증하기', fn: ()=> cbGoVerify() },
+      { a:'off', t:'눈금 해제', cls:'ghost', fn: async ()=>{
+          if(!await psConfirm('눈금 보정을 해제할까요?\n(자동 위치(m)가 사라집니다. 직접 입력한 위치는 그대로입니다.)')) return;
+          const d = currentDrawingObj(); d.calib = { off: true, setAt: new Date().toISOString() };
+          logActivity('도면 눈금 보정 해제', d.name || '도면'); updateCalibButton(); renderLog(); saveState(); closeCalibModal();
+        } },
+      { a:'close', t:'닫기', fn: closeCalibModal }
+    ]);
+  }
+  function cbGoStep1(){
+    cbs.step = 1; cbs.p1 = null; cbs.pending = null; cbSetStepBar(1); cbRef.val.value = '0';
+    cbPanel('① 도면의 눈금 한 곳(예: 0m)을 눌러 십자선을 맞추세요. 누르고 있으면 확대경이 보입니다. 아래에 그 눈금의 값(m)을 적고 [확정]을 누르세요.', '', true, [
+      { a:'ok', t:'✓ 첫 눈금 확정', cls:'primary', fn: cbConfirm1 },
+      { a:'close', t:'닫기', fn: closeCalibModal }
+    ]);
+  }
+  function cbConfirm1(){
+    const v = cbNum(); if(!cbs.pending){ return; }
+    if(v == null){ cbRef.msg.className = 'cb-msg warn'; cbRef.msg.textContent = '눈금 값을 숫자로 적어 주세요. 예: 0, 20, 100'; return; }
+    cbs.p1 = { x: cbs.pending.x, y: cbs.pending.y, m: v }; cbs.pending = null; cbs.step = 2; cbSetStepBar(2); cbRef.val.value = '';
+    cbPanel('② 첫 눈금과 멀리 떨어진 다른 눈금 한 곳(예: 마지막 눈금)을 눌러 맞추고, 값(m)을 적은 뒤 [확정]을 누르세요. 두 눈금이 멀수록 정확합니다.', '', true, [
+      { a:'ok', t:'✓ 둘째 눈금 확정', cls:'primary', fn: cbConfirm2 },
+      { a:'back', t:'첫 눈금 다시', fn: cbGoStep1 }
+    ]);
+  }
+  function cbConfirm2(){
+    const v = cbNum(); if(!cbs.pending){ return; }
+    const warn = (t)=>{ cbRef.msg.className = 'cb-msg warn'; cbRef.msg.textContent = t; };
+    if(v == null){ warn('눈금 값을 숫자로 적어 주세요. 예: 0, 20, 100'); return; }
+    const p1 = cbs.p1, p2 = { x: cbs.pending.x, y: cbs.pending.y, m: v };
+    const ar = cbs.fw / cbs.fh;
+    if(v === p1.m){ warn('두 눈금의 값이 같습니다. 서로 다른 눈금(예: 0m와 100m)이어야 합니다.'); return; }
+    if(Math.hypot((p2.x - p1.x) / 100 * ar, (p2.y - p1.y) / 100) < 0.1 * ar){ warn('두 눈금이 너무 가깝습니다. 서로 멀리 떨어진 눈금을 눌러 주세요.'); return; }
+    // 두 눈금이 거의 가로(세로)로 놓였으면 정확히 가로(세로)로 맞춘다 — 기준선이 기울면 선에서 먼 지점의 위치가 틀어진다
+    let snap = '';
+    const dxp = (p2.x - p1.x) / 100 * cbs.fw, dyp = (p2.y - p1.y) / 100 * cbs.fh, tan3 = Math.tan(3 * Math.PI / 180);
+    if(Math.abs(dyp) <= tan3 * Math.abs(dxp)){ const ym = (p1.y + p2.y) / 2; p1.y = ym; p2.y = ym; snap = ' (기준선을 수평으로 맞췄습니다)'; }
+    else if(Math.abs(dxp) <= tan3 * Math.abs(dyp)){ const xm = (p1.x + p2.x) / 2; p1.x = xm; p2.x = xm; snap = ' (기준선을 수직으로 맞췄습니다)'; }
+    const dr = currentDrawingObj(); if(!dr){ closeCalibModal(); return; }
+    dr.calib = { p1, p2, ar: Math.round(ar * 10000) / 10000, setAt: new Date().toISOString() };
+    logActivity('도면 눈금 보정', (dr.name || '도면') + ' · ' + fmtStationM(p1.m) + 'm ~ ' + fmtStationM(p2.m) + 'm');
+    updateCalibButton(); renderLog(); saveState();
+    const onThis = markers.filter(mk => mk.xPct != null && mk.drawingId === currentDrawingId);
+    const sample = onThis.length ? (' 예) 지점 ' + onThis[0].num + ' → ' + (markerStationText(onThis[0], currentSiteObj()) || '(눈금 범위 밖)') + 'm.') : '';
+    cbs.pending = null; cbs.step = 4; cbSetStepBar(3);
+    cbPanel('✓ 눈금을 저장했습니다 (' + fmtStationM(p1.m) + 'm ~ ' + fmtStationM(p2.m) + 'm)' + snap + '. 이 도면의 지점 ' + onThis.length + '개의 위치(m)가 자동으로 계산됩니다.' + sample + ' 정확한지 확인하려면 [검증하기]를 누르세요.', 'ok', false, [
+      { a:'verify', t:'검증하기', cls:'primary', fn: cbGoVerify },
+      { a:'close', t:'완료', fn: closeCalibModal }
+    ]);
+  }
+  function cbGoVerify(){
+    cbs.step = 3; cbs.pending = null; cbSetStepBar(3); cbRef.val.value = '';
+    cbPanel('③ 위치를 이미 아는 눈금 한 곳(예: 중간 눈금)을 눌러 맞추고 그 값(m)을 적은 뒤 [비교]를 누르세요. 앱이 계산한 값과 얼마나 다른지 보여 줍니다.', '', true, [
+      { a:'ok', t:'✓ 비교', cls:'primary', fn: cbConfirmVerify },
+      { a:'close', t:'닫기', fn: closeCalibModal }
+    ]);
+  }
+  function cbConfirmVerify(){
+    const v = cbNum(); if(!cbs.pending) return;
+    if(v == null){ cbRef.msg.className = 'cb-msg warn'; cbRef.msg.textContent = '눈금 값을 숫자로 적어 주세요. 예: 50'; return; }
+    const dr = currentDrawingObj(); const calc = dr ? calibStationOf(dr.calib, cbs.pending.x, cbs.pending.y) : null;
+    if(calc == null){ cbRef.msg.className = 'cb-msg warn'; cbRef.msg.textContent = '계산하지 못했습니다. 눈금을 다시 맞춰 주세요.'; return; }
+    const span = Math.abs(dr.calib.p2.m - dr.calib.p1.m) || 1, diff = calc - v, pct = Math.abs(diff) / span * 100;
+    cbs.pending = null;
+    cbPanel('검증 결과: 앱 계산 ' + fmtStationM(calc) + 'm / 입력 ' + fmtStationM(v) + 'm / 차이 ' + (diff >= 0 ? '+' : '') + fmtStationM(diff) + 'm (전체 구간의 ' + (Math.round(pct * 10) / 10) + '%). ' +
+      (pct > 1 ? '⚠ 차이가 큽니다 — 처음 두 눈금이 어긋났을 수 있으니 [다시 맞추기]를 권합니다.' : '✓ 오차가 작습니다.'), pct > 1 ? 'warn' : 'ok', false, [
+      { a:'redo', t:'다시 맞추기', cls: pct > 1 ? 'primary' : 'ghost', fn: cbGoStep1 },
+      { a:'verify', t:'다른 곳 검증', fn: cbGoVerify },
+      { a:'close', t:'완료', cls: pct > 1 ? 'ghost' : 'primary', fn: closeCalibModal }
+    ]);
+  }
+
+  function openCalibModal(){
     if(currentMode !== 'image' || !baseImageSrc || !currentDrawingId){ alert('먼저 도면 모드에서 눈금을 맞출 도면을 선택해 주세요.'); return; }
     if(movingMarkerId) cancelMoveMode();
-    calibMode = { step: 1, drawingId: currentDrawingId, p1: null, pending: null };
-    moveBannerText.textContent = '① 도면의 눈금 한 곳을 눌러 주세요 (확대하면 더 정확합니다)';
-    moveBanner.style.display = 'flex';
-    renderCalibMarks();
-    updateCalibButton();
+    const dr = currentDrawingObj(); if(!dr) return;
+    ensureCalibModal();
+    cbs = { drawingId: currentDrawingId, step: 1, p1: null, pending: null, scale: 1, tx: 0, ty: 0, fw: 1, fh: 1, mode: 'place', down: null };
+    cbRef.title.textContent = '📏 눈금 설정 · ' + (dr.name || '도면');
+    cbRef.modeBtn.textContent = '🎯 찍기'; cbRef.modeBtn.classList.add('on');
+    cbRef.el.style.display = 'flex';
+    cbRef.loupe.style.backgroundImage = 'url("' + baseImageSrc + '")';
+    const go = ()=>{ cbFit(); if(calibUsable(dr.calib)) cbGoOverview(); else cbGoStep1(); };
+    cbRef.img.onload = go;
+    cbRef.img.src = baseImageSrc;
+    if(cbRef.img.complete && cbRef.img.naturalWidth) go();
   }
-
-  // 도면을 누르면 바로 값을 묻지 않고, 누른 곳에 십자선(주황)을 표시한다 — 다시 눌러 옮기거나 ◀▶▲▼로 한 칸씩 조정한 뒤 [확정]을 누른다.
-  function handleCalibTap(e){
-    if(!calibMode) return;
-    if(calibMode.drawingId !== currentDrawingId){
-      cancelMoveMode();
-      alert('도면이 바뀌어서 눈금 보정을 취소했습니다. 다시 시작해 주세요.');
-      return;
-    }
-    if(!frameW || !frameH) return;
-    const rect = stage.getBoundingClientRect();
-    const localX = (e.clientX - rect.left - zTx) / zScale;
-    const localY = (e.clientY - rect.top - zTy) / zScale;
-    if(localX < 0 || localY < 0 || localX > frameW || localY > frameH) return;
-    calibMode.pending = { x: (localX / frameW) * 100, y: (localY / frameH) * 100 };
-    moveBannerText.textContent = (calibMode.verify ? '검증: ' : (calibMode.step === 2 ? '② ' : '① ')) + '십자선이 눈금에 맞는지 확인하세요 — 다시 눌러 옮기거나 ◀▶▲▼로 조정한 뒤 [확정]';
-    renderCalibMarks();
+  function closeCalibModal(){
+    if(!cbRef) return;
+    cbRef.el.style.display = 'none'; cbRef.loupe.style.display = 'none'; cbRef.img.onload = null; cbs = null;
+    try{ updateCalibButton(); renderLog(); }catch(e){}
   }
-
-  // [확정]: 십자선 위치를 확정하고 그 눈금이 몇 m인지 묻는다
-  function confirmCalibPoint(){
-    if(!calibMode || !calibMode.pending) return;
-    const x = calibMode.pending.x, y = calibMode.pending.y;
-    const stepNo = calibMode.step;
-
-    // 검증 눈금: 이미 맞춘 보정으로 계산한 값과 입력한 값을 비교한다
-    if(calibMode.verify){
-      const raw = prompt('검증할 눈금은 몇 m입니까?\n(숫자만 입력, 예: 50)', '');
-      if(raw === null) return;
-      const entered = parseFloat(String(raw).replace(/[mM\s]/g, '').replace(',', '.'));
-      if(!isFinite(entered)){ alert('숫자로 입력해 주세요. 예: 50'); return; }
-      const dr = currentDrawingObj();
-      const calc = dr ? calibStationOf(dr.calib, x, y) : null;
-      cancelMoveMode();
-      calibShowUntil = Date.now() + 15000;
-      setTimeout(()=>{ try{ renderCalibMarks(); }catch(err){} }, 15100);
-      renderCalibMarks();
-      if(calc == null){ alert('계산하지 못했습니다. 눈금을 다시 맞춰 주세요.'); return; }
-      const span = Math.abs(dr.calib.p2.m - dr.calib.p1.m) || 1;
-      const diff = calc - entered;
-      const pct = Math.abs(diff) / span * 100;
-      alert('검증 결과\n· 앱이 계산한 위치: ' + fmtStationM(calc) + 'm\n· 입력한 눈금: ' + fmtStationM(entered) + 'm\n· 차이: ' + (diff >= 0 ? '+' : '') + fmtStationM(diff) + 'm (전체 구간의 ' + (Math.round(pct * 10) / 10) + '%)' +
-        (pct > 1 ? '\n\n⚠ 차이가 큽니다. 처음 두 눈금의 위치가 어긋났을 수 있으니 "📏 눈금"에서 다시 맞추길 권합니다.' : '\n\n✓ 오차가 작습니다.'));
-      return;
-    }
-
-    const raw = prompt(stepNo === 1
-      ? '방금 표시한 눈금은 몇 m입니까?\n(숫자만 입력, 예: 0 또는 20)'
-      : '방금 표시한 두 번째 눈금은 몇 m입니까?\n(숫자만 입력, 예: 100)', stepNo === 1 ? '0' : '');
-    if(raw === null) return;   // 입력 취소: 십자선은 그대로 두고 다시 [확정]하거나 옮길 수 있다
-    const v = parseFloat(String(raw).replace(/[mM\s]/g, '').replace(',', '.'));
-    if(!isFinite(v)){ alert('숫자로 입력해 주세요. 예: 0, 20, 100'); return; }
-
-    if(stepNo === 1){
-      calibMode.p1 = { x, y, m: v };
-      calibMode.pending = null;
-      calibMode.step = 2;
-      moveBannerText.textContent = '② 멀리 떨어진 다른 눈금 한 곳을 눌러 주세요 (두 눈금이 멀수록 정확합니다)';
-      renderCalibMarks();
-      return;
-    }
-
-    const p1 = calibMode.p1, p2 = { x, y, m: v };
-    const ar = frameW / frameH;
-    if(v === p1.m){ alert('두 눈금의 값이 같습니다. 서로 다른 눈금(예: 0m와 100m)을 눌러 주세요.'); return; }
-    const dist = Math.hypot((p2.x - p1.x) / 100 * ar, (p2.y - p1.y) / 100);
-    if(dist < 0.1 * ar){ alert('두 눈금이 너무 가깝습니다. 서로 멀리 떨어진 눈금을 눌러 주세요.'); return; }
-
-    // 두 눈금이 거의 가로(또는 세로)로 놓였으면 정확히 가로(세로)로 맞춘다 — 누른 높이가 조금 달라 기준선이 기울면, 선에서 먼 지점의 위치가 틀어진다.
-    let snapNote = '';
-    const dxp = (p2.x - p1.x) / 100 * frameW, dyp = (p2.y - p1.y) / 100 * frameH;
-    const tan3 = Math.tan(3 * Math.PI / 180);
-    if(Math.abs(dyp) <= tan3 * Math.abs(dxp)){
-      const ym = (p1.y + p2.y) / 2; p1.y = ym; p2.y = ym; snapNote = '\n(두 눈금의 높이를 같게 맞춰 기준선을 수평으로 했습니다)';
-    }else if(Math.abs(dxp) <= tan3 * Math.abs(dyp)){
-      const xm = (p1.x + p2.x) / 2; p1.x = xm; p2.x = xm; snapNote = '\n(두 눈금의 좌우 위치를 같게 맞춰 기준선을 수직으로 했습니다)';
-    }
-
-    const dr = currentDrawingObj();
-    if(!dr){ cancelMoveMode(); return; }
-    dr.calib = { p1, p2, ar: Math.round(ar * 10000) / 10000, setAt: new Date().toISOString() };
-    calibMode = null;
-    moveBanner.style.display = 'none';
-    calibShowUntil = Date.now() + 15000;
-    setTimeout(()=>{ try{ renderCalibMarks(); }catch(err){} }, 15100);
-    renderCalibMarks();
-    updateCalibButton();
-    const onThis = markers.filter(mk => mk.xPct != null && mk.drawingId === currentDrawingId);
-    logActivity('도면 눈금 보정', (dr.name || '도면') + ' · ' + fmtStationM(p1.m) + 'm ~ ' + fmtStationM(p2.m) + 'm');
-    renderLog();   // 기록 목록의 위치 표시를 바로 갱신
-    saveState();
-    const sample = onThis.length ? ('\n예) 지점 ' + onThis[0].num + ' → ' + (markerStationText(onThis[0], currentSiteObj()) || '(눈금 범위 밖)') + 'm') : '';
-    (async ()=>{ const ok = await psConfirm('눈금을 맞췄습니다 (' + fmtStationM(p1.m) + 'm ~ ' + fmtStationM(p2.m) + 'm).' + snapNote + '\n이 도면의 지점 ' + onThis.length + '개의 위치(m)가 자동으로 계산됩니다.' + sample +
-      '\n\n정확한지 확인해 보시겠어요?\n이미 위치를 아는 다른 눈금(예: 중간 눈금) 한 곳을 눌러 계산값과 비교합니다.\n[확인] 검증하기   [취소] 건너뛰기');
-      if(!ok) return;
-      calibMode = { verify: true, drawingId: currentDrawingId, step: 0, p1: null, pending: null };
-      moveBannerText.textContent = '검증: 위치를 아는 눈금 한 곳을 눌러 주세요';
-      moveBanner.style.display = 'flex';
-      renderCalibMarks(); updateCalibButton();
-    })();
-  }
-
-  (function(){
-    const vb = document.getElementById('zoomCalibView');
-    if(vb) vb.addEventListener('click', ()=>{ calibShowAlways = !calibShowAlways; updateCalibButton(); });
-  })();
+  function startCalibration(){ openCalibModal(); }
 
   (function(){
     const btn = document.getElementById('zoomCalib');
     if(!btn) return;
-    btn.addEventListener('click', async ()=>{
+    btn.addEventListener('click', ()=>{
       if(calibMode){ cancelMoveMode(); return; }
-      const dr = currentDrawingObj();
-      if(dr && calibUsable(dr.calib)){
-        const rng = fmtStationM(dr.calib.p1.m) + 'm ~ ' + fmtStationM(dr.calib.p2.m) + 'm';
-        if(await psConfirm('이 도면은 눈금이 맞춰져 있습니다 (' + rng + ').\n\n[확인] 눈금을 다시 맞춘다\n[취소] 다른 선택')){ startCalibration(); return; }
-        if(await psConfirm('눈금 보정을 해제할까요?\n(자동 위치(m)가 사라집니다. 직접 입력한 위치는 그대로입니다.)')){
-          dr.calib = { off: true, setAt: new Date().toISOString() };
-          logActivity('도면 눈금 보정 해제', dr.name || '도면');
-          updateCalibButton();
-          renderLog();
-          saveState();
-        }
-        return;
-      }
-      startCalibration();
+      openCalibModal();
     });
   })();
 
