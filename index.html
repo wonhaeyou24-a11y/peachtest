@@ -605,7 +605,7 @@
   /* PC: 도면 칸이 4:3 비율로 폭만 따라가면 창 높이를 넘어 아래(확대/눈금 버튼)가 잘린다 —
      창 높이에 맞춰 줄인다(위쪽 머리·탭·안내줄 높이만큼 뺀다). */
   @media (min-width: 881px){
-    .stage{ aspect-ratio: auto; height: clamp(300px, calc(100dvh - var(--stage-top, 330px) - 16px), 1100px); }
+    .stage, .map-stage{ aspect-ratio: auto; height: clamp(300px, calc(100dvh - var(--stage-top, 330px) - 16px), 1100px); }
   }
   /* 도면 여러 장을 드래그앤드롭으로 끌어다 놓을 때 시각적 피드백 */
   .stage.drag-over{
@@ -3550,7 +3550,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v168';
+  const PS_BUILD = 'v169';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -3647,7 +3647,8 @@
     const upd = ()=>{
       raf = 0;
       try{
-        const top = Math.round(stage.getBoundingClientRect().top + (document.scrollingElement ? document.scrollingElement.scrollTop : 0));
+        const ms = document.getElementById('mapStage'), tgt = (ms && ms.offsetParent) ? ms : stage;
+        const top = Math.round(tgt.getBoundingClientRect().top + (document.scrollingElement ? document.scrollingElement.scrollTop : 0));
         if(top > 0 && top < 700) document.documentElement.style.setProperty('--stage-top', top + 'px');
       }catch(e){}
     };
