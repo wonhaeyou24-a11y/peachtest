@@ -2686,6 +2686,7 @@
         <button class="ghost icon-btn" id="btnToggleLogFilter" title="검색 · 중요도 필터" style="padding:2px 7px; font-size:12px;">🔍</button>
         <button class="ghost icon-btn" id="btnToggleLogTable" title="표로 보기 (사진 포함 · 보고서 참고자료용)" style="padding:2px 7px; font-size:12px; display:none;">▦ 표로</button>
         <button class="ghost icon-btn" id="btnCopyAllLog" title="목록 전체를 표 형식(탭 구분)으로 복사 — 엑셀·워드에 바로 붙여넣기" style="padding:2px 7px; font-size:12px; display:none;">📋 전체 복사</button>
+        <button class="ghost icon-btn" id="btnPriorSurvey" title="전차 손상 체크리스트 — 전차 사진을 보면서 조사" style="padding:2px 7px; font-size:12px; display:none;">📋 전차손상</button>
         <button class="ghost icon-btn" id="btnToggleWorklist" title="보고서 작업목록" style="padding:2px 7px; font-size:12px; display:none;">📑 작업목록</button>
         <button class="ghost icon-btn" id="btnToggleInspector" title="Inspector 접기/펼치기" style="padding:2px 7px; font-size:12px; display:none;">▶</button>
       </span>
@@ -2992,6 +2993,8 @@
       <label style="display:flex; align-items:center; gap:6px; margin-top:10px; font-size:13px;">
         <input id="npThenFacility" type="checkbox" checked> 만든 뒤 바로 시설물 추가하기
       </label>
+      <button class="ghost" id="npPriorImport" style="width:100%; margin-top:10px;" type="button">📥 전차자료(.json)로 프로젝트·시설물 한 번에 만들기</button>
+      <div class="hint" style="margin-top:4px;">위 프로젝트명 등을 입력한 뒤 누르면, 전차자료정리 결과 파일들을 골라 시설물과 전차 손상까지 채워서 만듭니다.</div>
     </div>
     <div class="modal-foot">
       <button class="ghost" id="npCancel">취소</button>
@@ -3095,6 +3098,14 @@
         <button class="more-item" id="btnExistingDamages">
           <span class="more-item-title">기존손상 관리</span>
           <span class="more-item-desc">과거부터 있던 손상 원본 기록 — 이번 조사에서 덮어쓰지 않습니다</span>
+        </button>
+        <button class="more-item role-gated" id="btnPriorImport">
+          <span class="more-item-title">전차자료 가져오기 (사전조사 결과)</span>
+          <span class="more-item-desc">전차자료정리 결과(.json)와 손상 사진(.zip)으로 시설물 제원·전차 이력·전차 손상·전차 사진을 이 프로젝트에 채웁니다</span>
+        </button>
+        <button class="more-item" id="btnPriorSurveyMenu">
+          <span class="more-item-title">전차손상 조사 (체크리스트)</span>
+          <span class="more-item-desc">전차 손상을 하나씩 전차 사진과 함께 보고, 바로 조사(촬영)를 시작합니다</span>
         </button>
         <button class="more-item" id="btnBulkImport">
           <span class="more-item-title">사진 일괄 가져오기 (GPS 자동 마킹)</span>
@@ -3406,6 +3417,8 @@
     </div>
     <div class="modal-body">
       <div class="hint">이 시설물에 과거부터 있던 손상의 원본 기록입니다. 현장조사에서 새로 입력하는 손상과는 별개로 관리됩니다.</div>
+      <div id="priorSummaryBox" style="display:none; margin:8px 0 12px;"></div>
+      <input type="file" id="priorImportInput" accept=".json,.zip,application/json,application/zip" multiple style="display:none;">
       <button class="primary role-gated" id="btnAddExistingDamage" style="margin:8px 0 12px;">+ 새 기존손상 추가</button>
       <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
         <button class="ghost" id="btnDownloadExcelTemplate" style="flex:1 1 auto; min-width:110px; white-space:nowrap;">양식 다운로드</button>
@@ -3418,6 +3431,37 @@
     </div>
   </div>
 </div>
+
+<!-- 전차손상 조사 (체크리스트 + 상세) -->
+<div class="modal-backdrop" id="priorSurveyModal" style="display:none;">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="priorSurveyTitle">전차손상 조사</h2>
+      <button class="close-x" id="closePriorSurvey" aria-label="닫기">✕</button>
+    </div>
+    <div class="modal-body" id="priorSurveyBody"></div>
+  </div>
+</div>
+<!-- 전차 사진 크게 보기 -->
+<div id="priorPhotoViewer" style="display:none; position:fixed; inset:0; z-index:100200; background:rgba(0,0,0,0.92); flex-direction:column; align-items:center; justify-content:center; padding:12px; box-sizing:border-box;">
+  <div id="priorViewerCaption" style="color:#fff; font-size:13px; margin-bottom:8px; text-align:center; max-width:100%;"></div>
+  <img id="priorViewerImg" alt="전차 사진" style="max-width:100%; max-height:calc(100% - 110px); object-fit:contain; border-radius:6px;">
+  <div style="display:flex; gap:8px; margin-top:10px;">
+    <button class="ghost" id="priorViewerPrev" type="button">◀ 이전</button>
+    <span id="priorViewerCount" style="color:#fff; align-self:center; font-size:13px;"></span>
+    <button class="ghost" id="priorViewerNext" type="button">다음 ▶</button>
+    <button class="primary" id="priorViewerClose" type="button">닫기</button>
+  </div>
+</div>
+<!-- 전차손상 조사 중 안내 띠 -->
+<div id="priorLinkBanner" style="display:none; position:fixed; top:8px; left:50%; transform:translateX(-50%); z-index:9500; background:#1f2a44; color:#fff; border:2px solid #ff6b35; border-radius:10px; padding:8px 12px; font-size:13px; max-width:min(560px, 94vw); box-shadow:0 6px 20px rgba(0,0,0,0.3);">
+  <div id="priorLinkBannerText" style="line-height:1.4;"></div>
+  <div style="display:flex; gap:6px; margin-top:6px; justify-content:flex-end;">
+    <button id="priorLinkBannerPhoto" type="button" style="font-size:12px; background:#fff; color:#1f2a44; border:0; border-radius:6px; padding:4px 10px;">🖼 전차 사진</button>
+    <button id="priorLinkBannerCancel" type="button" style="font-size:12px; background:#fff; color:#1f2a44; border:0; border-radius:6px; padding:4px 10px;">조사 취소</button>
+  </div>
+</div>
+<div id="priorProgressBox" style="display:none; position:fixed; left:50%; bottom:18px; transform:translateX(-50%); z-index:100300; background:rgba(17,17,17,0.9); color:#fff; padding:8px 14px; border-radius:999px; font-size:13px;"></div>
 
 <div class="modal-backdrop" id="existingDamageFormModal" style="display:none;">
   <div class="modal">
@@ -3552,7 +3596,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v173';
+  const PS_BUILD = 'v180';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -16426,6 +16470,7 @@
   let editingExistingDamageId = null;
 
   function renderExistingDamages(){
+    try{ renderPriorSummary(); }catch(e){}
     const visible = existingDamages.filter(d => !d.isDeleted);
     if(visible.length === 0){
       existingDamageBody.innerHTML = '<div class="log-empty">등록된 기존손상이 없습니다.</div>';
@@ -16441,7 +16486,7 @@
         [d.section, d.drawingPosition, d.part, d.measurement, d.damageName || '(손상명 없음)'].filter(Boolean).map(escapeHtml).join(' - ') +
         '<span style="font-weight:400; color:#888; font-size:12px;"> · ' + escapeHtml(d.status || '미확인') + '</span></div>' +
         '<div style="font-size:12px; color:#666;">' +
-        [d.id, d.externalId ? '번호 ' + d.externalId : '', d.component].filter(Boolean).map(escapeHtml).join(' · ') +
+        [d.id, d.externalId ? '번호 ' + d.externalId : '', d.component, (d.photos && d.photos.some(p => p && p.prior)) ? '📷 ' + d.photos.filter(p => p && p.prior).length : ''].filter(Boolean).map(escapeHtml).join(' · ') +
         '</div>';
       row.addEventListener('click', ()=> openExistingDamageForm(d));
       existingDamageBody.appendChild(row);
@@ -16911,6 +16956,792 @@
       alert('Excel 파일을 읽는 중 오류가 발생했습니다. 양식 파일 형식을 확인해주세요.');
     }
   });
+
+  // ---------- 전차자료 가져오기 (v174, 연결 설계안 Phase 1) ----------
+  // 전차자료정리 스킬이 만든 organized.json 을 읽어 시설물 제원·전차 이력·전차 손상(기존손상)을 채운다.
+  //  - 원문 불변: 가져온 전차 값은 그대로 두고, 대장↔전차가 다른 항목은 덮어쓰지 않고 priorRef 에 남긴다.
+  //  - 전차 이력(site.history)·참고자료(site.priorRef)는 읽기 전용 — 금회 입력과 섞지 않는다.
+  //  - 이미 있는 시설물은 비어 있는 제원만 채우고, 같은 전차 손상(priorKey)은 다시 가져와도 중복되지 않는다.
+  //  - 사진·도면은 이번 단계에서 가져오지 않는다(손상 사진 파일명만 priorPhotoFile 로 보관).
+  const PRIOR_SPEC_MAP = [
+    { re: /^연장/, field: 'length' },
+    { re: /^(지면노출)?높이/, field: 'height' },
+    { re: /^준공/, field: 'completionYear' },
+    { re: /^노선/, field: 'route' },
+    { re: /^관리주체$/, field: 'agency' },
+    { re: /^행정구역/, field: 'address' }
+  ];
+  function priorStr(v){ return v == null ? '' : String(v).trim(); }
+  function priorNormName(s){ return priorStr(s).toLowerCase().replace(/[\s_\-.]/g, ''); }
+  function priorStripInternal(v){   // '_' 로 시작하는 내부 키(섬네일 경로 등)는 버린다
+    if(Array.isArray(v)) return v.map(priorStripInternal);
+    if(v && typeof v === 'object'){
+      const o = {};
+      Object.keys(v).forEach(k => { if(k.charAt(0) !== '_') o[k] = priorStripInternal(v[k]); });
+      return o;
+    }
+    return v;
+  }
+  function priorArr(v){ return Array.isArray(v) ? v : []; }
+  // 외관조사 결과 절의 사진 캡션 앞 번호(①~㊿)를 숫자로: ①=1 … ⑳=20, ㉑=21 … ㉟=35, ㊱=36 … ㊿=50
+  function priorCircledNo(ch){
+    const c = ch.charCodeAt(0);
+    if(c >= 0x2460 && c <= 0x2473) return c - 0x2460 + 1;
+    if(c >= 0x3251 && c <= 0x325F) return c - 0x3251 + 21;
+    if(c >= 0x32B1 && c <= 0x32BF) return c - 0x32B1 + 36;
+    return null;
+  }
+  // 전차 손상 목록: 스킬이 prior_damages 를 만들었으면 그것을, 비어 있으면(빠른 경로) 구간별 "외관조사 결과" 사진 캡션에서 만든다.
+  // 캡션은 원문 그대로 손상명으로 쓰고(쪼개거나 고치지 않음), 손상이 아닌 조사항목(상태양호·현황·자연비탈면·인공구조물)은 제외하고 개수를 알린다.
+  function priorDamagesFromCaptions(captions, facKey){
+    const damages = [], excluded = [];
+    priorArr(captions).forEach(c => {
+      if(!c || typeof c !== 'object') return;
+      const sec = priorStr(c['절']);
+      const sm = /(\d+)\s*구간\s*외관조사/.exec(sec);
+      if(!sm) return;                                  // 외관조사 결과 절만
+      if(priorStr(c['열 헤더'])) return;                // 열 머리글이 있는 칸(안정성 검토 그림 등)은 손상 사진이 아니다
+      let text = priorStr(c['캡션(원문)']);
+      if(!text) return;
+      let no = '';
+      const nm = /^[①-⑳㉑-㉟㊱-㊿]\s*/.exec(text);
+      if(nm){ no = String(priorCircledNo(nm[0].trim())); text = text.slice(nm[0].length).trim(); }
+      if(!text) return;
+      if(/상태\s*양호|현황|자연비탈면|인공구조물/.test(text)){ excluded.push((no ? no + ' ' : '') + text); return; }
+      const section = sm[1] + '구간';
+      damages.push({
+        priorKey: [facKey, section, no, text, priorStr(c['사진 파일'])].join('|'),
+        section, no,
+        damageName: text,
+        drawingPosition: '',
+        component: '',
+        measurement: '',
+        repairMethod: '',
+        priorPhotoFile: priorStr(c['사진 파일']),
+        sourceRef: [priorStr(c['출처']), sec].filter(Boolean).join(' · ')
+      });
+    });
+    return { damages, excluded };
+  }
+  // organized.json 한 개 → 가져올 내용으로 정리 (화면·저장소를 건드리지 않는 순수 함수)
+  // 시설물명·시설물번호·제원은 시설물관리대장(obj.ledger)이 우선이고, 없을 때만 compare·시설물명 문자열을 쓴다.
+  function priorParseOrganized(obj, fileName){
+    if(!obj || typeof obj !== 'object' || Array.isArray(obj)) return { error: '전차자료정리 결과(JSON 객체)가 아닙니다.' };
+    const ledger = (obj.ledger && typeof obj.ledger === 'object') ? obj.ledger : {};
+    const facilityName = priorStr(ledger['시설물명']) || priorStr(obj.facility);
+    if(!facilityName) return { error: '시설물명을 찾을 수 없습니다(ledger.시설물명 / facility 항목 없음). 전차자료정리 스킬이 만든 .json 파일이 맞는지 확인해 주세요.' };
+    const noMatch = /\((\d{4,})\)\s*$/.exec(priorStr(obj.facility));
+    const facilityNo = priorStr(ledger['시설물번호']) || (noMatch ? noMatch[1] : '');
+    const ledgerType = priorStr(ledger['시설물종류']);
+    const facilityType = /옹벽/.test(ledgerType) ? '옹벽' : /절토사면|비탈면|사면/.test(ledgerType) ? '절토사면'
+      : (/옹벽/.test(facilityName) ? '옹벽' : (/절토사면|비탈면|사면/.test(facilityName) ? '절토사면' : ''));
+    const warnings = [];
+    const specs = {}, specSource = {};
+    // 관리대장 값 우선
+    [['length', '연장(m)'], ['height', '높이(m)'], ['route', '노선'], ['agency', '관리주체'], ['address', '주소_시도시군']].forEach(([f, k]) => {
+      const v = priorStr(ledger[k]);
+      if(v){ specs[f] = v; specSource[f] = '관리대장'; }
+    });
+    const yr = /^(\d{4})/.exec(priorStr(ledger['준공일_후보']));
+    if(yr){ specs.completionYear = yr[1]; specSource.completionYear = '관리대장'; }
+    let mismatchCount = 0;
+    priorArr(obj.compare).forEach(row => {
+      if(!row || typeof row !== 'object') return;
+      const label = priorStr(row['항목']);
+      if(priorStr(row['판정']) === '불일치') mismatchCount++;
+      const map = PRIOR_SPEC_MAP.find(m => m.re.test(label));
+      if(!map || specs[map.field]) return;
+      const ledger = priorStr(row['관리대장']), prior = priorStr(row['전차보고서']);
+      if(ledger){ specs[map.field] = ledger; specSource[map.field] = '관리대장'; }
+      else if(prior){ specs[map.field] = prior; specSource[map.field] = '전차보고서'; }
+    });
+    let damages = [];
+    let skippedDamages = 0;
+    let excludedCaptions = [];
+    const facKey = facilityNo || priorNormName(facilityName);
+    priorArr(obj.prior_damages).forEach((row, i) => {
+      if(!row || typeof row !== 'object') return;
+      const name = priorStr(row['손상명']);
+      if(!name){ skippedDamages++; return; }
+      const no = priorStr(row['번호']) || String(i + 1);
+      const pos = priorStr(row['위치(m)']);
+      damages.push({
+        priorKey: [facKey, no, name, pos].join('|'),
+        section: '', no,
+        damageName: name,
+        drawingPosition: pos,
+        component: priorStr(row['구성요소']),
+        measurement: priorStr(row['규모']),
+        repairMethod: priorStr(row['전차 보수·보강방안']),
+        priorPhotoFile: priorStr(row['사진 파일']),
+        sourceRef: priorStr(row['출처'])
+      });
+    });
+    let damageSource = 'prior_damages';
+    if(!damages.length){
+      const fromCap = priorDamagesFromCaptions(obj.photo_captions, facKey);
+      damages = fromCap.damages;
+      excludedCaptions = fromCap.excluded;
+      damageSource = damages.length ? 'photo_captions' : '';
+    }
+    const issues = priorArr(obj.issues);
+    return {
+      fileName: fileName || '',
+      facilityName, facilityNo, facilityType, specs, specSource, damages, skippedDamages, damageSource,
+      excludedCaptionCount: excludedCaptions.length,
+      mismatchCount, issueCount: issues.length,
+      history: priorStripInternal({
+        project: priorStr(obj.project),
+        inputs: priorArr(obj.inputs),
+        inspection_history: priorArr(obj.inspection_history),
+        prior_evaluations: priorArr(obj.prior_evaluations),
+        repair_history: priorArr(obj.repair_history)
+      }),
+      priorRef: priorStripInternal({
+        ledger,
+        excludedCaptions,
+        compare: priorArr(obj.compare),
+        quantities: priorArr(obj.quantities),
+        quantity_summary: priorArr(obj.quantity_summary),
+        issues,
+        field_tests: priorArr(obj.field_tests)
+      }),
+      warnings
+    };
+  }
+  // 이 시설물이 대상 프로젝트에 이미 있는지: 관리번호 → 시설물명 순으로 찾는다
+  function priorFindSite(siteList, parsed){
+    if(parsed.facilityNo){
+      const byNo = siteList.find(s => s && s.facilityNo === parsed.facilityNo)
+        || siteList.find(s => s && s.name && String(s.name).indexOf('(' + parsed.facilityNo + ')') >= 0);
+      if(byNo) return byNo;
+    }
+    const n = priorNormName(parsed.facilityName);
+    return siteList.find(s => s && priorNormName(s.name) === n) || null;
+  }
+  // 실제로 가져오면 어떻게 되는지 계산 (미리보기와 적용이 같은 계산을 쓴다)
+  function priorPlanImport(parsed, siteList){
+    const site = priorFindSite(siteList, parsed);
+    const have = new Set();
+    if(site){
+      const arr = (site.id === currentSiteId) ? existingDamages : (site.existingDamages || []);
+      arr.forEach(d => { if(d && d.priorKey) have.add(d.priorKey); });
+    }
+    const seen = new Set();
+    const toAdd = [];
+    let dup = 0;
+    parsed.damages.forEach(d => {
+      if(have.has(d.priorKey) || seen.has(d.priorKey)){ dup++; return; }
+      seen.add(d.priorKey);
+      toAdd.push(d);
+    });
+    return { site, toAdd, dup };
+  }
+  function priorBuildDamage(site, pd, num, nowIso){
+    return {
+      id: newExistingDamageId(site, num),
+      externalId: pd.no ? String(pd.no) : '',
+      damageName: pd.damageName,
+      section: pd.section || '',
+      drawingPosition: pd.drawingPosition,
+      part: '',
+      component: pd.component,
+      measurement: pd.measurement,
+      cause: '',
+      repairMethod: pd.repairMethod,
+      status: '미확인',
+      notes: '',
+      photos: [],
+      isDeleted: false,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      origin: 'prior-import',
+      priorKey: pd.priorKey,
+      priorPhotoFile: pd.priorPhotoFile,
+      sourceRef: pd.sourceRef
+    };
+  }
+  // 계획대로 시설물·전차 이력·전차 손상을 채운다. 대상 프로젝트의 시설물만 건드린다.
+  async function priorApplyImport(parsedList, projectId){
+    const meId = (supabaseSession && supabaseSession.user && supabaseSession.user.id) || null;
+    const now = new Date().toISOString();
+    const res = { created: [], matched: [], damagesAdded: 0, damagesSkipped: 0, sitesByIndex: [] };
+    for(const p of parsedList){
+      const plan = priorPlanImport(p, sites.filter(s => s.projectId === projectId));
+      let site = plan.site;
+      if(!site){
+        site = {
+          id: genId(), name: p.facilityName, facilityType: p.facilityType, facilityTypeOther: '', facilityForm: '',
+          description: '', length: '', height: '',
+          surveyDate: new Date().toISOString().slice(0,10),
+          route: '', address: '', agency: '', completionYear: '',
+          savedAt: now, baseImageSrc: null, markers: [], nextNum: 1,
+          projectId, createdBy: meId
+        };
+        sites.push(site);
+        res.created.push(site);
+      } else {
+        res.matched.push(site);
+      }
+      // 제원: 비어 있는 칸만 채운다(이미 입력된 값은 덮어쓰지 않는다)
+      Object.keys(p.specs).forEach(k => { if(!priorStr(site[k])) site[k] = p.specs[k]; });
+      if(!site.facilityNo && p.facilityNo) site.facilityNo = p.facilityNo;
+      if(!site.facilityType && p.facilityType) site.facilityType = p.facilityType;
+      // 전차 이력·참고자료는 읽기 전용 원문이라 다시 가져오면 통째로 바꾼다
+      site.history = Object.assign({}, p.history, { importedAt: now, sourceFile: p.fileName, specSource: p.specSource });
+      site.priorRef = Object.assign({}, p.priorRef, { importedAt: now });
+      const arr = (site.id === currentSiteId) ? existingDamages : (Array.isArray(site.existingDamages) ? site.existingDamages : (site.existingDamages = []));
+      let num = site.nextExistingDamageNum || 1;
+      plan.toAdd.forEach(pd => { arr.push(priorBuildDamage(site, pd, num, now)); num++; });
+      site.nextExistingDamageNum = num;
+      site.savedAt = now;
+      res.damagesAdded += plan.toAdd.length;
+      res.damagesSkipped += plan.dup;
+      res.sitesByIndex.push(site);
+      try{ await applyDamageMasterSnapshotIfNeeded(site); }catch(e){}
+    }
+    return res;
+  }
+  function priorPreviewText(parsedList, siteList){
+    const lines = [];
+    const noCount = {};
+    parsedList.forEach(p => { if(p.facilityNo) noCount[p.facilityNo] = (noCount[p.facilityNo] || 0) + 1; });
+    parsedList.slice(0, 15).forEach(p => {
+      const plan = priorPlanImport(p, siteList);
+      lines.push('• ' + p.facilityName + ' — ' + (plan.site ? '기존 시설물에 채움' : '새 시설물') +
+        ' · 전차 손상 ' + plan.toAdd.length + '건' +
+        (plan.dup ? '(중복 ' + plan.dup + '건 건너뜀)' : '') +
+        (p.damageSource === 'photo_captions' ? '[외관조사 사진 캡션 기준]' : '') +
+        (p.excludedCaptionCount ? ' · 상태양호·현황 등 ' + p.excludedCaptionCount + '건은 손상에서 제외' : '') +
+        (p.skippedDamages ? ' · 손상명 없는 행 ' + p.skippedDamages + '건 제외' : '') +
+        (p.mismatchCount ? ' · 대장↔전차 불일치 ' + p.mismatchCount + '건' : '') +
+        (p.issueCount ? ' · 확인필요 ' + p.issueCount + '건' : '') +
+        (p.facilityNo && noCount[p.facilityNo] > 1 ? ' · ⚠ 같은 관리번호 파일이 여러 개' : ''));
+    });
+    if(parsedList.length > 15) lines.push('… 외 ' + (parsedList.length - 15) + '개');
+    return lines.join('\n');
+  }
+  async function priorReadFiles(fileList){
+    const parsedList = [], errors = [];
+    for(const f of Array.from(fileList || [])){
+      if(f.size > 30 * 1024 * 1024){ errors.push(f.name + ': 파일이 너무 큽니다(30MB 초과).'); continue; }
+      try{
+        const obj = JSON.parse(await f.text());
+        const p = priorParseOrganized(obj, f.name);
+        if(p.error) errors.push(f.name + ': ' + p.error); else parsedList.push(p);
+      }catch(e){
+        errors.push(f.name + ': JSON 파일을 읽지 못했습니다.');
+      }
+    }
+    return { parsedList, errors };
+  }
+  let priorImportMode = 'add';   // 'new' = 새 프로젝트를 만들면서, 'add' = 지금 프로젝트에 추가
+  const priorImportInput = document.getElementById('priorImportInput');
+  function openPriorImportPicker(mode){
+    priorImportMode = mode;
+    priorImportInput.value = '';
+    priorImportInput.click();
+  }
+  document.getElementById('btnPriorImport').addEventListener('click', ()=>{
+    moreModal.style.display = 'none';
+    if(!currentProjectId || !projects.find(p => p.id === currentProjectId)){ alert('프로젝트를 먼저 만들거나 선택해 주세요.'); return; }
+    openPriorImportPicker('add');
+  });
+  document.getElementById('npPriorImport').addEventListener('click', ()=>{
+    if(!npName.value.trim()){ alert('프로젝트명을 먼저 입력해주세요.'); npName.focus(); return; }
+    openPriorImportPicker('new');
+  });
+  // 파일 이름으로 짝 맞추기: "<이름>_사전자료정리.json" ↔ "<이름>_전차손상사진.zip"
+  function priorBaseName(n){ return String(n || '').replace(/\.(json|zip)$/i, '').replace(/_(사전자료정리|전차손상사진)$/, '').normalize('NFC'); }
+  function priorPairZips(parsedList, zipFiles){
+    const pairs = new Map(), used = new Set();
+    parsedList.forEach((p, i) => {
+      const b = priorBaseName(p.fileName);
+      const zi = zipFiles.findIndex((f, k) => !used.has(k) && priorBaseName(f.name) === b);
+      if(zi >= 0){ pairs.set(i, zipFiles[zi]); used.add(zi); }
+    });
+    // JSON 1개 + ZIP 1개처럼 짝이 하나뿐이면 이름이 달라도 한 쌍으로 본다
+    if(parsedList.length === 1 && zipFiles.length === 1 && !pairs.size){ pairs.set(0, zipFiles[0]); used.add(0); }
+    return { pairs, unpaired: zipFiles.filter((f, k) => !used.has(k)) };
+  }
+  function priorProgress(msg){
+    const b = document.getElementById('priorProgressBox'); if(!b) return;
+    if(msg){ b.textContent = msg; b.style.display = ''; } else { b.style.display = 'none'; }
+  }
+  // zip 에서 사진을 꺼내 각 전차 손상(priorPhotoFile 이름이 같은 것)에 연결 — 줄여서(긴 변 1280px) 이 기기 사진 저장소(photoBlobs)에 저장한다
+  async function priorImportPhotoZip(zipFile, eds, label){
+    if(typeof JSZip === 'undefined') return { error: 'ZIP 라이브러리(JSZip)를 불러오지 못했습니다. 인터넷 연결 후 다시 시도해 주세요.' };
+    const zip = await JSZip.loadAsync(zipFile);
+    const byName = new Map();
+    zip.forEach((path, entry) => { if(entry.dir) return; const key = path.split('/').pop().normalize('NFC'); if(!byName.has(key)) byName.set(key, entry); });
+    const targets = eds.filter(ed => ed && !ed.isDeleted && ed.priorPhotoFile);
+    const now = new Date().toISOString();
+    const out = { added: 0, missing: 0, already: 0, failed: 0 };
+    for(let i = 0; i < targets.length; i++){
+      const ed = targets[i];
+      priorProgress((label || '전차 사진') + ' 연결 중… ' + (i + 1) + ' / ' + targets.length);
+      if((ed.photos || []).some(p => p && p.prior && p.name === ed.priorPhotoFile)){ out.already++; continue; }
+      const entry = byName.get(String(ed.priorPhotoFile).normalize('NFC'));
+      if(!entry){ out.missing++; continue; }
+      try{
+        const blob = await priorResizeToBlob(await entry.async('blob'));
+        if(!blob || !blob.size) throw new Error('이미지 변환 실패');
+        const id = genId() + String(i);
+        await idbPutPhotoBlob(id, blob, 'image/jpeg');
+        if(!Array.isArray(ed.photos)) ed.photos = [];
+        ed.photos.push({ id, photoRef: id, prior: true, name: ed.priorPhotoFile, mimeType: 'image/jpeg', blobSize: blob.size, createdAt: now });
+        ed.updatedAt = now;
+        out.added++;
+      }catch(e){
+        console.warn('전차 사진 연결 실패', ed.priorPhotoFile, e);
+        out.failed++;
+      }
+    }
+    priorProgress('');
+    return out;
+  }
+  async function priorResizeToBlob(blob){
+    let src, w, h, closeFn = ()=>{};
+    try{
+      const bmp = await createImageBitmap(blob);
+      src = bmp; w = bmp.width; h = bmp.height; closeFn = ()=>{ try{ bmp.close(); }catch(e){} };
+    }catch(e){
+      const url = URL.createObjectURL(blob);
+      const img = await new Promise((res, rej)=>{ const i = new Image(); i.onload = ()=>res(i); i.onerror = ()=>rej(new Error('이미지를 열 수 없습니다')); i.src = url; });
+      src = img; w = img.naturalWidth; h = img.naturalHeight; closeFn = ()=>{ URL.revokeObjectURL(url); };
+    }
+    const scale = Math.min(1, 1280 / Math.max(w, h));
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(w * scale)); cv.height = Math.max(1, Math.round(h * scale));
+    cv.getContext('2d').drawImage(src, 0, 0, cv.width, cv.height);
+    closeFn();
+    return await new Promise(res => cv.toBlob(b => res(b), 'image/jpeg', 0.78));
+  }
+  // 전차 사진을 클라우드(ps-photos)에도 올려 팀원 기기에서 받을 수 있게 한다(온라인·로그인 상태일 때만, 실패하면 다음에 다시)
+  async function priorUploadPending(site, eds){
+    if(!supabaseClient || !supabaseSession || !navigator.onLine || !site) return 0;
+    const userId = supabaseSession.user.id;
+    const proj = projects.find(p => p.id === site.projectId);
+    let n = 0;
+    for(const ed of (eds || [])){
+      for(const ph of (ed.photos || [])){
+        if(!ph || !ph.prior || ph.cloudRef) continue;
+        try{
+          const rec = await idbGetPhotoBlob(ph.photoRef || ph.id);
+          if(!rec || !rec.blob) continue;
+          const path = userId + '/' + (ph.photoRef || ph.id);
+          const { error } = await supabaseClient.storage.from('ps-photos').upload(path, rec.blob, { upsert: true, contentType: rec.blob.type || 'image/jpeg' });
+          if(error) continue;
+          ph.cloudRef = path; n++;
+          try{
+            await supabaseClient.from('ps_photo_index').upsert({ photo_id: ph.photoRef || ph.id, owner_user_id: userId, project_id: site.projectId, organization_id: (proj && proj.organizationId) || null });
+          }catch(e){}
+        }catch(e){ console.warn('전차 사진 업로드 실패(다음에 재시도)', e); }
+      }
+    }
+    if(n){ try{ queueEntitySyncForFacility(site); }catch(e){} }
+    return n;
+  }
+  async function priorPhotoOnlyFlow(zipFiles){
+    const site = currentSiteObj();
+    if(!site){ alert('사진을 연결할 시설물을 먼저 열어 주세요.'); return; }
+    const targets = existingDamages.filter(d => d && !d.isDeleted && d.priorPhotoFile);
+    if(!targets.length){ alert('이 시설물에는 전차자료로 가져온 전차 손상이 없어 연결할 수 없습니다.\n먼저 .json 파일로 전차 손상을 가져와 주세요.'); return; }
+    if(!await psConfirm('열려 있는 시설물 "' + site.name + '"의 전차 손상 ' + targets.length + '건에 사진 ZIP(' + zipFiles.map(f => f.name).join(', ') + ')을 연결합니다.\n\n이대로 연결할까요?')) return;
+    let added = 0, missing = 0;
+    try{
+      for(const z of zipFiles){
+        const r = await priorImportPhotoZip(z, existingDamages, z.name);
+        if(r.error){ alert(r.error); return; }
+        added += r.added; missing = Math.max(missing, r.missing);
+      }
+      saveState();
+      priorProgress('클라우드에 사진 올리는 중…');
+      try{ await priorUploadPending(site, existingDamages); }catch(e){}
+      priorProgress('');
+      saveState();
+      alert('전차 사진 ' + added + '장을 연결했습니다.' + (missing ? '\n(ZIP에서 찾지 못한 사진 ' + missing + '건)' : ''));
+    }catch(e){
+      priorProgress('');
+      console.error('전차 사진 연결 실패', e);
+      alert('전차 사진을 연결하는 중 오류가 발생했습니다: ' + (e && e.message || e));
+    }
+  }
+  priorImportInput.addEventListener('change', async ()=>{
+    const all = Array.from(priorImportInput.files || []);
+    if(!all.length) return;
+    const jsonFiles = all.filter(f => /\.json$/i.test(f.name) || f.type === 'application/json');
+    const zipFiles = all.filter(f => /\.zip$/i.test(f.name));
+    const { parsedList, errors } = await priorReadFiles(jsonFiles);
+    if(!parsedList.length){
+      if(zipFiles.length && !errors.length && priorImportMode !== 'new'){ await priorPhotoOnlyFlow(zipFiles); return; }
+      alert('가져올 수 있는 파일이 없습니다.\n\n' + errors.join('\n')); return;
+    }
+    const zipPlan = priorPairZips(parsedList, zipFiles);
+    const isNew = priorImportMode === 'new';
+    const targetSites = isNew ? [] : sites.filter(s => s.projectId === currentProjectId);
+    const where = isNew ? '새 프로젝트 "' + npName.value.trim() + '"' : '현재 프로젝트';
+    const msg = where + '에 시설물 ' + parsedList.length + '개의 전차자료를 가져옵니다.\n\n' +
+      priorPreviewText(parsedList, targetSites) +
+      (errors.length ? '\n\n⚠ 읽지 못한 파일 ' + errors.length + '개:\n' + errors.slice(0, 5).join('\n') : '') +
+      (zipPlan.pairs.size ? '\n\n📷 전차 사진 ZIP ' + zipPlan.pairs.size + '개를 함께 연결합니다(긴 변 1280px로 줄여 이 기기에 저장).' : '') +
+      (zipPlan.unpaired.length ? '\n⚠ 짝이 맞지 않아 쓰지 않는 ZIP ' + zipPlan.unpaired.length + '개: ' + zipPlan.unpaired.map(f => f.name).join(', ') : '') +
+      '\n\n※ 전차 값은 원문 그대로 이력으로만 저장되고, 이미 입력된 제원은 덮어쓰지 않습니다. 도면은 가져오지 않습니다.\n\n이대로 가져올까요?';
+    if(!await psConfirm(msg)) return;
+    try{
+      commitLiveToCurrentSite();
+      let projectId = currentProjectId;
+      if(isNew){
+        const project = {
+          id: genId(),
+          name: npName.value.trim(),
+          organizationId: npOrg.value || null,
+          client: document.getElementById('npClient').value.trim(),
+          inspector: document.getElementById('npInspector').value.trim(),
+          surveyStartDate: document.getElementById('npStart').value,
+          surveyEndDate: document.getElementById('npEnd').value,
+          createdAt: new Date().toISOString(),
+          savedAt: new Date().toISOString(),
+          standardDbVersion: standardDbVersion
+        };
+        stampProjectCreator(project);
+        projects.push(project);
+        projects = projects.filter(pr => !(pr !== project && pr.name === DEFAULT_PROJECT_NAME && !pr.organizationId && !pr.cloudSyncedAt && !pr.client && !pr.inspector
+          && !sites.some(st => st.projectId === pr.id) && !deletedSites.some(d => d.originalProjectId === pr.id)));
+        switchToProject(project.id);
+        projectId = project.id;
+        closeNewProjectModal();
+        projectModal.style.display = 'none';
+      }
+      const res = await priorApplyImport(parsedList, projectId);
+      const touched = res.created.concat(res.matched);
+      if(touched.length && (!currentSiteId || isNew)) await loadSite(res.created[0] || touched[0]);
+      // 사진 ZIP 연결 (JSON 과 짝이 맞는 것만)
+      let photoAdded = 0, photoMissing = 0, photoFailed = 0, photoError = '';
+      for(const [i, zf] of zipPlan.pairs){
+        const s = res.sitesByIndex[i];
+        if(!s) continue;
+        try{
+          const r = await priorImportPhotoZip(zf, s.existingDamages || [], parsedList[i].facilityName);
+          if(r.error){ photoError = r.error; continue; }
+          photoAdded += r.added; photoMissing += r.missing; photoFailed += r.failed;
+        }catch(e){ photoError = '사진 ZIP을 읽지 못했습니다: ' + (e && e.message || e); }
+      }
+      saveState();
+      if(photoAdded){
+        priorProgress('클라우드에 사진 올리는 중…');
+        for(const s of touched){ try{ await priorUploadPending(s, s.existingDamages || []); }catch(e){} }
+        priorProgress('');
+      }
+      touched.forEach(s => { try{ queueEntitySyncForFacility(s); }catch(e){} });
+      logActivity('전차자료 가져오기', parsedList.length + '개 시설물 · 전차 손상 ' + res.damagesAdded + '건 · 사진 ' + photoAdded + '장');
+      renderProjectList();
+      renderSiteList();
+      updatePcExplorerDocking();
+      saveState();
+      try{ priorRefreshButtons(); }catch(e){}
+      alert('전차자료를 가져왔습니다.\n\n새 시설물 ' + res.created.length + '개 · 기존 시설물 ' + res.matched.length + '개\n전차 손상 ' + res.damagesAdded + '건 추가' +
+        (res.damagesSkipped ? ' (중복 ' + res.damagesSkipped + '건 건너뜀)' : '') +
+        (zipPlan.pairs.size ? '\n전차 사진 ' + photoAdded + '장 연결' + (photoMissing ? ' (ZIP에서 찾지 못한 사진 ' + photoMissing + '건)' : '') + (photoFailed ? ' · 변환 실패 ' + photoFailed + '건' : '') : '') +
+        (photoError ? '\n⚠ ' + photoError : '') +
+        '\n\n오른쪽 "📋 전차손상" 버튼(또는 더보기 → 전차손상 조사)에서 전차 사진을 보며 조사를 시작할 수 있습니다.');
+    }catch(e){
+      console.error('전차자료 가져오기 실패', e);
+      alert('전차자료를 가져오는 중 오류가 발생했습니다: ' + (e && e.message || e) + '\n\n이미 입력된 자료는 그대로입니다. 저장 상태를 확인해 주세요.');
+    }
+  });
+  // 기존손상 관리 창 위쪽의 "전차 요약" — 읽기 전용
+  function renderPriorSummary(){
+    const box = document.getElementById('priorSummaryBox');
+    if(!box) return;
+    const site = currentSiteObj();
+    const h = site && site.history;
+    if(!h){ box.style.display = 'none'; box.innerHTML = ''; return; }
+    const esc = escapeHtml;
+    const evals = Array.isArray(h.prior_evaluations) ? h.prior_evaluations : [];
+    const insp = Array.isArray(h.inspection_history) ? h.inspection_history : [];
+    const rep = Array.isArray(h.repair_history) ? h.repair_history : [];
+    const ref = site.priorRef || {};
+    const issues = Array.isArray(ref.issues) ? ref.issues : [];
+    const last = evals.length ? evals[evals.length - 1] : null;
+    const lastInsp = insp.find(r => r && priorStr(r['평가등급']));
+    const head = last
+      ? '최근 전차 평가: ' + [last['점검연도'], last['구분'], last['상태평가'] && ('상태평가 ' + last['상태평가']), last['종합평가'] && ('종합 ' + last['종합평가']), last['결함지수'] && ('결함지수 ' + last['결함지수'])].filter(Boolean).map(esc).join(' · ')
+      : (lastInsp ? '이력 첫 행: ' + [lastInsp['점검종류'], lastInsp['점검기간'], lastInsp['평가등급']].filter(Boolean).map(esc).join(' · ') : '전차 평가 기록 없음');
+    const cell = 'padding:2px 6px; border-bottom:1px solid var(--line); text-align:left;';
+    const table = (cols, rows) => rows.length
+      ? '<table style="width:100%; border-collapse:collapse; font-size:12px; margin:4px 0 8px;"><tr>' + cols.map(c => '<th style="' + cell + ' color:var(--muted);">' + esc(c) + '</th>').join('') + '</tr>' +
+        rows.map(r => '<tr>' + cols.map(c => '<td style="' + cell + '">' + esc(priorStr(r[c])) + '</td>').join('') + '</tr>').join('') + '</table>'
+      : '<div style="font-size:12px; color:var(--muted); margin:4px 0 8px;">기록 없음</div>';
+    const highIssues = issues.filter(x => x && (x['중요도'] === '상' || x['중요도'] === '중'));
+    box.style.display = '';
+    box.innerHTML =
+      '<details style="background:var(--panel-2); border:1px solid var(--line); border-radius:6px; padding:8px 10px;">' +
+      '<summary style="cursor:pointer; font-weight:600; font-size:13px;">전차 요약 (읽기 전용) — ' + head + '</summary>' +
+      '<div style="font-size:12px; color:var(--muted); margin-top:4px;">출처: ' + esc(h.sourceFile || '') + (h.importedAt ? ' · ' + esc(String(h.importedAt).slice(0, 10)) + ' 가져옴' : '') + '</div>' +
+      '<div style="max-height:320px; overflow:auto;">' +
+      '<div style="font-weight:600; font-size:12px; margin-top:8px;">전차 평가</div>' +
+      table(['점검연도', '구분', '수행기관', '상태평가', '종합평가', '결함지수'], evals) +
+      '<div style="font-weight:600; font-size:12px;">점검·진단 이력 (' + insp.length + '건)</div>' +
+      table(['점검종류', '점검기간', '점검기관', '평가등급'], insp) +
+      '<div style="font-weight:600; font-size:12px;">보수·보강 이력 (' + rep.length + '건)</div>' +
+      table(['시행연도', '내용', '위치/수량'], rep) +
+      '<div style="font-weight:600; font-size:12px;">확인필요 (' + issues.length + '건' + (highIssues.length ? ', 상·중 ' + highIssues.length + '건' : '') + ')</div>' +
+      table(['중요도', '구분', '내용'], issues.slice(0, 30)) +
+      '</div></details>';
+  }
+
+  // ---------- 전차손상 조사 (v175, 연결 설계안 Phase 2·3) ----------
+  // 체크리스트에서 전차 손상을 전차 사진과 함께 보고 "이 손상 조사하기"를 누르면, 그 다음에 추가되는 금회 손상기록이
+  // 자동으로 그 전차 손상(기존손상)에 연결되고 내용이 미리 채워진다. 기존 지점·카메라·손상 입력 흐름은 그대로 둔다.
+  const priorUrlCache = new Map();
+  async function priorPhotoUrl(ph){
+    if(ph && typeof ph.src === 'string' && ph.src.indexOf('data:') === 0) return ph.src;   // 지점 사진이 메모리에 그대로 있으면 그것을 쓴다
+    const id = ph && (ph.photoRef || ph.id);
+    if(!id) return '';
+    if(priorUrlCache.has(id)) return priorUrlCache.get(id);
+    let blob = null;
+    try{ const rec = await idbGetPhotoBlob(id); if(rec && rec.blob instanceof Blob && rec.blob.size) blob = rec.blob; }catch(e){}
+    const ref = ph.cloudRef || ph.pendingCloudDownload;
+    if(!blob && ref && supabaseClient && navigator.onLine){
+      try{
+        const { data, error } = await supabaseClient.storage.from('ps-photos').download(ref);
+        if(!error && data){ blob = data; try{ await idbPutPhotoBlob(id, data, data.type || 'image/jpeg'); }catch(e){} }
+      }catch(e){ console.warn('전차 사진 받기 실패', id, e); }
+    }
+    if(!blob) return '';
+    const url = URL.createObjectURL(blob);
+    priorUrlCache.set(id, url);
+    return url;
+  }
+  async function priorHasLocalPhoto(ph){
+    const id = ph && (ph.photoRef || ph.id);
+    if(!id) return false;
+    if(priorUrlCache.has(id)) return true;
+    try{ const rec = await idbGetPhotoBlob(id); return !!(rec && rec.blob && rec.blob.size); }catch(e){ return false; }
+  }
+  function priorSortEds(list){
+    const num = s => parseInt((String(s || '').match(/\d+/) || ['9999'])[0], 10);
+    return list.map((ed, i) => ({ ed, i, sec: num(ed.section), no: num(ed.externalId) }))
+      .sort((a, b) => (a.sec - b.sec) || (a.no - b.no) || (a.i - b.i)).map(x => x.ed);
+  }
+  // 전차 손상 id → 그 손상에 연결된 금회 지점 번호들
+  function priorLinkMap(){
+    const map = new Map();
+    (markers || []).forEach(m => (m.photos || []).forEach(p => (p.damages || []).forEach(d => {
+      if(d && d.damageOrigin === 'EXISTING' && d.existingDamageId){
+        if(!map.has(d.existingDamageId)) map.set(d.existingDamageId, []);
+        const arr = map.get(d.existingDamageId);
+        if(arr.indexOf(m.num) < 0) arr.push(m.num);
+      }
+    })));
+    return map;
+  }
+  function priorEdLabel(ed){
+    return [ed.externalId ? '[' + ed.externalId + ']' : '', ed.section, ed.damageName || '(손상명 없음)'].filter(Boolean).join(' ');
+  }
+  // ---- 사진 크게 보기 ----
+  let priorViewer = { ed: null, idx: 0 };
+  async function openPriorPhotoViewer(ed, idx){
+    const photos = (ed && ed.photos || []).filter(p => p && p.prior);
+    if(!photos.length){ alert('이 전차 손상에는 연결된 전차 사진이 없습니다.'); return; }
+    priorViewer = { ed, idx: Math.max(0, Math.min(idx || 0, photos.length - 1)) };
+    const v = document.getElementById('priorPhotoViewer');
+    v.style.display = 'flex';
+    await priorViewerRender();
+  }
+  async function priorViewerRender(){
+    const ed = priorViewer.ed; if(!ed) return;
+    const photos = (ed.photos || []).filter(p => p && p.prior);
+    const ph = photos[priorViewer.idx];
+    document.getElementById('priorViewerCaption').textContent = priorEdLabel(ed) + (ph && ph.name ? ' · ' + ph.name : '');
+    document.getElementById('priorViewerCount').textContent = (priorViewer.idx + 1) + ' / ' + photos.length;
+    const img = document.getElementById('priorViewerImg');
+    img.removeAttribute('src');
+    const url = ph ? await priorPhotoUrl(ph) : '';
+    if(url) img.src = url; else document.getElementById('priorViewerCaption').textContent += ' — 사진이 이 기기에 없습니다(온라인에서 열면 받아옵니다)';
+  }
+  document.getElementById('priorViewerClose').addEventListener('click', ()=>{ document.getElementById('priorPhotoViewer').style.display = 'none'; });
+  document.getElementById('priorViewerPrev').addEventListener('click', ()=>{ priorViewer.idx = Math.max(0, priorViewer.idx - 1); priorViewerRender(); });
+  document.getElementById('priorViewerNext').addEventListener('click', ()=>{ const n = (priorViewer.ed.photos || []).filter(p => p && p.prior).length; priorViewer.idx = Math.min(n - 1, priorViewer.idx + 1); priorViewerRender(); });
+  document.getElementById('priorPhotoViewer').addEventListener('click', (e)=>{ if(e.target.id === 'priorPhotoViewer') document.getElementById('priorPhotoViewer').style.display = 'none'; });
+  // 작은 사진 줄(체크리스트·손상기록 비교 카드에서 같이 씀)
+  function priorBuildPhotoStrip(ed, size){
+    const photos = (ed && ed.photos || []).filter(p => p && p.prior);
+    if(!photos.length) return null;
+    const strip = document.createElement('div');
+    strip.style.cssText = 'display:flex; gap:6px; flex-wrap:wrap; margin:4px 0;';
+    photos.forEach((ph, i) => {
+      const img = document.createElement('img');
+      img.alt = '전차 사진 ' + (i + 1);
+      img.style.cssText = 'width:' + (size || 72) + 'px; height:' + (size || 72) + 'px; object-fit:cover; border-radius:6px; border:1px solid var(--line); background:var(--panel-2); cursor:pointer;';
+      img.addEventListener('click', (e)=>{ e.stopPropagation(); openPriorPhotoViewer(ed, i); });
+      priorPhotoUrl(ph).then(u => { if(u) img.src = u; });
+      strip.appendChild(img);
+    });
+    return strip;
+  }
+  // ---- 조사 중 안내 띠 + 자동 연결 ----
+  let priorPendingLink = null;   // { edId }
+  function priorShowBanner(){
+    const b = document.getElementById('priorLinkBanner');
+    if(!priorPendingLink){ b.style.display = 'none'; return; }
+    const ed = existingDamages.find(x => x.id === priorPendingLink.edId);
+    document.getElementById('priorLinkBannerText').textContent = '전차손상 ' + (ed ? priorEdLabel(ed) : '') + ' 조사 중 — 지점을 추가하거나 선택해 손상기록을 추가하면 자동으로 연결됩니다.';
+    document.getElementById('priorLinkBannerPhoto').style.display = (ed && (ed.photos || []).some(p => p && p.prior)) ? '' : 'none';
+    b.style.display = '';
+  }
+  document.getElementById('priorLinkBannerCancel').addEventListener('click', ()=>{ priorPendingLink = null; priorShowBanner(); });
+  document.getElementById('priorLinkBannerPhoto').addEventListener('click', ()=>{
+    const ed = priorPendingLink && existingDamages.find(x => x.id === priorPendingLink.edId);
+    if(ed) openPriorPhotoViewer(ed, 0);
+  });
+  // 새 손상기록(d)이 만들어질 때 호출 — 조사 중인 전차 손상이 있으면 연결하고 내용을 채운다. 연결했으면 true.
+  function priorApplyPendingLink(d){
+    if(!priorPendingLink || !d) return false;
+    const ed = existingDamages.find(x => x.id === priorPendingLink.edId && !x.isDeleted);
+    if(!ed){ priorPendingLink = null; priorShowBanner(); return false; }
+    d.damageOrigin = 'EXISTING';
+    d.existingDamageId = ed.id;
+    if(ed.component) d.component = ed.component;
+    if(ed.section) d.section = ed.section;
+    if(ed.damageName) d.damageType = ed.damageName;
+    if(ed.measurement) d.measurement = ed.measurement;
+    if(ed.cause) d.cause = ed.cause;
+    if(ed.repairMethod) d.repairMethod = ed.repairMethod;
+    try{ if(ed.measurement) seedMeasurementItemsFromText(d, ed.measurement, currentSiteObj()); }catch(e){}
+    logActivity('전차손상 조사', priorEdLabel(ed) + ' ↔ 금회 손상기록 연결');
+    priorPendingLink = null;
+    priorShowBanner();
+    return true;
+  }
+  // ---- 체크리스트 ----
+  let priorSurveyFilter = 'all';
+  let priorSurveyDetailId = null;
+  const priorSurveyModal = document.getElementById('priorSurveyModal');
+  const priorSurveyBody = document.getElementById('priorSurveyBody');
+  function priorOpenSurvey(){
+    const site = currentSiteObj();
+    if(!site){ alert('시설물을 먼저 열어 주세요.'); return; }
+    priorSurveyDetailId = null;
+    priorSurveyModal.style.display = 'flex';
+    renderPriorSurvey();
+    // 온라인이면 아직 클라우드에 안 올라간 전차 사진을 올린다(백그라운드)
+    priorUploadPending(site, existingDamages).then(n => { if(n){ saveState(); } }).catch(()=>{});
+  }
+  function priorCloseSurvey(){ priorSurveyModal.style.display = 'none'; }
+  document.getElementById('closePriorSurvey').addEventListener('click', priorCloseSurvey);
+  priorSurveyModal.addEventListener('click', (e)=>{ if(e.target === priorSurveyModal) priorCloseSurvey(); });
+  document.getElementById('btnPriorSurvey').addEventListener('click', priorOpenSurvey);
+  document.getElementById('btnPriorSurveyMenu').addEventListener('click', ()=>{ moreModal.style.display = 'none'; priorOpenSurvey(); });
+  function renderPriorSurvey(){
+    if(priorSurveyDetailId) return renderPriorSurveyDetail();
+    const site = currentSiteObj();
+    document.getElementById('priorSurveyTitle').textContent = '전차손상 조사' + (site ? ' — ' + site.name : '');
+    const all = priorSortEds(existingDamages.filter(d => d && !d.isDeleted));
+    const links = priorLinkMap();
+    const done = all.filter(d => links.has(d.id) || (d.status && d.status !== '미확인')).length;
+    const list = all.filter(d => {
+      const isDone = links.has(d.id) || (d.status && d.status !== '미확인');
+      return priorSurveyFilter === 'all' || (priorSurveyFilter === 'todo' ? !isDone : isDone);
+    });
+    const esc = escapeHtml;
+    const photoTotal = all.reduce((n, d) => n + (d.photos || []).filter(p => p && p.prior).length, 0);
+    priorSurveyBody.innerHTML =
+      '<div style="font-weight:700; font-size:14px;">확인 ' + done + ' / ' + all.length + '건</div>' +
+      '<div style="height:8px; background:var(--panel-2); border-radius:999px; overflow:hidden; margin:6px 0 10px;"><div style="height:100%; width:' + (all.length ? Math.round(done / all.length * 100) : 0) + '%; background:var(--amber, #ff6b35);"></div></div>' +
+      '<div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px;">' +
+        [['all', '전체'], ['todo', '아직 안 함'], ['done', '확인함']].map(([k, t]) => '<button type="button" class="ghost" data-pf="' + k + '" style="' + (priorSurveyFilter === k ? 'font-weight:700; border-color:var(--amber, #ff6b35);' : '') + '">' + t + '</button>').join('') +
+        (photoTotal ? '<button type="button" class="ghost" id="priorPrefetch" style="margin-left:auto;">⬇ 전차 사진 내려받기 (현장용)</button>' : '') +
+      '</div>' +
+      '<div id="priorSurveyList"></div>';
+    priorSurveyBody.querySelectorAll('[data-pf]').forEach(b => b.addEventListener('click', ()=>{ priorSurveyFilter = b.getAttribute('data-pf'); renderPriorSurvey(); }));
+    const pre = document.getElementById('priorPrefetch');
+    if(pre) pre.addEventListener('click', priorPrefetchAll);
+    const host = document.getElementById('priorSurveyList');
+    if(!list.length){ host.innerHTML = '<div class="log-empty">' + (all.length ? '해당하는 전차 손상이 없습니다.' : '등록된 전차 손상이 없습니다. 더보기 → 전차자료 가져오기로 가져와 주세요.') + '</div>'; return; }
+    list.forEach(ed => {
+      const row = document.createElement('div');
+      row.className = 'log-item';
+      row.style.cssText = 'cursor:pointer; display:flex; flex-direction:row; gap:10px; align-items:center;';
+      const first = (ed.photos || []).find(p => p && p.prior);
+      const thumb = document.createElement('div');
+      thumb.style.cssText = 'flex:0 0 56px; width:56px; height:56px; border-radius:6px; background:var(--panel-2); border:1px solid var(--line); overflow:hidden; display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--muted);';
+      thumb.textContent = first ? '' : '사진 없음';
+      if(first){ priorPhotoUrl(first).then(u => { if(u){ const im = document.createElement('img'); im.src = u; im.style.cssText = 'width:100%; height:100%; object-fit:cover;'; thumb.appendChild(im); } else { thumb.textContent = '받기 필요'; } }); }
+      const linked = links.get(ed.id);
+      const badge = linked ? '<span style="color:#1a7f37; font-weight:600;">✔ 확인됨 · 지점 ' + linked.map(esc).join(', ') + '</span>'
+        : ((ed.status && ed.status !== '미확인') ? '<span style="color:#1a7f37; font-weight:600;">✔ ' + esc(ed.status) + '</span>' : '<span style="color:var(--muted);">미확인</span>');
+      const info = document.createElement('div');
+      info.style.cssText = 'flex:1; min-width:0;';
+      info.innerHTML = '<div style="font-weight:600;">' + esc(priorEdLabel(ed)) + '</div>' +
+        '<div style="font-size:12px; color:var(--muted);">' + [ed.drawingPosition, ed.measurement].filter(Boolean).map(esc).join(' · ') + '</div>' +
+        '<div style="font-size:12px;">' + badge + '</div>';
+      row.appendChild(thumb); row.appendChild(info);
+      row.addEventListener('click', ()=>{ priorSurveyDetailId = ed.id; renderPriorSurvey(); });
+      host.appendChild(row);
+    });
+  }
+  function renderPriorSurveyDetail(){
+    const ed = existingDamages.find(x => x.id === priorSurveyDetailId);
+    if(!ed){ priorSurveyDetailId = null; return renderPriorSurvey(); }
+    const esc = escapeHtml;
+    document.getElementById('priorSurveyTitle').textContent = priorEdLabel(ed);
+    const linked = priorLinkMap().get(ed.id);
+    const rows = [['구간', ed.section], ['위치', ed.drawingPosition], ['구성요소', ed.component], ['규모', ed.measurement], ['원인', ed.cause], ['전차 보수·보강방안', ed.repairMethod], ['출처', ed.sourceRef]]
+      .filter(r => r[1]).map(r => '<div style="display:flex; gap:8px; font-size:13px; padding:2px 0;"><span style="flex:0 0 92px; color:var(--muted);">' + esc(r[0]) + '</span><span>' + esc(r[1]) + '</span></div>').join('');
+    priorSurveyBody.innerHTML =
+      '<button type="button" class="ghost" id="priorBack" style="margin-bottom:8px;">◀ 목록</button>' +
+      '<div id="priorDetailPhotos"></div>' +
+      (rows || '<div class="log-empty">전차 기록 내용이 없습니다.</div>') +
+      '<div style="margin-top:10px; font-size:13px;"><b>금회 조사:</b> ' + (linked ? '연결된 지점 ' + linked.map(esc).join(', ') : '아직 연결된 지점이 없습니다') + '</div>' +
+      '<label style="display:block; margin-top:10px; font-size:13px;">전차 손상 상태(금회 확인 결과)' +
+        '<select id="priorStatusSel">' + ['미확인', '동일', '증가', '감소', '보수됨', '소실', '기타'].map(s => '<option' + (ed.status === s || (!ed.status && s === '미확인') ? ' selected' : '') + '>' + s + '</option>').join('') + '</select></label>' +
+      '<div class="hint" style="margin-top:4px;">지점을 만들 필요 없는 경우(소실·보수됨 등)는 여기서 상태만 기록합니다.</div>' +
+      '<button type="button" class="primary role-gated" id="priorStartBtn" style="width:100%; margin-top:12px;">📷 이 손상 조사하기</button>';
+    const strip = priorBuildPhotoStrip(ed, 96);
+    const host = document.getElementById('priorDetailPhotos');
+    if(strip) host.appendChild(strip); else host.innerHTML = '<div class="hint">연결된 전차 사진이 없습니다.</div>';
+    document.getElementById('priorBack').addEventListener('click', ()=>{ priorSurveyDetailId = null; renderPriorSurvey(); });
+    document.getElementById('priorStatusSel').addEventListener('change', (e)=>{
+      ed.status = e.target.value; ed.updatedAt = new Date().toISOString();
+      logActivity('전차손상 상태 기록', priorEdLabel(ed) + ' → ' + ed.status);
+      saveState();
+    });
+    document.getElementById('priorStartBtn').addEventListener('click', ()=>{
+      priorPendingLink = { edId: ed.id };
+      priorShowBanner();
+      priorCloseSurvey();
+    });
+  }
+  // 현장용 저장: 이 시설물의 전차 사진 중 이 기기에 없는 것을 미리 받아 둔다(오프라인 대비)
+  async function priorPrefetchAll(){
+    const phs = [];
+    existingDamages.forEach(d => (d.photos || []).forEach(p => { if(p && p.prior) phs.push(p); }));
+    let have = 0, got = 0, fail = 0;
+    for(let i = 0; i < phs.length; i++){
+      priorProgress('전차 사진 확인 중… ' + (i + 1) + ' / ' + phs.length);
+      if(await priorHasLocalPhoto(phs[i])){ have++; continue; }
+      const u = await priorPhotoUrl(phs[i]);
+      if(u) got++; else fail++;
+    }
+    priorProgress('');
+    alert('전차 사진 ' + phs.length + '장 중 이미 이 기기에 있음 ' + have + '장 · 새로 받음 ' + got + '장' + (fail ? ' · 받지 못함 ' + fail + '장(온라인 연결 후 다시 눌러 주세요)' : '') + '.');
+    renderPriorSurvey();
+  }
+  // 오른쪽 "📋 전차손상" 버튼: 전차 손상이 있는 시설물에서만 보이고, 아직 안 한 건수를 보여 준다
+  function priorRefreshButtons(){
+    const btn = document.getElementById('btnPriorSurvey');
+    if(!btn) return;
+    const site = currentSiteObj();
+    const eds = (site && existingDamages || []).filter(d => d && !d.isDeleted);
+    if(!eds.length){ btn.style.display = 'none'; return; }
+    const links = priorLinkMap();
+    const todo = eds.filter(d => !links.has(d.id) && (!d.status || d.status === '미확인')).length;
+    btn.textContent = '📋 전차손상 ' + (todo ? todo + '건 남음' : '모두 확인');
+    btn.style.display = '';
+  }
+  setInterval(()=>{ try{ priorRefreshButtons(); }catch(e){} }, 2000);
 
   // ---------- 활동 로그 ----------
   function renderActivityLog(){
@@ -21110,6 +21941,7 @@
               cmpTitle.style.cssText = 'font-weight:600; font-size:12px; margin-bottom:4px;';
               cmpTitle.textContent = '기존 vs 현재 비교';
               cmpWrap.appendChild(cmpTitle);
+              try{ const priorStrip = priorBuildPhotoStrip(linkedExisting, 64); if(priorStrip) cmpWrap.appendChild(priorStrip); }catch(e){}
 
               const cmpRow = document.createElement('div');
               cmpRow.style.cssText = 'font-size:12px; color:var(--text); line-height:1.6;';
@@ -21597,6 +22429,7 @@
         // 바꾸면 됨 — 강제가 아니라 반복 입력을 줄이기 위한 기본값일 뿐).
         const lastSection = (p.damages.length ? p.damages[p.damages.length - 1].section : '') || '';
         p.damages.push({ id:genId(), damageOrigin:null, existingDamageId:null, component:'', damageType:'', damageDetail:'', measurement:'', cause:'', failureFactor:'', evaluation:'', repairMethod:'', reinforcementMethod:'', investigatorComment:'', standardReference:'', section: lastSection });
+        try{ priorApplyPendingLink(p.damages[p.damages.length - 1]); }catch(e){ console.warn('전차손상 자동 연결 실패', e); }
         logActivity('손상기록 추가', '지점 ' + m.num);
         renderDamageRecords();
         saveState();
