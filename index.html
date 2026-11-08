@@ -2687,6 +2687,7 @@
         <button class="ghost icon-btn" id="btnToggleLogTable" title="표로 보기 (사진 포함 · 보고서 참고자료용)" style="padding:2px 7px; font-size:12px; display:none;">▦ 표로</button>
         <button class="ghost icon-btn" id="btnCopyAllLog" title="목록 전체를 표 형식(탭 구분)으로 복사 — 엑셀·워드에 바로 붙여넣기" style="padding:2px 7px; font-size:12px; display:none;">📋 전체 복사</button>
         <button class="ghost icon-btn" id="btnPriorSurvey" title="전차 손상 체크리스트 — 전차 사진을 보면서 조사" style="padding:2px 7px; font-size:12px; display:none;">📋 전차손상</button>
+        <button class="ghost icon-btn" id="btnPriorPending" title="전차 손상을 보고 미리 찍은 지점 중 아직 조사하지 않은 것만 목록에 보기" style="padding:2px 7px; font-size:12px; display:none;">📍 미조사</button>
         <button class="ghost icon-btn" id="btnToggleWorklist" title="보고서 작업목록" style="padding:2px 7px; font-size:12px; display:none;">📑 작업목록</button>
         <button class="ghost icon-btn" id="btnToggleInspector" title="Inspector 접기/펼치기" style="padding:2px 7px; font-size:12px; display:none;">▶</button>
       </span>
@@ -3596,7 +3597,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v182';
+  const PS_BUILD = 'v183';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -3725,6 +3726,7 @@
   const logFilterWrap = document.getElementById('logFilterWrap');
   let logFilterText = '';
   let logFilterUrgency = '';
+  let logFilterPrior = false;   // 전차 손상을 보고 미리 찍었지만 아직 조사(촬영)하지 않은 지점만 보기
   let logSortMode = 'num'; // 'num' | 'recent' — MOBILE UI 명령문 하단바 "정렬" 버튼용
   let logViewMode = 'cards'; // 'cards' | 'table' — PC 전용 "표로 보기" 토글(보고서 참고용)
 
@@ -17800,7 +17802,20 @@
     const todo = eds.filter(d => !links.has(d.id) && (!d.status || d.status === '미확인')).length;
     btn.textContent = '📋 전차손상 ' + (todo ? todo + '건 남음' : '모두 확인');
     btn.style.display = '';
+    // 미리 찍은 지점 중 아직 조사 안 한 건수 — 눌러서 그것만 목록에 본다 (없으면 숨기고 필터도 끈다)
+    const pb = document.getElementById('btnPriorPending');
+    if(pb){
+      const pend = (markers || []).filter(priorPendingEd).length;
+      if(!pend && logFilterPrior){ logFilterPrior = false; try{ renderLog(); }catch(e){} }
+      pb.style.display = pend ? '' : 'none';
+      pb.textContent = '📍 미조사 ' + pend + (logFilterPrior ? ' ✓' : '');
+      pb.classList.toggle('active', logFilterPrior);
+    }
   }
+  (function(){
+    const pb = document.getElementById('btnPriorPending');
+    if(pb) pb.addEventListener('click', ()=>{ logFilterPrior = !logFilterPrior; try{ renderLog(); priorRefreshButtons(); }catch(e){} });
+  })();
   setInterval(()=>{ try{ priorRefreshButtons(); }catch(e){} }, 2000);
 
   // ---------- 활동 로그 ----------
@@ -19991,8 +20006,14 @@
   });
 
   // ---------- log list ----------
+  // 전차 손상을 보고 미리 찍은(priorId) 지점이 아직 사진 없이 남아 있으면 그 전차 손상을 돌려준다 (없으면 null)
+  function priorPendingEd(m){
+    if(!m || !m.priorId || (m.photos || []).length) return null;
+    return (existingDamages || []).find(d => d && d.id === m.priorId && !d.isDeleted) || null;
+  }
   function markerMatchesFilter(m){
     const photos = m.photos || [];
+    if(logFilterPrior && !priorPendingEd(m)) return false;
     if(logFilterUrgency){
       const hasUrg = photos.some(p => (p.damages||[]).some(d => d.urgency === logFilterUrgency));
       if(!hasUrg) return false;
@@ -20240,7 +20261,8 @@
       tr.appendChild(tdComp);
 
       const tdType = document.createElement('td');
-      tdType.textContent = allDamages.map(d=>d.damageType).filter(Boolean).join(', ') || (photos.length ? '손상 미입력' : '미촬영');
+      const _pe2 = priorPendingEd(m);
+      tdType.textContent = allDamages.map(d=>d.damageType).filter(Boolean).join(', ') || (_pe2 ? ('전차 ' + (_pe2.damageName || '손상') + ' · 확인 전') : (photos.length ? '손상 미입력' : '미촬영'));
       tr.appendChild(tdType);
 
       const tdPos = document.createElement('td');
@@ -20303,6 +20325,8 @@
     const isNew = rep ? (rep.damageOrigin === 'NEW' ? true : rep.damageOrigin === 'EXISTING' ? false : null) : null;
     originEl.className = 'lim-origin' + (isNew === true ? ' new' : isNew === false ? ' existing' : ' none');
     originEl.textContent = isNew === true ? '신규' : isNew === false ? '기존' : '—';
+    const _pe = priorPendingEd(m);
+    if(_pe){ originEl.className = 'lim-origin existing'; originEl.textContent = '전차'; originEl.title = '전차 손상을 보고 미리 찍은 지점 — 아직 조사하지 않았습니다'; }
 
     const compEl = document.createElement('span');
     compEl.className = 'lim-comp';
@@ -20313,7 +20337,8 @@
     // 손상명을 "직접입력"으로 고른 손상(저장값 '기타')은 "기타" 대신 직접 적은 이름을 보여 준다 (아직 안 적었으면 "직접입력")
     typeEl.textContent = (rep && rep.damageType === '기타')
       ? ((rep.damageDetail && String(rep.damageDetail).trim()) || '직접입력')
-      : ((rep && rep.damageType) || (photos.length ? '손상 미입력' : '미촬영'));
+      : ((rep && rep.damageType) || (_pe ? ('전차 ' + (_pe.damageName || '손상') + ' · 확인 전') : (photos.length ? '손상 미입력' : '미촬영')));
+    if(_pe) compEl.textContent = _pe.component || _pe.part || '부위 미입력';
 
     const timeEl = document.createElement('span');
     timeEl.className = 'lim-time';
@@ -20697,7 +20722,7 @@
         focusRecordPoint(m.id);
       }
     });
-    const lines = formatDamageLinesForCopy(allDamages, hasPhoto);
+    const lines = formatDamageLinesForCopy(allDamages, hasPhoto, m);
     const site = currentSiteObj();
     lines.forEach((text, i)=>{
       const line = document.createElement('div');
@@ -20734,8 +20759,10 @@
   }
 
   // 카드/전체 복사가 공유하는 포맷터 — "구분 · 구간 · 손상명(부위), 규모" 한 줄씩.
-  function formatDamageLinesForCopy(allDamages, hasPhoto){
+  function formatDamageLinesForCopy(allDamages, hasPhoto, marker){
     if(!allDamages || allDamages.length === 0){
+      const pe = priorPendingEd(marker);
+      if(pe) return [ '전차 ' + (pe.damageName || '손상') + (pe.measurement ? ' ' + pe.measurement : '') + ' — 아직 조사 안 함' ];
       return [ hasPhoto ? '손상정보 미입력' : '미촬영' ];
     }
     return allDamages.map(d=>{
@@ -21617,12 +21644,43 @@
     render(); syncWheels();
   }
 
+  // 전차 손상 카드: 전차 사진(첫 장 썸네일, 누르면 크게) + 구간·위치·규모·원인·보수방안 + 안내
+  function buildPriorCard(m){
+    const ed = m && m.priorId ? (existingDamages || []).find(d => d && d.id === m.priorId && !d.isDeleted) : null;
+    if(!ed) return null;
+    const esc = escapeHtml;
+    const phs = (ed.photos || []).filter(x => x && x.prior);
+    const done = (m.photos || []).length > 0;
+    const card = document.createElement('div');
+    card.style.cssText = 'border:1px solid var(--line); border-left:4px solid #1565C0; border-radius:8px; padding:8px 10px; margin:0 0 10px; background:var(--panel-2); display:flex; gap:10px; align-items:flex-start;';
+    const thumb = document.createElement('div');
+    thumb.style.cssText = 'flex:0 0 96px; width:96px; height:72px; border-radius:6px; border:1px solid var(--line); background:var(--panel); overflow:hidden; display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--muted); cursor:' + (phs.length ? 'zoom-in' : 'default') + ';';
+    thumb.textContent = phs.length ? '' : '전차 사진 없음';
+    if(phs.length){
+      priorPhotoUrl(phs[0]).then(u => {
+        if(u){ const im = document.createElement('img'); im.src = u; im.alt = '전차 사진'; im.style.cssText = 'width:100%; height:100%; object-fit:cover;'; thumb.appendChild(im); }
+        else thumb.textContent = '사진 받는 중…';
+      }).catch(()=>{ thumb.textContent = '사진 없음'; });
+      thumb.addEventListener('click', ()=> openPriorPhotoViewer(ed, 0));
+      if(phs.length > 1){ const cnt = document.createElement('span'); cnt.textContent = phs.length + '장'; cnt.style.cssText = 'position:absolute; right:4px; bottom:2px; font-size:11px; color:#fff; text-shadow:0 0 3px #000;'; thumb.style.position = 'relative'; thumb.appendChild(cnt); }
+    }
+    const info = document.createElement('div');
+    info.style.cssText = 'flex:1; min-width:0; font-size:12.5px; line-height:1.5;';
+    const rows = [['구간', ed.section], ['위치', ed.drawingPosition], ['규모', ed.measurement], ['원인', ed.cause], ['보수·보강', ed.repairMethod]].filter(r => r[1]);
+    info.innerHTML = '<div style="font-weight:700;">📋 전차 손상 · ' + esc(priorEdLabel(ed)) + '</div>' +
+      rows.map(r => '<div><span style="color:var(--muted);">' + esc(r[0]) + '</span> ' + esc(r[1]) + '</div>').join('') +
+      '<div style="margin-top:4px; color:' + (done ? '#1a7f37' : 'var(--muted)') + ';">' + (done ? '✔ 금회 사진을 찍었습니다. 아래 손상기록에서 달라진 부분만 고치세요.' : '전차 사진과 맞는지 확인한 뒤, 아래 [사진 추가 촬영]을 누르세요. 찍은 사진은 이 전차 손상과 자동으로 연결됩니다.') + '</div>';
+    card.appendChild(thumb); card.appendChild(info);
+    return card;
+  }
   function renderPreviewGrid(markerId){
     const m = markers.find(x=>x.id===markerId);
     if(!m) return;
     const _stationTxt = markerStationText(m, currentSiteObj());   // 도면 눈금 보정이 있으면 "위치 64m"를 같이 보여 준다
     previewTitle.textContent = '지점 ' + m.num + ' · 사진 ' + (m.photos ? m.photos.length : 0) + '장 · 위치신뢰도 ' + computeLocationTrust(m) + (_stationTxt ? ' · 위치 ' + _stationTxt + 'm' : '') + (m.address ? ' · ' + m.address : '');
     previewGrid.innerHTML = '';
+    // 전차 손상을 보고 미리 찍은 지점이면 맨 위에 전차 사진·전차 내용 카드 — 맞는지 확인한 뒤 아래 [사진 추가 촬영]으로 금회 사진을 찍는다
+    try{ const pc = buildPriorCard(m); if(pc) previewGrid.appendChild(pc); }catch(e){ console.warn('전차 카드 실패', e); }
     // 선택된 사진 번호 보정 + 사진 선택 줄(2장 이상일 때)
     if(previewSelMarker !== markerId){ previewSelMarker = markerId; previewSelIdx = 0; }
     const photoCount = (m.photos || []).length;
