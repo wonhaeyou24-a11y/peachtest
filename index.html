@@ -3597,7 +3597,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v184';
+  const PS_BUILD = 'v185';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -17066,10 +17066,12 @@
       const name = priorStr(row['손상명']);
       if(!name){ skippedDamages++; return; }
       const no = priorStr(row['번호']) || String(i + 1);
-      const pos = priorStr(row['위치(m)']);
+      // 스킬 보강 열(peachshot_enrich): 위치_m(숫자)·구간 이 있으면 쓴다. 위치 글이 비어도 숫자 위치가 있으면 "12m" 로 채운다.
+      const pos = priorStr(row['위치(m)']) || (typeof row['위치_m'] === 'number' && isFinite(row['위치_m']) ? (Math.round(row['위치_m'] * 100) / 100) + 'm' : '');
+      const sec = priorStr(row['구간']) || priorStr(row['구간_표준']);
       damages.push({
         priorKey: [facKey, no, name, pos].join('|'),
-        section: '', no,
+        section: sec, no,
         damageName: name,
         drawingPosition: pos,
         component: priorStr(row['구성요소']),
