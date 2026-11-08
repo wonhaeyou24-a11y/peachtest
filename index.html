@@ -3597,7 +3597,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v183';
+  const PS_BUILD = 'v184';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -17636,6 +17636,141 @@
   priorSurveyModal.addEventListener('click', (e)=>{ if(e.target === priorSurveyModal) priorCloseSurvey(); });
   document.getElementById('btnPriorSurvey').addEventListener('click', priorOpenSurvey);
   document.getElementById('btnPriorSurveyMenu').addEventListener('click', ()=>{ moreModal.style.display = 'none'; priorOpenSurvey(); });
+  // 규모 글 -> { quantity, unit } : 데스크(sync/measurementUtil.js)와 같은 규칙. 길이는 m, 두 치수 곱은 ㎡, 세 치수 곱은 ㎥, 개소가 있으면 곱함. 폭·두께(mm/cm)는 물량이 아님.
+  function priorQty(str){
+    const none = { quantity: null, unit: '' };
+    if(!str) return none;
+    const s0 = String(str);
+    const NUM = '(-?\\d+(?:\\.\\d+)?)';
+    const nums = (e)=> [...String(e).matchAll(/-?\d+(?:\.\d+)?/g)].map(m => parseFloat(m[0]));
+    const prod = (xs)=> Math.round(xs.reduce((a, c) => a * c, 1) * 1e6) / 1e6;
+    const countOf = (t)=>{ const m = t.match(new RegExp(NUM + '\\s*(EA|개소|개)(?![가-힣A-Za-z])', 'i')); return m ? parseFloat(m[1]) : null; };
+    const EXPR = NUM + '(?:\\s*[×xX*]\\s*' + NUM + ')*';
+    let m = s0.match(new RegExp('(?:(?<![A-Za-z])V|체적)\\s*[=:]?\\s*(' + EXPR + ')\\s*(㎥|m³|m3)?', 'i'));
+    if(m) return { quantity: prod(nums(m[1])), unit: '㎥' };
+    m = s0.match(new RegExp('(?:(?<![A-Za-z])A|면적)\\s*[=:]?\\s*(' + EXPR + ')\\s*(㎡|m²|m2)?', 'i'));
+    if(m) return { quantity: prod(nums(m[1])), unit: '㎡' };
+    m = s0.match(new RegExp('(?<![A-Za-z])L\\s*=\\s*(' + EXPR + ')\\s*(m)(?![a-z²³])', 'i'));
+    if(m){ const n = nums(m[1]); if(n.length !== 1) return none; const c = countOf(s0); return { quantity: c ? Math.round(n[0] * c * 1e6) / 1e6 : n[0], unit: 'm' }; }
+    m = s0.match(new RegExp('(' + NUM + '(?:\\s*[×xX*]\\s*' + NUM + ')+)\\s*(m|㎡|㎥|m²|m³)?', 'i'));
+    if(m){ const n = nums(m[1]); if((n.length === 2 || n.length === 3) && (!m[m.length - 1] || /^m$/i.test(m[m.length - 1]))){ const c = countOf(s0), v = prod(n); return { quantity: c ? Math.round(v * c * 1e6) / 1e6 : v, unit: n.length === 2 ? '㎡' : '㎥' }; } return none; }
+    const dims = [...s0.matchAll(new RegExp('(너비|폭|길이|깊이|높이|가로|세로)\\s*[=:]?\\s*' + NUM + '\\s*(mm|cm|m)(?![a-z²³])', 'g'))].filter(d => d[3] === 'm').map(d => parseFloat(d[2]));
+    const c3 = countOf(s0), mul = (v)=> c3 ? Math.round(v * c3 * 1e6) / 1e6 : v;
+    if(dims.length === 1) return { quantity: mul(dims[0]), unit: 'm' };
+    if(dims.length === 2) return { quantity: mul(prod(dims)), unit: '㎡' };
+    if(dims.length >= 3) return { quantity: mul(prod(dims.slice(0, 3))), unit: '㎥' };
+    m = s0.match(new RegExp(NUM + '\\s*(EA|개소|개)(?![가-힣A-Za-z])', 'i'));
+    if(m) return { quantity: parseFloat(m[1]), unit: m[2] };
+    const all = [...s0.matchAll(new RegExp(NUM + '\\s*(㎡|㎥|m²|m³|mm|cm|km|개소|개|매|EA|ea|kg|ton|%|m)?', 'gi'))];
+    if(!all.length) return none;
+    const normU = (u)=> u === 'm²' ? '㎡' : u === 'm³' ? '㎥' : (u || '');
+    const pick = all.find(x => x[2] && !/^(mm|cm)$/i.test(x[2])) || all.find(x => x[2]) || all[0];
+    return { quantity: parseFloat(pick[1]), unit: normU(pick[2]) };
+  }
+  const priorNameKey = (n)=> String(n || '').replace(/[\s·\-_()（）\[\]]/g, '').toLowerCase();
+  const priorFmtQty = (q, u)=> (q == null ? '-' : (Math.round(q * 100) / 100) + (u || ''));
+
+  // 종류별 점검: 전차 총물량표(또는 손상별 기록)를 손상명+단위로 합쳐 금회 조사 합계와 맞춰 본다.
+  function priorTypeRows(){
+    const eds = (existingDamages || []).filter(d => d && !d.isDeleted);
+    const links = priorLinkMap();
+    const groups = new Map();
+    eds.forEach(ed => {
+      const q = priorQty(ed.measurement);
+      const key = priorNameKey(ed.damageName) + '||' + (q.unit || '');
+      if(!groups.has(key)) groups.set(key, { name: ed.damageName || '(이름 없음)', nk: priorNameKey(ed.damageName), unit: q.unit || '', prev: 0, hasPrev: false, n: 0, done: 0, gone: 0 });
+      const g = groups.get(key);
+      g.n++;
+      if(q.quantity != null){ g.prev += q.quantity; g.hasPrev = true; }
+      if(links.has(ed.id) || (ed.status && ed.status !== '미확인')) g.done++;
+      if(ed.status === '소실' || ed.status === '보수됨') g.gone++;
+    });
+    // 금회 조사: 모든 지점의 손상기록을 손상명+단위로 합친다
+    const cur = new Map();
+    (markers || []).forEach(m => (m.photos || []).forEach(ph => (ph.damages || []).forEach(d => {
+      const nm = d.damageType === '기타' ? (d.damageDetail || '기타') : d.damageType;
+      if(!nm) return;
+      const q = priorQty(d.measurement);
+      const key = priorNameKey(nm) + '||' + (q.unit || '');
+      if(!cur.has(key)) cur.set(key, { name: nm, nk: priorNameKey(nm), unit: q.unit || '', qty: 0, has: false, n: 0 });
+      const c = cur.get(key); c.n++; if(q.quantity != null){ c.qty += q.quantity; c.has = true; }
+    })));
+    const used = new Set();
+    const rows = [...groups.values()].map(g => {
+      const exact = cur.get(g.nk + '||' + g.unit);
+      const sameName = [...cur.entries()].filter(([k, c]) => c.nk === g.nk);
+      let status, level;
+      if(exact){ used.add(g.nk + '||' + g.unit); }
+      sameName.forEach(([k]) => used.add(k));
+      if(!g.hasPrev){ status = '전차 규모에서 물량을 읽지 못함'; level = 'info'; }
+      else if(exact && exact.has){
+        const r = g.prev > 0 ? exact.qty / g.prev : null;
+        if(r != null && r > 1.5){ status = '⚠ 전차보다 크게 늘었음 (×' + (Math.round(r * 10) / 10) + ')'; level = 'warn'; }
+        else if(r != null && r < 0.5){ status = '⚠ 전차보다 크게 줄었음 (×' + (Math.round(r * 10) / 10) + ')'; level = 'warn'; }
+        else { status = '✓ 비슷함'; level = 'ok'; }
+      } else if(sameName.length){ status = '단위가 달라 비교 못함 (금회 ' + sameName.map(([k, c]) => priorFmtQty(c.has ? c.qty : null, c.unit)).join(', ') + ')'; level = 'info'; }
+      else if(g.gone && g.gone === g.n){ status = '✓ 소실·보수됨으로 확인'; level = 'ok'; }
+      else { status = '⚠ 금회 조사 없음 — 누락이거나 소실·보수됐는지 확인'; level = 'warn'; }
+      return { g, cur: exact, status, level };
+    });
+    const onlyNow = [...cur.entries()].filter(([k]) => !used.has(k)).map(([k, c]) => c);
+    return { rows, onlyNow };
+  }
+  function priorTypeSummaryHtml(){
+    const esc = escapeHtml;
+    const { rows, onlyNow } = priorTypeRows();
+    if(!rows.length) return '<div class="log-empty">등록된 전차 손상이 없습니다.</div>';
+    const warnN = rows.filter(r => r.level === 'warn').length;
+    const col = { ok: '#1a7f37', warn: '#b45309', info: 'var(--muted)' };
+    return '<div class="hint" style="margin:6px 0;">전차 손상을 종류(손상명+단위)별로 합쳐 지금까지의 금회 조사와 맞춰 본 결과입니다. ' + (warnN ? '<b style="color:#b45309;">확인할 항목 ' + warnN + '건</b>' : '<b style="color:#1a7f37;">확인할 항목 없음</b>') + '</div>' +
+      '<div style="overflow:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;"><thead><tr style="text-align:left; color:var(--muted);"><th style="padding:4px;">종류</th><th style="padding:4px;">전차</th><th style="padding:4px;">금회</th><th style="padding:4px;">확인</th><th style="padding:4px;">점검</th></tr></thead><tbody>' +
+      rows.map(r => '<tr style="border-top:1px solid var(--line);"><td style="padding:4px; font-weight:600;">' + esc(r.g.name) + '</td><td style="padding:4px;">' + esc(priorFmtQty(r.g.hasPrev ? r.g.prev : null, r.g.unit)) + (r.g.n > 1 ? ' <span style="color:var(--muted);">(' + r.g.n + '건)</span>' : '') + '</td><td style="padding:4px;">' + esc(r.cur ? priorFmtQty(r.cur.has ? r.cur.qty : null, r.cur.unit) + (r.cur.n > 1 ? ' (' + r.cur.n + '건)' : '') : '-') + '</td><td style="padding:4px;">' + r.g.done + '/' + r.g.n + '</td><td style="padding:4px; color:' + col[r.level] + ';">' + esc(r.status) + '</td></tr>').join('') +
+      '</tbody></table></div>' +
+      (onlyNow.length ? '<div class="hint" style="margin-top:8px;"><b>금회에만 있는 손상:</b> ' + onlyNow.map(c => esc(c.name) + ' ' + esc(priorFmtQty(c.has ? c.qty : null, c.unit))).join(' · ') + '</div>' : '');
+  }
+
+  // ---------- 4단계: 위치 미정 전차 손상을 도면에서 눌러 지점으로 만든다 ----------
+  let priorPlaceMode = null;   // { edId }
+  function priorUnplacedEds(){
+    const links = priorLinkMap();
+    const placed = new Set((markers || []).map(m => m && m.priorId).filter(Boolean));
+    return priorSortEds((existingDamages || []).filter(d => d && !d.isDeleted && !links.has(d.id) && !placed.has(d.id) && (!d.status || d.status === '미확인')));
+  }
+  function priorPlaceBanner(show, text){
+    let b = document.getElementById('priorPlaceBanner');
+    if(!show){ if(b) b.remove(); return; }
+    if(!b){
+      b = document.createElement('div'); b.id = 'priorPlaceBanner';
+      b.style.cssText = 'position:fixed; left:50%; top:64px; transform:translateX(-50%); z-index:100100; background:#1a2b4a; color:#fff; border-radius:10px; padding:8px 12px; font-size:13px; box-shadow:0 4px 16px rgba(0,0,0,.35); display:flex; gap:10px; align-items:center; max-width:92vw;';
+      const t = document.createElement('span'); t.id = 'priorPlaceText'; b.appendChild(t);
+      const c = document.createElement('button'); c.type = 'button'; c.textContent = '취소'; c.className = 'ghost'; c.style.cssText = 'padding:2px 8px; color:#fff; border-color:#fff;';
+      c.addEventListener('click', ()=>{ priorPlaceMode = null; priorPlaceBanner(false); });
+      b.appendChild(c); document.body.appendChild(b);
+    }
+    document.getElementById('priorPlaceText').textContent = text;
+  }
+  function priorStartPlace(ed){
+    if(!currentDrawingId){ alert('먼저 지점을 찍을 도면을 열어 주세요.'); return; }
+    priorPlaceMode = { edId: ed.id };
+    priorCloseSurvey();
+    priorPlaceBanner(true, '도면에서 전차손상 "' + priorEdLabel(ed) + '"의 위치를 누르세요');
+  }
+  function priorPlaceTap(xPct, yPct){
+    const pm = priorPlaceMode; priorPlaceMode = null; priorPlaceBanner(false);
+    const ed = pm && (existingDamages || []).find(d => d && d.id === pm.edId && !d.isDeleted);
+    if(!ed) return;
+    const place = ()=>{
+      const mk = newMarkerBase({ xPct, yPct, drawingId: currentDrawingId }, 'manual');
+      mk.priorId = ed.id;
+      markers.push(mk);
+      logActivity('전차손상 지점 지정', priorEdLabel(ed) + ' · 도면에서 위치 지정');
+      try{ renderMarkers(); }catch(e){}
+      try{ scheduleRecordListRefresh(); }catch(e){}
+      saveState();
+    };
+    if(needsReopenConfirm()){ askReopenThen(place); return; }
+    place();
+  }
   // 전차 손상의 위치 글("12m", "64~72", "L=152m")에서 미터 값을 뽑는다 (범위면 가운데). 못 읽으면 null.
   function priorPositionM(text){
     const t = String(text == null ? '' : text).replace(/,/g, '');
@@ -17653,6 +17788,15 @@
     if(!isFinite(t) || t < -0.02 || t > 1.02) return null;
     const c = Math.max(0, Math.min(1, t));
     return { xPct: calib.p1.x + c * (calib.p2.x - calib.p1.x), yPct: calib.p1.y + c * (calib.p2.y - calib.p1.y), t };
+  }
+  // 이미 찍힌 지점들과 겹치면 위·아래로 4%씩 비껴 가장 가까운 빈 자리를 찾는다 (가로 위치는 그대로라 위치(m)는 같다)
+  function priorNudge(x, y, taken){
+    const clash = (yy)=> taken.some(([tx, ty]) => Math.abs(tx - x) < 2.4 && Math.abs(ty - yy) < 3.6);
+    for(const dy of [0, 4, -4, 8, -8, 12, -12, 16, -16]){
+      const yy = Math.max(2, Math.min(98, y + dy));
+      if(!clash(yy)) return { xPct: x, yPct: yy };
+    }
+    return { xPct: x, yPct: y };
   }
   function priorPremark(){
     const site = currentSiteObj();
@@ -17676,12 +17820,14 @@
       return;
     }
     psConfirm('전차 손상 ' + ok.length + '건을 이 도면의 위치(m)에 지점으로 미리 찍습니다.' +
-      (noPos.length ? '\n· 위치(m)를 읽지 못해 제외: ' + noPos.length + '건' : '') +
-      (out.length ? '\n· 이 도면 눈금 범위 밖이라 제외: ' + out.length + '건' : '') +
+      (noPos.length ? '\n· 위치(m)를 읽지 못해 제외: ' + noPos.length + '건 (전차손상 조사 > 위치 미정에서 도면을 눌러 지정)' : '') +
+      (out.length ? '\n· 이 도면 눈금 범위 밖이라 제외: ' + out.length + '건 (위치 미정에서 지정)' : '') +
       '\n\n찍힌 지점은 끌어서 옮길 수 있고, 현장에서 지점을 열어 [+ 손상 추가]를 누르면 그 전차 손상과 자동으로 연결됩니다.\n계속할까요?').then(yes => {
       if(!yes) return;
+      const taken = (markers || []).filter(m => m && m.xPct != null && m.drawingId === dr.id).map(m => [m.xPct, m.yPct]);
       ok.sort((a, b) => a.xy.t - b.xy.t).forEach(({ ed, xy }) => {
-        const mk = newMarkerBase({ xPct: Math.round(xy.xPct * 1000) / 1000, yPct: Math.round(xy.yPct * 1000) / 1000, drawingId: dr.id }, 'manual');
+        const nz = priorNudge(xy.xPct, xy.yPct, taken); taken.push([nz.xPct, nz.yPct]);
+        const mk = newMarkerBase({ xPct: Math.round(nz.xPct * 1000) / 1000, yPct: Math.round(nz.yPct * 1000) / 1000, drawingId: dr.id }, 'manual');
         mk.priorId = ed.id;     // 이 지점은 전차 손상을 보고 미리 찍은 것 — 손상 추가 시 자동 연결
         markers.push(mk);
       });
@@ -17700,8 +17846,12 @@
     const all = priorSortEds(existingDamages.filter(d => d && !d.isDeleted));
     const links = priorLinkMap();
     const done = all.filter(d => links.has(d.id) || (d.status && d.status !== '미확인')).length;
+    const placedSet = new Set((markers || []).map(m => m && m.priorId).filter(Boolean));
+    const unplacedN = priorUnplacedEds().length;
     const list = all.filter(d => {
       const isDone = links.has(d.id) || (d.status && d.status !== '미확인');
+      if(priorSurveyFilter === 'unplaced') return !isDone && !placedSet.has(d.id) && (!d.status || d.status === '미확인');
+      if(priorSurveyFilter === 'type') return false;
       return priorSurveyFilter === 'all' || (priorSurveyFilter === 'todo' ? !isDone : isDone);
     });
     const esc = escapeHtml;
@@ -17710,7 +17860,7 @@
       '<div style="font-weight:700; font-size:14px;">확인 ' + done + ' / ' + all.length + '건</div>' +
       '<div style="height:8px; background:var(--panel-2); border-radius:999px; overflow:hidden; margin:6px 0 10px;"><div style="height:100%; width:' + (all.length ? Math.round(done / all.length * 100) : 0) + '%; background:var(--amber, #ff6b35);"></div></div>' +
       '<div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px;">' +
-        [['all', '전체'], ['todo', '아직 안 함'], ['done', '확인함']].map(([k, t]) => '<button type="button" class="ghost" data-pf="' + k + '" style="' + (priorSurveyFilter === k ? 'font-weight:700; border-color:var(--amber, #ff6b35);' : '') + '">' + t + '</button>').join('') +
+        [['all', '전체'], ['todo', '아직 안 함'], ['done', '확인함'], ['unplaced', '📍 위치 미정 ' + unplacedN], ['type', '📊 종류별 점검']].map(([k, t]) => '<button type="button" class="ghost" data-pf="' + k + '" style="' + (priorSurveyFilter === k ? 'font-weight:700; border-color:var(--amber, #ff6b35);' : '') + '">' + t + '</button>').join('') +
         (photoTotal ? '<button type="button" class="ghost" id="priorPrefetch" style="margin-left:auto;">⬇ 전차 사진 내려받기 (현장용)</button>' : '') +
         '<button type="button" class="ghost" id="priorPremark" title="전차 손상의 위치(m)를 이 도면의 눈금으로 환산해 지점을 미리 찍어 둡니다 — 현장에서는 그 지점을 열어 확인·촬영만 하면 됩니다">📍 도면에 미리 찍기</button>' +
       '</div>' +
@@ -17721,6 +17871,7 @@
     const prem = document.getElementById('priorPremark');
     if(prem) prem.addEventListener('click', priorPremark);
     const host = document.getElementById('priorSurveyList');
+    if(priorSurveyFilter === 'type'){ host.innerHTML = priorTypeSummaryHtml(); return; }
     if(!list.length){ host.innerHTML = '<div class="log-empty">' + (all.length ? '해당하는 전차 손상이 없습니다.' : '등록된 전차 손상이 없습니다. 더보기 → 전차자료 가져오기로 가져와 주세요.') + '</div>'; return; }
     list.forEach(ed => {
       const row = document.createElement('div');
@@ -17740,6 +17891,11 @@
         '<div style="font-size:12px; color:var(--muted);">' + [ed.drawingPosition, ed.measurement].filter(Boolean).map(esc).join(' · ') + '</div>' +
         '<div style="font-size:12px;">' + badge + '</div>';
       row.appendChild(thumb); row.appendChild(info);
+      if(priorSurveyFilter === 'unplaced'){
+        const pb = document.createElement('button'); pb.type = 'button'; pb.className = 'ghost'; pb.textContent = '📍 도면에서 위치 지정'; pb.style.cssText = 'flex:0 0 auto; font-size:12px; padding:4px 8px;';
+        pb.addEventListener('click', (e)=>{ e.stopPropagation(); priorStartPlace(ed); });
+        row.appendChild(pb);
+      }
       row.addEventListener('click', ()=>{ priorSurveyDetailId = ed.id; renderPriorSurvey(); });
       host.appendChild(row);
     });
@@ -19261,6 +19417,7 @@
     const xPct = (localX / frameW) * 100;
     const yPct = (localY / frameH) * 100;
 
+    if(priorPlaceMode){ priorPlaceTap(xPct, yPct); return; }   // 전차 손상 위치 지정 중: 누른 자리에 그 전차 손상의 지점을 만든다
     if(movingMarkerId){
       const m = markers.find(x => x.id === movingMarkerId);
       if(m){
