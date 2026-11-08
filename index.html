@@ -3597,7 +3597,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v185';
+  const PS_BUILD = 'v186';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -11104,6 +11104,12 @@
 
   // 실제 저장 1회를 수행한다. 큐를 거치지 않고 이 함수를 직접 호출하지 않는다.
   async function performSaveState(){
+    if(!psInitialLoadDone && (!sites || sites.length === 0)){
+      // 시작 중(loadState 끝나기 전)에 화면이 숨겨지는 등으로 저장이 걸리면, 아직 아무것도 읽지 못한 빈 상태가
+      // 저장소의 정상 데이터(기존손상·눈금 등)를 덮어쓴다. 불러오기가 끝나기 전의 빈 상태는 저장하지 않는다.
+      try{ diagLog('save', '불러오기 전 빈 상태 저장을 건너뜀(데이터 보호)'); }catch(e){}
+      return true;
+    }
     const __diagT0 = Date.now();
     lastSaveErrorWasQuota = false; // 이번 저장 시도의 실패 원인만 반영되도록 매번 초기화
     commitLiveToCurrentSite();
@@ -24488,6 +24494,7 @@
     }
   })();
 
+  let psInitialLoadDone = false;   // loadState 가 끝났는지 — 끝나기 전에는 '빈 시설물 목록'을 저장하지 않는다 (performSaveState 가드)
   async function initPeachShotApp(){
     try{ updateLoginGate(); }catch(e){ console.warn('로그인 화면 준비 실패', e); }   // 로그인이 확인될 때까지 앱을 가린다
     // 1. IndexedDB 연결 및 영구 저장소 활성화
@@ -24521,6 +24528,7 @@
       console.error('로컬 데이터 복구 실패:', e);
       diagLog('error', 'initPeachShotApp: 로컬 데이터 복구 실패: ' + (e && e.message || String(e)));
     }
+    psInitialLoadDone = true;
 
     // 3. 기본 로컬 선호 설정 및 마스터 데이터 백그라운드 병렬 로드
     (async ()=>{
