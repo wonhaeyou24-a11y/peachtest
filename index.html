@@ -3596,7 +3596,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v181';
+  const PS_BUILD = 'v182';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -17634,6 +17634,63 @@
   priorSurveyModal.addEventListener('click', (e)=>{ if(e.target === priorSurveyModal) priorCloseSurvey(); });
   document.getElementById('btnPriorSurvey').addEventListener('click', priorOpenSurvey);
   document.getElementById('btnPriorSurveyMenu').addEventListener('click', ()=>{ moreModal.style.display = 'none'; priorOpenSurvey(); });
+  // 전차 손상의 위치 글("12m", "64~72", "L=152m")에서 미터 값을 뽑는다 (범위면 가운데). 못 읽으면 null.
+  function priorPositionM(text){
+    const t = String(text == null ? '' : text).replace(/,/g, '');
+    const r = t.match(/(-?\d+(?:\.\d+)?)\s*(?:~|∼|–|-)\s*(-?\d+(?:\.\d+)?)/);
+    if(r){ const a = parseFloat(r[1]), c = parseFloat(r[2]); if(isFinite(a) && isFinite(c)) return (a + c) / 2; }
+    const m = t.match(/-?\d+(?:\.\d+)?/);
+    return m ? parseFloat(m[0]) : null;
+  }
+  // 눈금 보정 두 점(p1,p2: 도면 % 좌표 + 측점 m)을 잇는 선 위에서 측점 m 의 도면 좌표(%). 선 양끝에서 2% 넘게 벗어나면 null.
+  function priorXYFromStation(calib, meters){
+    if(!calibUsable(calib) || meters == null) return null;
+    const dm = calib.p2.m - calib.p1.m;
+    if(!(Math.abs(dm) > 0)) return null;
+    const t = (meters - calib.p1.m) / dm;
+    if(!isFinite(t) || t < -0.02 || t > 1.02) return null;
+    const c = Math.max(0, Math.min(1, t));
+    return { xPct: calib.p1.x + c * (calib.p2.x - calib.p1.x), yPct: calib.p1.y + c * (calib.p2.y - calib.p1.y), t };
+  }
+  function priorPremark(){
+    const site = currentSiteObj();
+    const dr = currentDrawingObj();
+    if(!site || !dr){ alert('먼저 도면을 열어 주세요.'); return; }
+    if(!calibUsable(dr.calib)){ alert('이 도면에는 눈금 보정이 없습니다.\n도면 화면의 눈금 버튼으로 두 지점의 위치(m)를 맞춘 뒤 다시 눌러 주세요.'); return; }
+    if(needsReopenConfirm()){ askReopenThen(priorPremark); return; }
+    const links = priorLinkMap();
+    const placed = new Set((markers || []).map(m => m && m.priorId).filter(Boolean));
+    const todo = priorSortEds(existingDamages.filter(d => d && !d.isDeleted && !links.has(d.id) && !placed.has(d.id)));
+    const ok = [], noPos = [], out = [];
+    todo.forEach(ed => {
+      const m = priorPositionM(ed.drawingPosition);
+      if(m == null){ noPos.push(ed); return; }
+      const xy = priorXYFromStation(dr.calib, m);
+      if(!xy){ out.push(ed); return; }
+      ok.push({ ed, xy });
+    });
+    if(!ok.length){
+      alert('미리 찍을 전차 손상이 없습니다.' + (todo.length ? '\n(위치(m)가 없거나 이 도면 눈금 범위 밖: ' + (noPos.length + out.length) + '건)' : '\n(이미 찍었거나 연결된 전차 손상만 있습니다)'));
+      return;
+    }
+    psConfirm('전차 손상 ' + ok.length + '건을 이 도면의 위치(m)에 지점으로 미리 찍습니다.' +
+      (noPos.length ? '\n· 위치(m)를 읽지 못해 제외: ' + noPos.length + '건' : '') +
+      (out.length ? '\n· 이 도면 눈금 범위 밖이라 제외: ' + out.length + '건' : '') +
+      '\n\n찍힌 지점은 끌어서 옮길 수 있고, 현장에서 지점을 열어 [+ 손상 추가]를 누르면 그 전차 손상과 자동으로 연결됩니다.\n계속할까요?').then(yes => {
+      if(!yes) return;
+      ok.sort((a, b) => a.xy.t - b.xy.t).forEach(({ ed, xy }) => {
+        const mk = newMarkerBase({ xPct: Math.round(xy.xPct * 1000) / 1000, yPct: Math.round(xy.yPct * 1000) / 1000, drawingId: dr.id }, 'manual');
+        mk.priorId = ed.id;     // 이 지점은 전차 손상을 보고 미리 찍은 것 — 손상 추가 시 자동 연결
+        markers.push(mk);
+      });
+      logActivity('전차손상 지점 미리 찍기', ok.length + '건 · ' + (dr.name || '도면'));
+      try{ renderMarkers(); }catch(e){}
+      try{ scheduleRecordListRefresh(); }catch(e){}
+      saveState();
+      priorCloseSurvey();
+      alert('지점 ' + ok.length + '개를 미리 찍었습니다.\n위치가 다르면 지점을 끌어서 옮기세요.');
+    });
+  }
   function renderPriorSurvey(){
     if(priorSurveyDetailId) return renderPriorSurveyDetail();
     const site = currentSiteObj();
@@ -17653,11 +17710,14 @@
       '<div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px;">' +
         [['all', '전체'], ['todo', '아직 안 함'], ['done', '확인함']].map(([k, t]) => '<button type="button" class="ghost" data-pf="' + k + '" style="' + (priorSurveyFilter === k ? 'font-weight:700; border-color:var(--amber, #ff6b35);' : '') + '">' + t + '</button>').join('') +
         (photoTotal ? '<button type="button" class="ghost" id="priorPrefetch" style="margin-left:auto;">⬇ 전차 사진 내려받기 (현장용)</button>' : '') +
+        '<button type="button" class="ghost" id="priorPremark" title="전차 손상의 위치(m)를 이 도면의 눈금으로 환산해 지점을 미리 찍어 둡니다 — 현장에서는 그 지점을 열어 확인·촬영만 하면 됩니다">📍 도면에 미리 찍기</button>' +
       '</div>' +
       '<div id="priorSurveyList"></div>';
     priorSurveyBody.querySelectorAll('[data-pf]').forEach(b => b.addEventListener('click', ()=>{ priorSurveyFilter = b.getAttribute('data-pf'); renderPriorSurvey(); }));
     const pre = document.getElementById('priorPrefetch');
     if(pre) pre.addEventListener('click', priorPrefetchAll);
+    const prem = document.getElementById('priorPremark');
+    if(prem) prem.addEventListener('click', priorPremark);
     const host = document.getElementById('priorSurveyList');
     if(!list.length){ host.innerHTML = '<div class="log-empty">' + (all.length ? '해당하는 전차 손상이 없습니다.' : '등록된 전차 손상이 없습니다. 더보기 → 전차자료 가져오기로 가져와 주세요.') + '</div>'; return; }
     list.forEach(ed => {
@@ -22320,7 +22380,11 @@
         // 바꾸면 됨 — 강제가 아니라 반복 입력을 줄이기 위한 기본값일 뿐).
         const lastSection = (p.damages.length ? p.damages[p.damages.length - 1].section : '') || '';
         p.damages.push({ id:genId(), damageOrigin:'NEW', existingDamageId:null, component:'', damageType:'', damageDetail:'', measurement:'', cause:'', failureFactor:'', evaluation:'', repairMethod:'', reinforcementMethod:'', investigatorComment:'', standardReference:'', section: lastSection });
-        try{ priorApplyPendingLink(p.damages[p.damages.length - 1]); }catch(e){ console.warn('전차손상 자동 연결 실패', e); }
+        try{
+          // 전차 손상을 보고 미리 찍은 지점이면, 아직 연결 안 된 그 전차 손상을 자동 연결한다
+          if(!priorPendingLink && m.priorId && !priorLinkMap().has(m.priorId) && existingDamages.some(x => x.id === m.priorId && !x.isDeleted)) priorPendingLink = { edId: m.priorId };
+          priorApplyPendingLink(p.damages[p.damages.length - 1]);
+        }catch(e){ console.warn('전차손상 자동 연결 실패', e); }
         logActivity('손상기록 추가', '지점 ' + m.num);
         renderDamageRecords();
         saveState();
