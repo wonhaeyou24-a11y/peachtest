@@ -3597,7 +3597,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v187';
+  const PS_BUILD = 'v188';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -18618,6 +18618,7 @@
   }
 
   let singleDownAt = 0;
+  let pinDrag = null;   // 미리 찍은 전차 지점을 끌고 있는 중: {id, el, fromX, fromY, x, y, moved}
   stage.addEventListener('pointerdown', (e)=>{
     if(!baseImageSrc) return;
     // setPointerCapture 가 드물게 InvalidStateError 로 throw 되면(합성 이벤트,
@@ -18630,6 +18631,13 @@
       singleMoved = false;
       singleStartTarget = e.target;
       singleDownAt = Date.now();
+      // 전차 손상을 보고 미리 찍은 지점(아직 사진 없음)을 누르면: 도면이 아니라 그 지점을 끌어서 옮긴다
+      pinDrag = null;
+      const _pinEl = e.target && e.target.closest ? e.target.closest('.marker') : null;
+      if(_pinEl && !movingMarkerId && !calibMode && !priorPlaceMode){
+        const _pm = markers.find(x => x.id === _pinEl.dataset.id);
+        if(_pm && priorPendingEd(_pm) && _pm.xPct != null) pinDrag = { id: _pm.id, el: _pinEl, fromX: _pm.xPct, fromY: _pm.yPct, x: _pm.xPct, y: _pm.yPct, moved: false };
+      }
     } else if(activePointers.size === 2){
       panStart = null; // pinch 중에는 1손가락 pan 계산과 섞이지 않게 끈다
       startPinch();
@@ -18642,6 +18650,18 @@
 
     if(activePointers.size === 2){
       updatePinch();
+    } else if(activePointers.size === 1 && pinDrag){
+      const dx0 = e.clientX - panStart.x, dy0 = e.clientY - panStart.y;
+      if(Math.abs(dx0) > 5 || Math.abs(dy0) > 5) { pinDrag.moved = true; singleMoved = true; }
+      if(pinDrag.moved && frameW && frameH){
+        const rect = stage.getBoundingClientRect();
+        const lx = (e.clientX - rect.left - zTx) / zScale, ly = (e.clientY - rect.top - zTy) / zScale;
+        pinDrag.x = Math.max(0, Math.min(100, lx / frameW * 100));
+        pinDrag.y = Math.max(0, Math.min(100, ly / frameH * 100));
+        pinDrag.el.style.left = pinDrag.x + '%';
+        pinDrag.el.style.top = pinDrag.y + '%';
+        pinDrag.el.classList.add('selected');
+      }
     } else if(activePointers.size === 1 && panStart){
       const dx = e.clientX - panStart.x, dy = e.clientY - panStart.y;
       // 예전 10px는 확대 상태에서 미세 이동(pan)을 탭(마킹)으로 오인하기 쉬웠다 → 5px.
@@ -18661,6 +18681,21 @@
     const wasSingle = activePointers.size === 1;
     const wasPinching = activePointers.size >= 2;
     activePointers.delete(e.pointerId);
+    // 끌어서 옮긴 지점 확정: 새 위치를 저장한다 (한 번 놓으면 끝 — 틀리면 다시 끌면 된다)
+    if(pinDrag){
+      const d = pinDrag; pinDrag = null;
+      if(d.moved){
+        const m = markers.find(x => x.id === d.id);
+        if(m){
+          logLocationChange(m, { xPct: d.fromX, yPct: d.fromY }, { xPct: d.x, yPct: d.y });
+          m.xPct = d.x; m.yPct = d.y;
+          renderMarkers(); renderLog();
+          idbPutInspectionPoint(m, currentSiteObj()).catch(()=>{});
+          saveState();
+        }
+        singleMoved = true;   // 놓는 순간 탭(사진 찍기 창)으로 처리되지 않게
+      }
+    }
 
     // 움직임이 거의 없고(=탭) + 짧게 눌렀을 때만 지점 마킹으로 처리한다.
     // 느리게 눌렀다 놓은 건(움직임 적어도) 마킹 의도가 아닐 확률이 높다.
