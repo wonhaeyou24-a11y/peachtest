@@ -3597,7 +3597,7 @@
   // 빌드 식별자 — service-worker.js 의 CACHE_NAME 과 함께 올린다. 진단로그의
   // "앱 시작" 항목에 찍혀서, 두 기기가 서로 다른 버전을 쓰고 있는지(=한쪽 PWA가
   // 옛 캐시를 물고 있는지) 바로 확인할 수 있다.
-  const PS_BUILD = 'v188';
+  const PS_BUILD = 'v189';
   try{ window.__PS_BUILD = PS_BUILD; }catch(e){}
   try{
     document.addEventListener('DOMContentLoaded', ()=>{
@@ -17286,7 +17286,19 @@
     if(typeof JSZip === 'undefined') return { error: 'ZIP 라이브러리(JSZip)를 불러오지 못했습니다. 인터넷 연결 후 다시 시도해 주세요.' };
     const zip = await JSZip.loadAsync(zipFile);
     const byName = new Map();
-    zip.forEach((path, entry) => { if(entry.dir) return; const key = path.split('/').pop().normalize('NFC'); if(!byName.has(key)) byName.set(key, entry); });
+    const looseKey = (n) => String(n || '').normalize('NFC').replace(/\.[A-Za-z0-9]+$/, '').replace(/^\d+[a-z]?[_\-\s]+/i, '').replace(/[\s_\-.,()·~]/g, '').toLowerCase();
+    const byLoose = new Map();
+    zip.forEach((path, entry) => { if(entry.dir) return; const key = path.split('/').pop().normalize('NFC'); if(!byName.has(key)) byName.set(key, entry); const lk = looseKey(key); if(lk && !byLoose.has(lk)) byLoose.set(lk, entry); });
+    const findEntry = (name) => {
+      const exact = byName.get(String(name).normalize('NFC'));
+      if(exact) return exact;
+      const lk = looseKey(name);
+      if(!lk) return null;
+      if(byLoose.has(lk)) return byLoose.get(lk);
+      // 이름이 잘려 한쪽이 다른 쪽의 앞부분인 경우(앞 8글자 이상 같을 때만)
+      if(lk.length >= 8){ for(const [k, e] of byLoose){ if(k.length >= 8 && (k.startsWith(lk) || lk.startsWith(k))) return e; } }
+      return null;
+    };
     const targets = eds.filter(ed => ed && !ed.isDeleted && ed.priorPhotoFile);
     const now = new Date().toISOString();
     const out = { added: 0, missing: 0, already: 0, failed: 0 };
@@ -17294,7 +17306,7 @@
       const ed = targets[i];
       priorProgress((label || '전차 사진') + ' 연결 중… ' + (i + 1) + ' / ' + targets.length);
       if((ed.photos || []).some(p => p && p.prior && p.name === ed.priorPhotoFile)){ out.already++; continue; }
-      const entry = byName.get(String(ed.priorPhotoFile).normalize('NFC'));
+      const entry = findEntry(ed.priorPhotoFile);
       if(!entry){ out.missing++; continue; }
       try{
         const blob = await priorResizeToBlob(await entry.async('blob'));
@@ -17373,7 +17385,7 @@
       try{ await priorUploadPending(site, existingDamages); }catch(e){}
       priorProgress('');
       saveState();
-      alert('전차 사진 ' + added + '장을 연결했습니다.' + (missing ? '\n(ZIP에서 찾지 못한 사진 ' + missing + '건)' : ''));
+      alert('전차 사진 ' + added + '장을 연결했습니다.' + (missing ? '\n(ZIP에서 찾지 못한 사진 ' + missing + '건 — 이 시설물의 전차자료(.json)와 같은 쌍의 ZIP 인지 확인해 주세요)' : '') + (!added && !missing ? '\n(이미 연결되어 있습니다)' : ''));
     }catch(e){
       priorProgress('');
       console.error('전차 사진 연결 실패', e);
@@ -17872,6 +17884,7 @@
       '<div style="height:8px; background:var(--panel-2); border-radius:999px; overflow:hidden; margin:6px 0 10px;"><div style="height:100%; width:' + (all.length ? Math.round(done / all.length * 100) : 0) + '%; background:var(--amber, #ff6b35);"></div></div>' +
       '<div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px;">' +
         [['all', '전체'], ['todo', '아직 안 함'], ['done', '확인함'], ['unplaced', '📍 위치 미정 ' + unplacedN], ['type', '📊 종류별 점검']].map(([k, t]) => '<button type="button" class="ghost" data-pf="' + k + '" style="' + (priorSurveyFilter === k ? 'font-weight:700; border-color:var(--amber, #ff6b35);' : '') + '">' + t + '</button>').join('') +
+        '<button type="button" class="ghost" id="priorRelink" title="사진이 안 보이면 전차 사진 ZIP(…_전차손상사진.zip)을 골라 이 시설물의 전차 손상에 다시 연결합니다">📷 사진 ZIP 연결' + (photoTotal ? '' : ' (사진 없음)') + '</button>' +
         (photoTotal ? '<button type="button" class="ghost" id="priorPrefetch" style="margin-left:auto;">⬇ 전차 사진 내려받기 (현장용)</button>' : '') +
         '<button type="button" class="ghost" id="priorPremark" title="전차 손상의 위치(m)를 이 도면의 눈금으로 환산해 지점을 미리 찍어 둡니다 — 현장에서는 그 지점을 열어 확인·촬영만 하면 됩니다">📍 도면에 미리 찍기</button>' +
       '</div>' +
@@ -17879,6 +17892,8 @@
     priorSurveyBody.querySelectorAll('[data-pf]').forEach(b => b.addEventListener('click', ()=>{ priorSurveyFilter = b.getAttribute('data-pf'); renderPriorSurvey(); }));
     const pre = document.getElementById('priorPrefetch');
     if(pre) pre.addEventListener('click', priorPrefetchAll);
+    const rel = document.getElementById('priorRelink');
+    if(rel) rel.addEventListener('click', ()=>{ openPriorImportPicker('add'); });
     const prem = document.getElementById('priorPremark');
     if(prem) prem.addEventListener('click', priorPremark);
     const host = document.getElementById('priorSurveyList');
